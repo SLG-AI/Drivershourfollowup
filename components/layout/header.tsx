@@ -198,7 +198,8 @@ function MultiSelectFilter({
 
   const paramValue = searchParams.get(paramKey) || "";
   const noneSelected = paramValue === "__none__";
-  const selected = noneSelected ? [] : (paramValue ? paramValue.split(",") : []);
+  const SEP = "|||";
+  const selected = noneSelected ? [] : (paramValue ? paramValue.split(SEP) : []);
   const allSelected = !noneSelected && selected.length === 0;
 
   const filtered = search
@@ -223,7 +224,7 @@ function MultiSelectFilter({
     } else if (next.length === 0) {
       onUpdate(paramKey, "__none__");
     } else {
-      onUpdate(paramKey, next.join(","));
+      onUpdate(paramKey, next.join(SEP));
     }
   };
 

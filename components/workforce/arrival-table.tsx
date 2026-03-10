@@ -11,36 +11,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TrendingDown, ChevronRight, ChevronDown } from "lucide-react";
+import { TrendingUp, ChevronRight, ChevronDown } from "lucide-react";
 
-export interface DepartureItem {
+export interface ArrivalItem {
   code_salarie: string;
   vehicle_type: string;
   description_equipe: string;
-  date_sortie: string;
+  date: string; // date_entree or date_fin_sortie_temporaire
   motif: string;
-  type: "definitive" | "temporaire";
+  type: "nouveau" | "retour";
 }
 
 // ---------------------------------------------------------------------------
 // Sous-catégories par type
 // ---------------------------------------------------------------------------
 
-const SUBCATEGORIES_DEFINITIF: Record<string, { label: string; color: string; motifs: string[] }> = {
-  pension: { label: "Pension", color: "text-amber-600", motifs: ["Pension de vieillesse"] },
-  retraite: { label: "Retraite / Préretraite", color: "text-amber-600", motifs: ["Préretraite"] },
-  fin_mission: { label: "Fin de mission", color: "text-blue-600", motifs: ["Fin de mission"] },
-  licenciement: { label: "Licenciement", color: "text-red-600", motifs: ["Licenciement"] },
-  demission: { label: "Démission", color: "text-red-600", motifs: ["Demission"] },
-  resiliation: { label: "Rupture de commun accord", color: "text-orange-600", motifs: ["Résiliation commun accord"] },
-  periode_essai: { label: "Rupture de plein droit", color: "text-orange-600", motifs: ["PeriodeEssaiNonConcluante"] },
-  deces: { label: "Décès", color: "text-gray-600", motifs: ["Décès"] },
-};
-
-const SUBCATEGORIES_TEMPORAIRE: Record<string, { label: string; color: string; motifs: string[] }> = {
-  parental: { label: "Congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"] },
-  maternite: { label: "Congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"] },
-  sans_solde: { label: "Congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"] },
+const SUBCATEGORIES_RETOUR: Record<string, { label: string; color: string; motifs: string[] }> = {
+  parental: { label: "Retour congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"] },
+  maternite: { label: "Retour congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"] },
+  sans_solde: { label: "Retour congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"] },
 };
 
 // ---------------------------------------------------------------------------
@@ -48,10 +37,10 @@ const SUBCATEGORIES_TEMPORAIRE: Record<string, { label: string; color: string; m
 // ---------------------------------------------------------------------------
 
 function groupBySubcategory(
-  items: DepartureItem[],
+  items: ArrivalItem[],
   subcategories: Record<string, { label: string; color: string; motifs: string[] }>
 ) {
-  const groups: { key: string; label: string; color: string; items: DepartureItem[] }[] = [];
+  const groups: { key: string; label: string; color: string; items: ArrivalItem[] }[] = [];
   const matched = new Set<number>();
 
   for (const [key, sub] of Object.entries(subcategories)) {
@@ -68,7 +57,6 @@ function groupBySubcategory(
     }
   }
 
-  // Reste non catégorisé
   const remaining = items.filter((_, i) => !matched.has(i));
   if (remaining.length > 0) {
     groups.push({ key: "autre", label: "Autre", color: "text-gray-600", items: remaining });
@@ -90,7 +78,7 @@ function formatDate(date: string) {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function DepartureRows({ items }: { items: DepartureItem[] }) {
+function ArrivalRows({ items }: { items: ArrivalItem[] }) {
   return (
     <>
       {items.map((d, i) => (
@@ -100,7 +88,7 @@ function DepartureRows({ items }: { items: DepartureItem[] }) {
             <Badge variant="outline" className="text-xs">{d.vehicle_type}</Badge>
           </TableCell>
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
-          <TableCell className="text-sm">{formatDate(d.date_sortie)}</TableCell>
+          <TableCell className="text-sm">{formatDate(d.date)}</TableCell>
         </TableRow>
       ))}
     </>
@@ -110,7 +98,7 @@ function DepartureRows({ items }: { items: DepartureItem[] }) {
 function SubcategorySection({
   group,
 }: {
-  group: { key: string; label: string; color: string; items: DepartureItem[] };
+  group: { key: string; label: string; color: string; items: ArrivalItem[] };
 }) {
   const [open, setOpen] = useState(false);
 
@@ -136,7 +124,7 @@ function SubcategorySection({
           </div>
         </TableCell>
       </TableRow>
-      {open && <DepartureRows items={group.items} />}
+      {open && <ArrivalRows items={group.items} />}
     </>
   );
 }
@@ -151,11 +139,11 @@ function CategorySection({
   label: string;
   color: string;
   icon: string;
-  items: DepartureItem[];
-  subcategories: Record<string, { label: string; color: string; motifs: string[] }>;
+  items: ArrivalItem[];
+  subcategories: Record<string, { label: string; color: string; motifs: string[] }> | null;
 }) {
   const [open, setOpen] = useState(false);
-  const groups = groupBySubcategory(items, subcategories);
+  const groups = subcategories ? groupBySubcategory(items, subcategories) : null;
 
   if (items.length === 0) return null;
 
@@ -180,8 +168,9 @@ function CategorySection({
           </div>
         </TableCell>
       </TableRow>
-      {open &&
-        groups.map((g) => <SubcategorySection key={g.key} group={g} />)}
+      {open && groups
+        ? groups.map((g) => <SubcategorySection key={g.key} group={g} />)
+        : open && <ArrivalRows items={items} />}
     </>
   );
 }
@@ -190,22 +179,22 @@ function CategorySection({
 // Main component
 // ---------------------------------------------------------------------------
 
-export function DepartureTable({ departures }: { departures: DepartureItem[] }) {
-  const definitifs = departures.filter((d) => d.type === "definitive");
-  const temporaires = departures.filter((d) => d.type === "temporaire");
+export function ArrivalTable({ arrivals }: { arrivals: ArrivalItem[] }) {
+  const nouveaux = arrivals.filter((a) => a.type === "nouveau");
+  const retours = arrivals.filter((a) => a.type === "retour");
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <TrendingDown className="h-4 w-4" />
-          Départs identifiés ({departures.length})
+          <TrendingUp className="h-4 w-4" />
+          Arrivées identifiées ({arrivals.length})
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {departures.length === 0 ? (
+        {arrivals.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-4">
-            Aucun départ identifié.
+            Aucune arrivée identifiée.
           </p>
         ) : (
           <div className="max-h-[500px] overflow-auto">
@@ -215,23 +204,23 @@ export function DepartureTable({ departures }: { departures: DepartureItem[] }) 
                   <TableHead className="text-xs">Code salarié</TableHead>
                   <TableHead className="text-xs">Type</TableHead>
                   <TableHead className="text-xs">Équipe</TableHead>
-                  <TableHead className="text-xs">Date sortie</TableHead>
+                  <TableHead className="text-xs">Date</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 <CategorySection
-                  label="Sorties définitives identifiées"
-                  color="text-red-700"
-                  icon="🔴"
-                  items={definitifs}
-                  subcategories={SUBCATEGORIES_DEFINITIF}
+                  label="Nouveaux engagés"
+                  color="text-emerald-700"
+                  icon="🟢"
+                  items={nouveaux}
+                  subcategories={null}
                 />
                 <CategorySection
-                  label="Sorties temporaires identifiées"
-                  color="text-amber-700"
-                  icon="🟡"
-                  items={temporaires}
-                  subcategories={SUBCATEGORIES_TEMPORAIRE}
+                  label="Retours de suspension"
+                  color="text-blue-700"
+                  icon="🔵"
+                  items={retours}
+                  subcategories={SUBCATEGORIES_RETOUR}
                 />
               </TableBody>
             </Table>

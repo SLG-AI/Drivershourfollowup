@@ -3,6 +3,8 @@ import { fetchAll } from "@/lib/supabase/fetch-all";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
+import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
+import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
 import { BreakdownChart, type BreakdownByType, type BreakdownByDepot } from "@/components/workforce/breakdown-chart";
 import { GapAnalysisChart, type GapDataPoint } from "@/components/workforce/gap-analysis-chart";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
@@ -35,9 +37,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const now = new Date();
   const selectedYear = params.year ? parseInt(params.year) : now.getFullYear();
   const selectedMonth = params.month ? parseInt(params.month) : now.getMonth() + 1;
-  const selectedFonctions = params.fonctions === "__none__" ? ["__none__"] : (params.fonctions ? params.fonctions.split(",") : []);
-  const selectedCC = params.cc === "__none__" ? ["__none__"] : (params.cc ? params.cc.split(",") : []);
-  const selectedDepots = params.depots === "__none__" ? ["__none__"] : (params.depots ? params.depots.split(",") : []);
+  const SEP = "|||";
+  const selectedFonctions = params.fonctions === "__none__" ? ["__none__"] : (params.fonctions ? params.fonctions.split(SEP) : []);
+  const selectedCC = params.cc === "__none__" ? ["__none__"] : (params.cc ? params.cc.split(SEP) : []);
+  const selectedDepots = params.depots === "__none__" ? ["__none__"] : (params.depots ? params.depots.split(SEP) : []);
 
   // Reference date: last day of selected month
   const refDate = lastDayOfMonth(selectedYear, selectedMonth);
@@ -73,12 +76,28 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   }
 
   // Fetch all data in parallel (paginated to avoid 1000-row limit)
-  const [employees, absences, salaryStats, targets] = await Promise.all([
+  const [employees, absences, salaryStats, targets, defaultScenarios] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*")),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_target_needs").select("*")),
+    fetchAll(supabase.from("wp_scenarios").select("id").eq("is_default", true).limit(1)),
   ]);
+
+  // Fetch default scenario monthly params for projection absenteeism rates
+  const defaultScenarioId = defaultScenarios[0]?.id;
+  const scenarioMonthlyParams = defaultScenarioId
+    ? await fetchAll(
+        supabase
+          .from("wp_scenario_monthly_params")
+          .select("mois, projected_absenteeism_rate")
+          .eq("scenario_id", defaultScenarioId)
+      )
+    : [];
+  const scenarioAbsRateByMonth = new Map<number, number>();
+  scenarioMonthlyParams.forEach((p) => {
+    scenarioAbsRateByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate));
+  });
 
   // Apply fonction and cost center filters
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -97,6 +116,39 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allSalaryStats = salaryStats.filter((s: any) => employeeCodes.has(s.code_salarie));
   const allTargets = targets;
+
+  // ============================================================
+  // Reclassification : les employés flaggés "sortie temporaire"
+  // qui apparaissent dans le fichier CNS avec des heures maladie
+  // et dont le motif n'est PAS un congé structurel sont reclassifiés
+  // comme absents maladie (est_sortie_temporaire = false)
+  // ============================================================
+
+  const CONGES_STRUCTURELS = new Set([
+    "Conge Parental TP",
+    "Congé sans solde",
+    "Congé de maternité",
+    "Congé d'accompagnement",
+  ]);
+
+  // Codes des employés avec heures maladie dans le CNS (tous mois confondus pour l'année)
+  const codesAvecMaladieCns = new Set(
+    allAbsences
+      .filter((a) => Number(a.hrs_maladie || 0) > 0)
+      .map((a) => a.code_salarie)
+  );
+
+  // Reclassifier dans allEmployees
+  allEmployees.forEach((e) => {
+    if (
+      e.est_sortie_temporaire &&
+      !CONGES_STRUCTURELS.has(e.description_motif_sortie || "") &&
+      codesAvecMaladieCns.has(e.code_salarie)
+    ) {
+      e.est_sortie_temporaire = false;
+      e._reclassified_maladie = true;
+    }
+  });
 
   // ============================================================
   // Helper: employees active at a given date
@@ -131,16 +183,31 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const camEtp = activeEmployees.filter((e) => e.vehicle_type === "CAM").reduce((sum, e) => sum + getEtp(e), 0);
 
   // Sorties temporaires in ETP
-  const sortiesTempEtp = activeEmployees.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtp(e), 0);
-  const sortiesTemporairesCount = activeEmployees.filter((e) => e.est_sortie_temporaire).length;
+  const sortiesTemp = activeEmployees.filter((e) => e.est_sortie_temporaire);
+  const sortiesTempEtp = sortiesTemp.reduce((sum, e) => sum + getEtp(e), 0);
+  const sortiesTemporairesCount = sortiesTemp.length;
+
+  // Liste détaillée des sorties temporaires actuelles
+  const tempExitItems: TempExitItem[] = sortiesTemp
+    .sort((a, b) =>
+      (a.date_debut_sortie_temporaire || "").localeCompare(b.date_debut_sortie_temporaire || "")
+    )
+    .map((e) => ({
+      code_salarie: e.code_salarie,
+      vehicle_type: e.vehicle_type || "?",
+      description_equipe: e.description_equipe || "",
+      date_debut: e.date_debut_sortie_temporaire || "",
+      date_fin: e.date_fin_sortie_temporaire || null,
+      motif: e.description_motif_sortie || "Non spécifié",
+      etp: Math.round(getEtp(e) * 10) / 10,
+    }));
 
   // Effectif net in ETP = brut ETP - sorties temporaires ETP
   const effectifNetEtp = effectifBrutEtp - sortiesTempEtp;
 
-  // Taux d'absentéisme moyen for the selected month
-  const monthAbsences = allAbsences.filter((a) => Number(a.mois) === selectedMonth);
-  const totalAbsPct = monthAbsences.reduce((sum, a) => sum + Number(a.pct_absenteisme || 0), 0);
-  const avgAbsenteeism = monthAbsences.length > 0 ? totalAbsPct / monthAbsences.length : 0;
+  // Taux d'absentéisme pour le mois sélectionné = (net - réel) / net
+  // Calculé après la boucle headcount, initialisé ici
+  let avgAbsenteeism = 0;
 
   // Départs prévisibles: employees with date_sortie after refDate but within the selected year
   const yearEnd = `${selectedYear}-12-31`;
@@ -152,19 +219,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const targetTotal = allTargets.reduce((sum, t) => sum + Number(t.target_headcount), 0);
   const gapVsCible = targetTotal > 0 ? Math.round((effectifNetEtp - targetTotal) * 10) / 10 : null;
 
-  const stats: WpDashboardStats = {
-    effectif_brut: Math.round(effectifBrutEtp * 10) / 10,
-    effectif_net: Math.round(effectifNetEtp * 10) / 10,
-    bus_count: Math.round(busEtp * 10) / 10,
-    cam_count: Math.round(camEtp * 10) / 10,
-    headcount,
-    taux_absenteisme: avgAbsenteeism,
-    etp_total: Math.round(effectifBrutEtp * 10) / 10,
-    departs_prevus: departsPrevus.length,
-    sorties_temporaires: Math.round(sortiesTempEtp * 10) / 10,
-    gap_vs_cible: gapVsCible,
-    target_total: targetTotal > 0 ? targetTotal : null,
-  };
+  // stats construit après la boucle headcount (besoin de avgAbsenteeism)
 
   // ============================================================
   // Headcount evolution (month by month for selected year)
@@ -185,14 +240,61 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     const tempExitsEtp = activeAtMonth.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtp(e), 0);
     const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
 
+    // Effectif réel après maladie
+    // Grâce à la reclassification, les employés maladie CNS ne sont plus
+    // comptés comme sorties temporaires → ils font partie de l'effectif net
+    // On calcule leur impact maladie individuellement (pct_absenteisme * taux_occupation)
+    let absentEtp: number;
+
+    const monthAbs = allAbsences.filter((a) => Number(a.mois) === m);
+    const hasAbsenceData = monthAbs.length > 0;
+
+    if (hasAbsenceData) {
+      const nonTempSet = new Set(
+        activeAtMonth.filter((e) => !e.est_sortie_temporaire).map((e) => e.code_salarie)
+      );
+      const empTauxMap = new Map<string, number>();
+      activeAtMonth.forEach((e) => empTauxMap.set(e.code_salarie, getEtp(e)));
+
+      absentEtp = monthAbs.reduce((sum, a) => {
+        if (!nonTempSet.has(a.code_salarie)) return sum;
+        const etp = empTauxMap.get(a.code_salarie) ?? 0;
+        return sum + (Number(a.pct_absenteisme || 0) / 100) * etp;
+      }, 0);
+    } else {
+      const scenarioRate = scenarioAbsRateByMonth.get(m) ?? 5;
+      absentEtp = netEtpAtMonth * (scenarioRate / 100);
+    }
+    const effectifReel = netEtpAtMonth - absentEtp;
+
+    // Capturer le taux d'absentéisme pour le mois sélectionné
+    if (m === selectedMonth && netEtpAtMonth > 0) {
+      avgAbsenteeism = (absentEtp / netEtpAtMonth) * 100;
+    }
+
     headcountData.push({
       month: FRENCH_MONTHS_SHORT[m],
       effectif_brut: Math.round(brutEtpAtMonth * 10) / 10,
       effectif_net: Math.max(0, Math.round(netEtpAtMonth * 10) / 10),
+      effectif_reel: Math.max(0, Math.round(effectifReel * 10) / 10),
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
     });
   }
+
+  const stats: WpDashboardStats = {
+    effectif_brut: Math.round(effectifBrutEtp * 10) / 10,
+    effectif_net: Math.round(effectifNetEtp * 10) / 10,
+    bus_count: Math.round(busEtp * 10) / 10,
+    cam_count: Math.round(camEtp * 10) / 10,
+    headcount,
+    taux_absenteisme: avgAbsenteeism,
+    etp_total: Math.round(effectifBrutEtp * 10) / 10,
+    departs_prevus: departsPrevus.length,
+    sorties_temporaires: Math.round(sortiesTempEtp * 10) / 10,
+    gap_vs_cible: gapVsCible,
+    target_total: targetTotal > 0 ? targetTotal : null,
+  };
 
   // ============================================================
   // Departures list
@@ -208,6 +310,49 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       motif: e.description_motif_sortie || "Non spécifié",
       type: e.est_sortie_temporaire ? "temporaire" as const : "definitive" as const,
     }));
+
+  // ============================================================
+  // Arrivals list
+  // ============================================================
+
+  // Nouveaux engagés: date_entree after refDate but within the year
+  const nouveauxEngages = allEmployees.filter(
+    (e) => e.date_entree && e.date_entree > refDate && e.date_entree <= yearEnd
+  );
+
+  // Retours de suspension: est_sortie_temporaire with date_fin_sortie_temporaire after refDate
+  const retoursSuspension = allEmployees.filter(
+    (e) =>
+      e.est_sortie_temporaire &&
+      e.date_fin_sortie_temporaire &&
+      e.date_fin_sortie_temporaire > refDate &&
+      e.date_fin_sortie_temporaire <= yearEnd
+  );
+
+  const arrivalItems: ArrivalItem[] = [
+    ...nouveauxEngages
+      .sort((a, b) => (a.date_entree || "").localeCompare(b.date_entree || ""))
+      .map((e) => ({
+        code_salarie: e.code_salarie,
+        vehicle_type: e.vehicle_type || "?",
+        description_equipe: e.description_equipe || "",
+        date: e.date_entree!,
+        motif: "",
+        type: "nouveau" as const,
+      })),
+    ...retoursSuspension
+      .sort((a, b) =>
+        (a.date_fin_sortie_temporaire || "").localeCompare(b.date_fin_sortie_temporaire || "")
+      )
+      .map((e) => ({
+        code_salarie: e.code_salarie,
+        vehicle_type: e.vehicle_type || "?",
+        description_equipe: e.description_equipe || "",
+        date: e.date_fin_sortie_temporaire!,
+        motif: e.description_motif_sortie || "Non spécifié",
+        type: "retour" as const,
+      })),
+  ];
 
   // ============================================================
   // Breakdown by type and depot (at selected month)
@@ -278,10 +423,14 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
       {targetTotal > 0 && <GapAnalysisChart data={gapData} />}
 
+      <TempExitsTable items={tempExitItems} />
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <DepartureTable departures={departureItems} />
-        <BreakdownChart byType={byType} byDepot={byDepot} />
+        <ArrivalTable arrivals={arrivalItems} />
       </div>
+
+      <BreakdownChart byType={byType} byDepot={byDepot} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, UserMinus, TrendingDown, Activity, Target, BarChart3 } from "lucide-react";
+import { Users, UserMinus, TrendingDown, Activity, Target } from "lucide-react";
 
 export interface WpDashboardStats {
   effectif_brut: number;
@@ -58,7 +58,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     {
       title: "Départs prévisibles",
       value: stats.departs_prevus,
-      description: "Sorties définitives identifiées",
+      description: "Sorties identifiées (définitives + temporaires)",
       icon: TrendingDown,
       iconColor: "text-amber-600",
       iconBg: "bg-amber-50",

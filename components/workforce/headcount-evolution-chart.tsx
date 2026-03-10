@@ -17,6 +17,7 @@ export interface HeadcountDataPoint {
   month: string;
   effectif_brut: number;
   effectif_net: number;
+  effectif_reel?: number;
   is_projection: boolean;
   target?: number;
 }
@@ -47,9 +48,12 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
   const hasTarget = data.some((d) => d.target != null);
 
   // Auto-scale Y axis: find min/max across all series with some padding
+  const hasEffectifReel = data.some((d) => d.effectif_reel != null);
+
   const allValues = data.flatMap((d) => [
     d.effectif_brut,
     d.effectif_net,
+    ...(d.effectif_reel != null ? [d.effectif_reel] : []),
     ...(d.target != null ? [d.target] : []),
   ]);
   const dataMin = Math.min(...allValues);
@@ -88,6 +92,7 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
                 const labels: Record<string, string> = {
                   effectif_brut: "Effectif sous contrat",
                   effectif_net: "Effectif net",
+                  effectif_reel: "Effectif réel (après maladie)",
                   target: "Cible",
                 };
                 return [value ?? 0, labels[String(name)] || String(name)];
@@ -98,6 +103,7 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
                 const labels: Record<string, string> = {
                   effectif_brut: "Effectif sous contrat",
                   effectif_net: "Effectif net",
+                  effectif_reel: "Effectif réel (après maladie)",
                   target: "Cible",
                 };
                 return labels[value] || value;
@@ -117,8 +123,16 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
               stroke="hsl(262, 83%, 58%)"
               strokeWidth={2}
               dot={{ r: 3 }}
-              strokeDasharray={projectionStartIndex >= 0 ? undefined : undefined}
             />
+            {hasEffectifReel && (
+              <Line
+                type="monotone"
+                dataKey="effectif_reel"
+                stroke="hsl(142, 71%, 45%)"
+                strokeWidth={2}
+                dot={{ r: 3 }}
+              />
+            )}
             {hasTarget && (
               <Line
                 type="monotone"
