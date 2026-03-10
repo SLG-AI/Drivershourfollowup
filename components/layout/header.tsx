@@ -197,8 +197,9 @@ function MultiSelectFilter({
   const [search, setSearch] = useState("");
 
   const paramValue = searchParams.get(paramKey) || "";
-  const selected = paramValue ? paramValue.split(",") : [];
-  const allSelected = selected.length === 0;
+  const noneSelected = paramValue === "__none__";
+  const selected = noneSelected ? [] : (paramValue ? paramValue.split(",") : []);
+  const allSelected = !noneSelected && selected.length === 0;
 
   const filtered = search
     ? options.filter((o) => o.toLowerCase().includes(search.toLowerCase()))
@@ -209,26 +210,36 @@ function MultiSelectFilter({
     if (allSelected) {
       // "Tous" is active: clicking an item deselects it (select all except this one)
       next = options.filter((o) => o !== value);
+    } else if (noneSelected) {
+      // None selected: clicking an item selects just that one
+      next = [value];
     } else if (selected.includes(value)) {
       next = selected.filter((s) => s !== value);
     } else {
       next = [...selected, value];
     }
-    onUpdate(paramKey, next.length === 0 || next.length === options.length ? "" : next.join(","));
+    if (next.length === options.length) {
+      onUpdate(paramKey, "");
+    } else if (next.length === 0) {
+      onUpdate(paramKey, "__none__");
+    } else {
+      onUpdate(paramKey, next.join(","));
+    }
   };
 
   const toggleAll = () => {
     if (allSelected) {
-      // Deselect all — clear the filter (no items selected = empty results)
-      // Instead, keep "Tous" as a toggle: if already all, do nothing meaningful
-      // But user wants to deselect → we can't have 0 items, so just keep all
-      return;
+      // Deselect all: use a special marker to indicate "none selected"
+      onUpdate(paramKey, "__none__");
+    } else {
+      onUpdate(paramKey, "");
     }
-    onUpdate(paramKey, "");
   };
 
   let triggerLabel = `Tous (${label})`;
-  if (!allSelected) {
+  if (noneSelected) {
+    triggerLabel = `Aucun (${label})`;
+  } else if (!allSelected) {
     triggerLabel = selected.length === 1 ? selected[0] : `${selected.length} ${label.toLowerCase()}`;
   }
 
@@ -304,11 +315,11 @@ function WorkforceFilters() {
       const supabase = createClient();
       const { data } = await supabase
         .from("wp_employees")
-        .select("description_fonction, centre_cout, description_departement");
+        .select("description_fonction, centre_cout, description_service");
       if (data) {
         const fns = [...new Set(data.map((e) => e.description_fonction).filter(Boolean))].sort() as string[];
         const ccs = [...new Set(data.map((e) => e.centre_cout).filter(Boolean))].sort() as string[];
-        const deps = [...new Set(data.map((e) => e.description_departement).filter(Boolean))].sort() as string[];
+        const deps = [...new Set(data.map((e) => e.description_service).filter(Boolean))].sort() as string[];
         setFonctions(fns);
         setCentreCouts(ccs);
         setDepots(deps);

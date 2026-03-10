@@ -35,9 +35,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const now = new Date();
   const selectedYear = params.year ? parseInt(params.year) : now.getFullYear();
   const selectedMonth = params.month ? parseInt(params.month) : now.getMonth() + 1;
-  const selectedFonctions = params.fonctions ? params.fonctions.split(",") : [];
-  const selectedCC = params.cc ? params.cc.split(",") : [];
-  const selectedDepots = params.depots ? params.depots.split(",") : [];
+  const selectedFonctions = params.fonctions === "__none__" ? ["__none__"] : (params.fonctions ? params.fonctions.split(",") : []);
+  const selectedCC = params.cc === "__none__" ? ["__none__"] : (params.cc ? params.cc.split(",") : []);
+  const selectedDepots = params.depots === "__none__" ? ["__none__"] : (params.depots ? params.depots.split(",") : []);
 
   // Reference date: last day of selected month
   const refDate = lastDayOfMonth(selectedYear, selectedMonth);
@@ -85,7 +85,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const allEmployees = employees.filter((e: any) => {
     if (selectedFonctions.length > 0 && !selectedFonctions.includes(e.description_fonction || "")) return false;
     if (selectedCC.length > 0 && !selectedCC.includes(e.centre_cout || "")) return false;
-    if (selectedDepots.length > 0 && !selectedDepots.includes(e.description_departement || "")) return false;
+    if (selectedDepots.length > 0 && !selectedDepots.includes(e.description_service || "")) return false;
     return true;
   });
 
