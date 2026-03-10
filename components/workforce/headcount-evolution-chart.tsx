@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import {
   ResponsiveContainer,
   LineChart,
@@ -20,14 +23,57 @@ export interface HeadcountDataPoint {
   effectif_reel?: number;
   is_projection: boolean;
   target?: number;
+  scenario_brut?: number;
+  scenario_net?: number;
+  scenario_reel?: number;
+}
+
+export interface ScenarioOption {
+  id: string;
+  name: string;
+}
+
+export interface ScenarioProjectionData {
+  scenario_id: string;
+  /** One entry per projected month (only future months) */
+  months: {
+    month_index: number; // 1-12
+    scenario_brut: number;
+    scenario_net: number;
+    scenario_reel: number;
+  }[];
 }
 
 interface Props {
   data: HeadcountDataPoint[];
   title?: string;
+  scenarios?: ScenarioOption[];
+  scenarioProjections?: ScenarioProjectionData[];
 }
 
-export function HeadcountEvolutionChart({ data, title = "Évolution des effectifs" }: Props) {
+export function HeadcountEvolutionChart({
+  data,
+  title = "Évolution des effectifs",
+  scenarios = [],
+  scenarioProjections = [],
+}: Props) {
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
+  const showScenario = selectedScenarioId !== null;
+
+  // Merge scenario projection data into chart data
+  const chartData = data.map((d, idx) => {
+    if (!showScenario) return d;
+    const projection = scenarioProjections.find((sp) => sp.scenario_id === selectedScenarioId);
+    if (!projection) return d;
+    const monthData = projection.months.find((m) => m.month_index === idx + 1);
+    if (!monthData) return d;
+    return {
+      ...d,
+      scenario_brut: monthData.scenario_brut,
+      scenario_net: monthData.scenario_net,
+      scenario_reel: monthData.scenario_reel,
+    };
+  });
   if (data.length === 0) {
     return (
       <Card>
@@ -44,17 +90,21 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
   }
 
   // Find the boundary between real and projected data
-  const projectionStartIndex = data.findIndex((d) => d.is_projection);
-  const hasTarget = data.some((d) => d.target != null);
+  const projectionStartIndex = chartData.findIndex((d) => d.is_projection);
+  const hasTarget = chartData.some((d) => d.target != null);
+  const hasScenarioData = showScenario && chartData.some((d) => d.scenario_brut != null);
 
   // Auto-scale Y axis: find min/max across all series with some padding
-  const hasEffectifReel = data.some((d) => d.effectif_reel != null);
+  const hasEffectifReel = chartData.some((d) => d.effectif_reel != null);
 
-  const allValues = data.flatMap((d) => [
+  const allValues = chartData.flatMap((d) => [
     d.effectif_brut,
     d.effectif_net,
     ...(d.effectif_reel != null ? [d.effectif_reel] : []),
     ...(d.target != null ? [d.target] : []),
+    ...(d.scenario_brut != null ? [d.scenario_brut] : []),
+    ...(d.scenario_net != null ? [d.scenario_net] : []),
+    ...(d.scenario_reel != null ? [d.scenario_reel] : []),
   ]);
   const dataMin = Math.min(...allValues);
   const dataMax = Math.max(...allValues);
@@ -66,11 +116,32 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">{title}</CardTitle>
+          {scenarios.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Scénario</Label>
+              <Select
+                value={selectedScenarioId ?? "__off__"}
+                onValueChange={(v) => setSelectedScenarioId(v === "__off__" ? null : v)}
+              >
+                <SelectTrigger className="h-8 w-[200px] text-xs">
+                  <SelectValue placeholder="Désactivé" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__off__">Désactivé</SelectItem>
+                  {scenarios.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={350}>
-          <LineChart data={data} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+          <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
             <XAxis
               dataKey="month"
@@ -94,6 +165,9 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
                   effectif_net: "Effectif net",
                   effectif_reel: "Effectif réel (après maladie)",
                   target: "Cible",
+                  scenario_brut: "Scénario — sous contrat",
+                  scenario_net: "Scénario — net",
+                  scenario_reel: "Scénario — réel",
                 };
                 return [value ?? 0, labels[String(name)] || String(name)];
               }}
@@ -105,6 +179,9 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
                   effectif_net: "Effectif net",
                   effectif_reel: "Effectif réel (après maladie)",
                   target: "Cible",
+                  scenario_brut: "Scénario — sous contrat",
+                  scenario_net: "Scénario — net",
+                  scenario_reel: "Scénario — réel",
                 };
                 return labels[value] || value;
               }}
@@ -142,6 +219,37 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
                 strokeDasharray="8 4"
                 dot={false}
               />
+            )}
+            {hasScenarioData && (
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="scenario_brut"
+                  stroke="hsl(221, 83%, 53%)"
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  dot={{ r: 2 }}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="scenario_net"
+                  stroke="hsl(262, 83%, 58%)"
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  dot={{ r: 2 }}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="scenario_reel"
+                  stroke="hsl(142, 71%, 45%)"
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  dot={{ r: 2 }}
+                  connectNulls={false}
+                />
+              </>
             )}
             {projectionStartIndex > 0 && (
               <ReferenceLine

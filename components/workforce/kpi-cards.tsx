@@ -40,7 +40,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       iconBg: "bg-blue-50",
     },
     {
-      title: "Effectif disponible net (ETP)",
+      title: "Effectif net après sorties temporaires (ETP)",
       value: stats.effectif_net,
       description: `${stats.sorties_temporaires} ETP en sortie(s) temporaire(s)`,
       icon: UserMinus,

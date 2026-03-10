@@ -9,9 +9,6 @@ interface CreateScenarioInput {
   monthly_params: {
     mois: number;
     projected_absenteeism_rate: number;
-    planned_arrivals: number;
-    planned_arrivals_bus: number;
-    planned_arrivals_cam: number;
   }[];
 }
 
@@ -39,9 +36,6 @@ export async function createScenario(input: CreateScenarioInput) {
       scenario_id: scenario.id,
       mois: mp.mois,
       projected_absenteeism_rate: mp.projected_absenteeism_rate,
-      planned_arrivals: mp.planned_arrivals,
-      planned_arrivals_bus: mp.planned_arrivals_bus,
-      planned_arrivals_cam: mp.planned_arrivals_cam,
     }));
 
     const { error: paramError } = await supabase
@@ -82,9 +76,6 @@ export async function updateScenario(id: string, input: CreateScenarioInput) {
       scenario_id: id,
       mois: mp.mois,
       projected_absenteeism_rate: mp.projected_absenteeism_rate,
-      planned_arrivals: mp.planned_arrivals,
-      planned_arrivals_bus: mp.planned_arrivals_bus,
-      planned_arrivals_cam: mp.planned_arrivals_cam,
     }));
 
     const { error: paramError } = await supabase
@@ -123,13 +114,113 @@ export async function getScenarios() {
 export async function getScenarioWithParams(id: string) {
   const supabase = await createClient();
 
-  const [{ data: scenario }, { data: monthlyParams }, { data: departures }] = await Promise.all([
+  const [{ data: scenario }, { data: monthlyParams }, { data: departures }, { data: arrivalHypotheses }] = await Promise.all([
     supabase.from("wp_scenarios").select("*").eq("id", id).single(),
     supabase.from("wp_scenario_monthly_params").select("*").eq("scenario_id", id).order("mois"),
     supabase.from("wp_scenario_departures").select("*").eq("scenario_id", id).order("departure_month"),
+    supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", id).order("start_year, start_month"),
   ]);
 
-  return { scenario, monthlyParams: monthlyParams || [], departures: departures || [] };
+  return {
+    scenario,
+    monthlyParams: monthlyParams || [],
+    departures: departures || [],
+    arrivalHypotheses: arrivalHypotheses || [],
+  };
+}
+
+// ============================================================
+// Arrival hypotheses CRUD
+// ============================================================
+
+export async function addArrivalHypothesis(scenarioId: string, data: {
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  type_contrat: string;
+  vehicle_type: string | null;
+  start_day: number;
+  start_month: number;
+  start_year: number;
+  end_day: number | null;
+  end_month: number | null;
+  end_year: number | null;
+}) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { data: result, error } = await supabase
+    .from("wp_scenario_arrival_hypotheses")
+    .insert({ scenario_id: scenarioId, ...data })
+    .select()
+    .single();
+
+  if (error) throw new Error("Erreur ajout hypothèse: " + error.message);
+  return result;
+}
+
+export async function updateArrivalHypothesis(id: string, data: {
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  type_contrat: string;
+  vehicle_type: string | null;
+  start_day: number;
+  start_month: number;
+  start_year: number;
+  end_day: number | null;
+  end_month: number | null;
+  end_year: number | null;
+}) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { error } = await supabase
+    .from("wp_scenario_arrival_hypotheses")
+    .update(data)
+    .eq("id", id);
+
+  if (error) throw new Error("Erreur mise à jour hypothèse: " + error.message);
+  return { success: true };
+}
+
+export async function deleteArrivalHypothesis(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { error } = await supabase
+    .from("wp_scenario_arrival_hypotheses")
+    .delete()
+    .eq("id", id);
+
+  if (error) throw new Error("Erreur suppression hypothèse: " + error.message);
+  return { success: true };
+}
+
+export async function getDistinctEmployeeValues() {
+  const supabase = await createClient();
+
+  const [{ data: fonctions }, { data: centres }, { data: depots }] = await Promise.all([
+    supabase.from("wp_employees").select("description_fonction").not("description_fonction", "is", null),
+    supabase.from("wp_employees").select("centre_cout").not("centre_cout", "is", null),
+    supabase.from("wp_employees").select("description_service").not("description_service", "is", null),
+  ]);
+
+  const unique = (arr: { [key: string]: string | null }[] | null, key: string) =>
+    [...new Set((arr || []).map((r) => r[key]).filter(Boolean) as string[])].sort();
+
+  return {
+    fonctions: unique(fonctions, "description_fonction"),
+    centres_cout: unique(centres, "centre_cout"),
+    depots: unique(depots, "description_service"),
+  };
 }
 
 export async function addScenarioDeparture(scenarioId: string, departure: {

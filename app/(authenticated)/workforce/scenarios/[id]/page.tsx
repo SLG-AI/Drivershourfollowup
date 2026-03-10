@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { notFound } from "next/navigation";
 import { ScenarioEditorClient } from "./scenario-editor-client";
+import { getDistinctEmployeeValues } from "../actions";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -14,21 +15,25 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
   const supabase = await createClient();
   const selectedYear = yearParam ? parseInt(yearParam) : new Date().getFullYear();
 
-  // Fetch scenario + params + departures (paginated for large tables)
+  // Fetch scenario + params + departures + arrival hypotheses (paginated for large tables)
   const [
     { data: scenario },
     { data: monthlyParams },
     { data: departures },
+    { data: arrivalHypotheses },
     employees,
     absences,
     targets,
+    comboboxOptions,
   ] = await Promise.all([
     supabase.from("wp_scenarios").select("*").eq("id", id).single(),
     supabase.from("wp_scenario_monthly_params").select("*").eq("scenario_id", id).order("mois"),
     supabase.from("wp_scenario_departures").select("*").eq("scenario_id", id).order("departure_month"),
+    supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", id).order("start_year, start_month"),
     fetchAll(supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe")),
     fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, hrs_maternite, hrs_accident, heures_theoriques")),
     fetchAll(supabase.from("wp_target_needs").select("target_headcount")),
+    getDistinctEmployeeValues(),
   ]);
 
   if (!scenario) notFound();
@@ -41,6 +46,24 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
         scenario={scenario}
         monthlyParams={monthlyParams || []}
         departures={departures || []}
+        arrivalHypotheses={(arrivalHypotheses || []).map((h: Record<string, unknown>) => ({
+          id: h.id as string,
+          scenario_id: h.scenario_id as string,
+          nb_personnes: Number(h.nb_personnes),
+          taux_occupation: Number(h.taux_occupation),
+          fonction: (h.fonction as string) || null,
+          centre_cout: (h.centre_cout as string) || null,
+          depot: (h.depot as string) || null,
+          type_contrat: h.type_contrat as "CDI" | "CDD",
+          vehicle_type: (h.vehicle_type as "BUS" | "CAM") || null,
+          start_day: Number(h.start_day) || 1,
+          start_month: Number(h.start_month),
+          start_year: Number(h.start_year),
+          end_day: h.end_day ? Number(h.end_day) : null,
+          end_month: h.end_month ? Number(h.end_month) : null,
+          end_year: h.end_year ? Number(h.end_year) : null,
+        }))}
+        comboboxOptions={comboboxOptions}
         employees={(employees || []).map((e) => ({
           code_salarie: e.code_salarie,
           date_entree: e.date_entree,

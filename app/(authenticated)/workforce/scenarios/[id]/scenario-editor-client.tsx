@@ -10,21 +10,25 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
-import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam } from "@/lib/utils/wp-calculations";
+import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
 import { updateScenario, autoPopulateDepartures } from "../actions";
+import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { Save, RefreshCw, ArrowLeft, TrendingDown, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
+
+interface ComboboxOptions {
+  fonctions: string[];
+  centres_cout: string[];
+  depots: string[];
+}
 
 interface DbMonthlyParam {
   id: string;
   scenario_id: string;
   mois: number;
   projected_absenteeism_rate: number;
-  planned_arrivals: number;
-  planned_arrivals_bus: number;
-  planned_arrivals_cam: number;
 }
 
 interface DbDeparture {
@@ -52,6 +56,8 @@ interface Props {
   scenario: DbScenario;
   monthlyParams: DbMonthlyParam[];
   departures: DbDeparture[];
+  arrivalHypotheses: ArrivalHypothesis[];
+  comboboxOptions: ComboboxOptions;
   employees: Employee[];
   absences: AbsenceRecord[];
   selectedYear: number;
@@ -71,6 +77,8 @@ export function ScenarioEditorClient({
   scenario,
   monthlyParams: initialMonthlyParams,
   departures,
+  arrivalHypotheses: initialArrivalHypotheses,
+  comboboxOptions,
   employees,
   absences,
   selectedYear,
@@ -94,13 +102,13 @@ export function ScenarioEditorClient({
       params.push({
         mois: m,
         absenteeism_rate: existing ? Number(existing.projected_absenteeism_rate) : 5,
-        planned_arrivals: existing ? Number(existing.planned_arrivals) : 0,
-        planned_arrivals_bus: existing ? Number(existing.planned_arrivals_bus) : 0,
-        planned_arrivals_cam: existing ? Number(existing.planned_arrivals_cam) : 0,
       });
     }
     return params;
   });
+
+  // Arrival hypotheses state (managed by sub-component, but needed for projection)
+  const [arrivalHypotheses, setArrivalHypotheses] = useState<ArrivalHypothesis[]>(initialArrivalHypotheses);
 
   const updateMonthParam = useCallback((mois: number, field: keyof MonthlyParam, value: number) => {
     setMonthlyParams((prev) =>
@@ -131,7 +139,8 @@ export function ScenarioEditorClient({
       vehicle_type: d.vehicle_type,
       is_from_data: d.is_from_data,
     })),
-  }), [turnoverRate, monthlyParams, departures]);
+    arrival_hypotheses: arrivalHypotheses,
+  }), [turnoverRate, monthlyParams, departures, arrivalHypotheses]);
 
   // Run projection (recalculates on every param change)
   const projection = useMemo(() =>
@@ -161,9 +170,6 @@ export function ScenarioEditorClient({
         monthly_params: monthlyParams.map((mp) => ({
           mois: mp.mois,
           projected_absenteeism_rate: mp.absenteeism_rate,
-          planned_arrivals: mp.planned_arrivals,
-          planned_arrivals_bus: mp.planned_arrivals_bus,
-          planned_arrivals_cam: mp.planned_arrivals_cam,
         })),
       });
       toast.success("Scénario sauvegardé");
@@ -251,6 +257,7 @@ export function ScenarioEditorClient({
         <TabsList>
           <TabsTrigger value="params">Variables globales</TabsTrigger>
           <TabsTrigger value="monthly">Paramètres mensuels</TabsTrigger>
+          <TabsTrigger value="arrivals">Hypothèses d&apos;arrivées</TabsTrigger>
           <TabsTrigger value="departures">Départs ({departures.length})</TabsTrigger>
           <TabsTrigger value="detail">Détail projection</TabsTrigger>
         </TabsList>
@@ -339,9 +346,6 @@ export function ScenarioEditorClient({
                     <TableRow>
                       <TableHead className="text-xs">Mois</TableHead>
                       <TableHead className="text-xs">Absentéisme (%)</TableHead>
-                      <TableHead className="text-xs">Arrivées totales</TableHead>
-                      <TableHead className="text-xs">Arrivées BUS</TableHead>
-                      <TableHead className="text-xs">Arrivées CAM</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -372,33 +376,6 @@ export function ScenarioEditorClient({
                             />
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            value={mp.planned_arrivals}
-                            onChange={(e) => updateMonthParam(mp.mois, "planned_arrivals", parseInt(e.target.value) || 0)}
-                            className="w-20 h-7 text-xs"
-                            min="0"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            value={mp.planned_arrivals_bus}
-                            onChange={(e) => updateMonthParam(mp.mois, "planned_arrivals_bus", parseInt(e.target.value) || 0)}
-                            className="w-20 h-7 text-xs"
-                            min="0"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            value={mp.planned_arrivals_cam}
-                            onChange={(e) => updateMonthParam(mp.mois, "planned_arrivals_cam", parseInt(e.target.value) || 0)}
-                            className="w-20 h-7 text-xs"
-                            min="0"
-                          />
-                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -406,6 +383,16 @@ export function ScenarioEditorClient({
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Arrival hypotheses */}
+        <TabsContent value="arrivals">
+          <ArrivalHypothesesTab
+            scenarioId={scenario.id}
+            hypotheses={arrivalHypotheses}
+            comboboxOptions={comboboxOptions}
+            selectedYear={selectedYear}
+          />
         </TabsContent>
 
         {/* Departures */}

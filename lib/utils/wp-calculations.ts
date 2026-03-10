@@ -27,18 +27,34 @@ export interface AbsenceRecord {
   heures_theoriques: number;
 }
 
+export interface ArrivalHypothesis {
+  id: string;
+  scenario_id: string;
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  type_contrat: "CDI" | "CDD";
+  vehicle_type: "BUS" | "CAM" | null;
+  start_day: number;
+  start_month: number;
+  start_year: number;
+  end_day: number | null;
+  end_month: number | null;
+  end_year: number | null;
+}
+
 export interface ScenarioParams {
   turnover_rate: number; // annual %
   monthly_params: MonthlyParam[];
   known_departures: KnownDeparture[];
+  arrival_hypotheses: ArrivalHypothesis[];
 }
 
 export interface MonthlyParam {
   mois: number;
   absenteeism_rate: number; // %
-  planned_arrivals: number;
-  planned_arrivals_bus: number;
-  planned_arrivals_cam: number;
 }
 
 export interface KnownDeparture {
@@ -63,6 +79,47 @@ export interface ProjectionMonth {
   turnover_losses: number;
   absenteeism_rate: number;
   is_projection: boolean;
+}
+
+// ============================================================
+// Arrival hypothesis helpers
+// ============================================================
+
+function isMonthInRange(
+  month: number, year: number,
+  startMonth: number, startYear: number,
+  endMonth: number | null, endYear: number | null
+): boolean {
+  const val = year * 12 + month;
+  const start = startYear * 12 + startMonth;
+  const end = endMonth && endYear ? endYear * 12 + endMonth : start;
+  return val >= start && val <= end;
+}
+
+export function getArrivalsForMonth(
+  hypotheses: ArrivalHypothesis[],
+  month: number,
+  year: number
+): number {
+  return hypotheses
+    .filter((h) => isMonthInRange(month, year, h.start_month, h.start_year, h.end_month, h.end_year))
+    .reduce((sum, h) => sum + h.nb_personnes, 0);
+}
+
+export function getCddDeparturesForMonth(
+  hypotheses: ArrivalHypothesis[],
+  month: number,
+  year: number
+): number {
+  return hypotheses
+    .filter((h) => {
+      if (h.type_contrat !== "CDD") return false;
+      // CDD auto-depart at end of period
+      const endMonth = h.end_month ?? h.start_month;
+      const endYear = h.end_year ?? h.start_year;
+      return endMonth === month && endYear === year;
+    })
+    .reduce((sum, h) => sum + h.nb_personnes, 0);
 }
 
 // ============================================================
@@ -116,9 +173,6 @@ export function projectHeadcount(
     const monthParam = monthParamMap.get(m) || {
       mois: m,
       absenteeism_rate: 5,
-      planned_arrivals: 0,
-      planned_arrivals_bus: 0,
-      planned_arrivals_cam: 0,
     };
 
     if (!isProjection) {
@@ -181,8 +235,11 @@ export function projectHeadcount(
       const monthlyTurnoverRate = scenario.turnover_rate / 100 / 12;
       const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate);
 
-      // Arrivals
-      const arrivals = monthParam.planned_arrivals;
+      // Arrivals from hypotheses
+      const arrivals = getArrivalsForMonth(scenario.arrival_hypotheses, m, year);
+
+      // CDD auto-departures
+      const cddDepartures = getCddDeparturesForMonth(scenario.arrival_hypotheses, m, year);
 
       // Returns from temp exits
       const returns = returnsByMonth.get(m) || [];
@@ -195,7 +252,7 @@ export function projectHeadcount(
         return d.getMonth() + 1 === m && d.getFullYear() === year;
       }).length;
 
-      const totalDepartures = Math.max(knownDepartureCount, dataExits) + turnoverLosses;
+      const totalDepartures = Math.max(knownDepartureCount, dataExits) + turnoverLosses + cddDepartures;
 
       runningBrut = runningBrut - totalDepartures + arrivals + returnCount;
       runningBrut = Math.max(0, runningBrut);

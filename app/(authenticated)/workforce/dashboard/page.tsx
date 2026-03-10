@@ -1,7 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
-import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
+import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
+import { getArrivalsForMonth, getCddDeparturesForMonth, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -76,12 +77,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   }
 
   // Fetch all data in parallel (paginated to avoid 1000-row limit)
-  const [employees, absences, salaryStats, targets, defaultScenarios] = await Promise.all([
+  const [employees, absences, salaryStats, targets, defaultScenarios, allScenariosRaw] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*")),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_target_needs").select("*")),
     fetchAll(supabase.from("wp_scenarios").select("id, is_default").order("is_default", { ascending: false }).order("updated_at", { ascending: false })),
+    fetchAll(supabase.from("wp_scenarios").select("id, name").order("created_at", { ascending: false })),
   ]);
 
   // Fetch scenario monthly params: prefer default, fallback to most recent
@@ -282,6 +284,114 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     });
   }
 
+  // ============================================================
+  // Scenario projections for chart overlay
+  // ============================================================
+
+  const scenarioOptions: ScenarioOption[] = allScenariosRaw.map((s) => ({
+    id: s.id,
+    name: s.name,
+  }));
+
+  // Fetch all scenario data in parallel
+  const scenarioProjections: ScenarioProjectionData[] = [];
+
+  if (scenarioOptions.length > 0) {
+    const scenarioIds = scenarioOptions.map((s) => s.id);
+
+    const [scenarioParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioDetailsAll] = await Promise.all([
+      fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
+      fetchAll(supabase.from("wp_scenario_departures").select("*").in("scenario_id", scenarioIds)),
+      fetchAll(supabase.from("wp_scenario_arrival_hypotheses").select("*").in("scenario_id", scenarioIds)),
+      fetchAll(supabase.from("wp_scenarios").select("id, projected_turnover_rate").in("id", scenarioIds)),
+    ]);
+
+    for (const sc of scenarioOptions) {
+      const scParams = scenarioParamsAll.filter((p) => p.scenario_id === sc.id);
+      const scDepartures = scenarioDeparturesAll.filter((d) => d.scenario_id === sc.id);
+      const scArrivals = scenarioArrivalsAll.filter((a) => a.scenario_id === sc.id) as unknown as ArrivalHypothesis[];
+      const scDetail = scenarioDetailsAll.find((s) => s.id === sc.id);
+      const turnoverRate = Number(scDetail?.projected_turnover_rate ?? 0);
+
+      const absRateByMonth = new Map<number, number>();
+      scParams.forEach((p) => absRateByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate)));
+
+      // Build departure counts by month
+      const depCountByMonth = new Map<number, number>();
+      scDepartures
+        .filter((d) => Number(d.departure_year) === selectedYear)
+        .forEach((d) => {
+          const m = Number(d.departure_month);
+          depCountByMonth.set(m, (depCountByMonth.get(m) || 0) + 1);
+        });
+
+      // Return counts from temp exits
+      const returnCountByMonth = new Map<number, number>();
+      scDepartures
+        .filter((d) => Number(d.return_year) === selectedYear && d.return_month)
+        .forEach((d) => {
+          const m = Number(d.return_month);
+          returnCountByMonth.set(m, (returnCountByMonth.get(m) || 0) + 1);
+        });
+
+      // Find the last real month's values as starting point
+      const lastRealIdx = headcountData.findIndex((d) => d.is_projection) - 1;
+      const lastReal = lastRealIdx >= 0 ? headcountData[lastRealIdx] : headcountData[headcountData.length - 1];
+
+      let runningBrut = lastReal.effectif_brut;
+      let runningTempExitsEtp = lastReal.effectif_brut - lastReal.effectif_net;
+
+      const months: ScenarioProjectionData["months"] = [];
+
+      for (let m = 1; m <= 12; m++) {
+        const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
+        if (!isProjection) continue;
+
+        // Turnover losses
+        const monthlyTurnoverRate = turnoverRate / 100 / 12;
+        const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate * 10) / 10;
+
+        // Known departures
+        const knownDeps = depCountByMonth.get(m) || 0;
+
+        // Data-based departures (employees with date_sortie in this month)
+        const dataExits = allEmployees.filter((e) => {
+          if (!e.date_sortie) return false;
+          const d = new Date(e.date_sortie);
+          return d.getMonth() + 1 === m && d.getFullYear() === selectedYear;
+        }).length;
+
+        // Arrivals from hypotheses
+        const arrivals = getArrivalsForMonth(scArrivals, m, selectedYear);
+        // CDD auto-departures
+        const cddDepartures = getCddDeparturesForMonth(scArrivals, m, selectedYear);
+
+        // Returns from temp exits
+        const returns = returnCountByMonth.get(m) || 0;
+
+        const totalDepartures = Math.max(knownDeps, dataExits) + turnoverLosses + cddDepartures;
+
+        runningBrut = Math.max(0, runningBrut - totalDepartures + arrivals + returns);
+        runningTempExitsEtp = Math.max(0, runningTempExitsEtp - returns);
+
+        const scenarioNet = runningBrut - runningTempExitsEtp;
+
+        const absRate = absRateByMonth.get(m) ?? 5;
+        const absentEtp = scenarioNet * (absRate / 100);
+        const scenarioReel = scenarioNet - absentEtp;
+
+        months.push({
+          month_index: m,
+          scenario_brut: Math.round(runningBrut * 10) / 10,
+          scenario_net: Math.max(0, Math.round(scenarioNet * 10) / 10),
+          scenario_reel: Math.max(0, Math.round(scenarioReel * 10) / 10),
+        });
+      }
+
+      scenarioProjections.push({ scenario_id: sc.id, months });
+    }
+  }
+
   const stats: WpDashboardStats = {
     effectif_brut: Math.round(effectifBrutEtp * 10) / 10,
     effectif_net: Math.round(effectifNetEtp * 10) / 10,
@@ -419,7 +529,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
       <WpKpiCards stats={stats} />
 
-      <HeadcountEvolutionChart data={headcountData} />
+      <HeadcountEvolutionChart
+        data={headcountData}
+        scenarios={scenarioOptions}
+        scenarioProjections={scenarioProjections}
+      />
 
       {targetTotal > 0 && <GapAnalysisChart data={gapData} />}
 
