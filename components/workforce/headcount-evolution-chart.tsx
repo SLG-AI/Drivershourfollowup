@@ -86,7 +86,7 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
               }}
               formatter={(value, name) => {
                 const labels: Record<string, string> = {
-                  effectif_brut: "Effectif brut",
+                  effectif_brut: "Effectif sous contrat",
                   effectif_net: "Effectif net",
                   target: "Cible",
                 };
@@ -96,7 +96,7 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
             <Legend
               formatter={(value: string) => {
                 const labels: Record<string, string> = {
-                  effectif_brut: "Effectif brut",
+                  effectif_brut: "Effectif sous contrat",
                   effectif_net: "Effectif net",
                   target: "Cible",
                 };

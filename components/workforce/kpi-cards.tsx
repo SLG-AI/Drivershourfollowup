@@ -32,7 +32,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
 
   const cards = [
     {
-      title: "Effectif brut (ETP)",
+      title: "Effectif sous contrat (ETP)",
       value: stats.effectif_brut,
       description: `${stats.bus_count} BUS / ${stats.cam_count} CAM — ${stats.headcount} pers.`,
       icon: Users,
@@ -42,7 +42,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     {
       title: "Effectif disponible net (ETP)",
       value: stats.effectif_net,
-      description: `${stats.sorties_temporaires} sortie(s) temporaire(s)`,
+      description: `${stats.sorties_temporaires} ETP en sortie(s) temporaire(s)`,
       icon: UserMinus,
       iconColor: "text-indigo-600",
       iconBg: "bg-indigo-50",

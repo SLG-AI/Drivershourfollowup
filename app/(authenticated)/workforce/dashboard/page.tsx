@@ -120,31 +120,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const activeEmployees = getActiveEmployeesAt(refDate);
   const headcount = activeEmployees.length;
 
-  // Build ETP lookup: for the selected month, try exact match then closest available month
-  const allStatsMonths: number[] = [];
-  const allEtpByMonth = new Map<number, Map<string, number>>();
-  for (let m = 1; m <= 12; m++) {
-    const mStats = allSalaryStats.filter((s) => Number(s.mois) === m);
-    if (mStats.length > 0) {
-      const map = new Map<string, number>();
-      mStats.forEach((s) => map.set(s.code_salarie, Number(s.etp || 0)));
-      allEtpByMonth.set(m, map);
-      allStatsMonths.push(m);
-    }
-  }
-
-  // Get ETP for an employee: selected month → closest month → taux_occupation/100
+  // ETP = taux_occupation / 100 (from wp_employees directly)
   function getEtp(e: Record<string, unknown>): number {
-    const code = e.code_salarie as string;
-    const exactMap = allEtpByMonth.get(selectedMonth);
-    if (exactMap?.has(code)) return exactMap.get(code)!;
-    if (allStatsMonths.length > 0) {
-      const closest = allStatsMonths.reduce((best, m) =>
-        Math.abs(m - selectedMonth) < Math.abs(best - selectedMonth) ? m : best
-      );
-      const closestMap = allEtpByMonth.get(closest);
-      if (closestMap?.has(code)) return closestMap.get(code)!;
-    }
     return Number(e.taux_occupation || 100) / 100;
   }
 
@@ -184,7 +161,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     taux_absenteisme: avgAbsenteeism,
     etp_total: Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
-    sorties_temporaires: sortiesTemporairesCount,
+    sorties_temporaires: Math.round(sortiesTempEtp * 10) / 10,
     gap_vs_cible: gapVsCible,
     target_total: targetTotal > 0 ? targetTotal : null,
   };
@@ -196,38 +173,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
 
-  // Build per-month ETP maps, and a "best available" fallback map
-  // For each employee, pick ETP from the closest available month
-  const etpByMonth = new Map<number, Map<string, number>>();
-  const availableMonths: number[] = [];
-  for (let m = 1; m <= 12; m++) {
-    const mStats = allSalaryStats.filter((s) => Number(s.mois) === m);
-    if (mStats.length > 0) {
-      const map = new Map<string, number>();
-      mStats.forEach((s) => map.set(s.code_salarie, Number(s.etp || 0)));
-      etpByMonth.set(m, map);
-      availableMonths.push(m);
-    }
-  }
-
-  // Get ETP for an employee at a given month: exact month → closest month → taux_occupation fallback
-  function getEtpForMonth(e: Record<string, unknown>, month: number): number {
-    const code = e.code_salarie as string;
-    // Try exact month
-    const exactMap = etpByMonth.get(month);
-    if (exactMap?.has(code)) return exactMap.get(code)!;
-    // Try closest available month
-    if (availableMonths.length > 0) {
-      const closest = availableMonths.reduce((best, m) =>
-        Math.abs(m - month) < Math.abs(best - month) ? m : best
-      );
-      const closestMap = etpByMonth.get(closest);
-      if (closestMap?.has(code)) return closestMap.get(code)!;
-    }
-    // Fallback
-    return Number(e.taux_occupation || 100) / 100;
-  }
-
   const headcountData: HeadcountDataPoint[] = [];
 
   for (let m = 1; m <= 12; m++) {
@@ -236,8 +181,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
     const activeAtMonth = getActiveEmployeesAt(monthEnd);
 
-    const brutEtpAtMonth = activeAtMonth.reduce((sum, e) => sum + getEtpForMonth(e, m), 0);
-    const tempExitsEtp = activeAtMonth.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtpForMonth(e, m), 0);
+    const brutEtpAtMonth = activeAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
+    const tempExitsEtp = activeAtMonth.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtp(e), 0);
     const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
 
     headcountData.push({

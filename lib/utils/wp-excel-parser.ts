@@ -107,8 +107,12 @@ export interface RosterRow {
 function deriveVehicleType(fonction: string, contrat: string): string {
   const f = normalizeText(fonction);
   const c = normalizeText(contrat);
-  if (f.includes("camionnett") || f.includes("cam") || c.includes("cam")) return "CAM";
-  if (f.includes("bus") || c.includes("bus")) return "BUS";
+  // Prioritize fonction over contrat
+  if (f.includes("bus")) return "BUS";
+  if (f.includes("camionnett") || f.includes("cam")) return "CAM";
+  // Fallback to contrat
+  if (c.includes("bus")) return "BUS";
+  if (c.includes("cam")) return "CAM";
   return "AUTRE";
 }
 
