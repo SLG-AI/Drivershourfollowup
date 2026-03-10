@@ -1,0 +1,311 @@
+import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
+
+// ============================================================
+// Types
+// ============================================================
+
+export interface Employee {
+  code_salarie: string;
+  date_entree: string | null;
+  date_sortie: string | null;
+  vehicle_type: string | null;
+  taux_occupation: number;
+  est_sortie_temporaire: boolean;
+  description_motif_sortie: string;
+  description_departement: string;
+  description_equipe: string;
+}
+
+export interface AbsenceRecord {
+  code_salarie: string;
+  mois: number;
+  annee: number;
+  pct_absenteisme: number;
+  hrs_maladie: number;
+  hrs_maternite: number;
+  hrs_accident: number;
+  heures_theoriques: number;
+}
+
+export interface ScenarioParams {
+  turnover_rate: number; // annual %
+  monthly_params: MonthlyParam[];
+  known_departures: KnownDeparture[];
+}
+
+export interface MonthlyParam {
+  mois: number;
+  absenteeism_rate: number; // %
+  planned_arrivals: number;
+  planned_arrivals_bus: number;
+  planned_arrivals_cam: number;
+}
+
+export interface KnownDeparture {
+  code_salarie: string | null;
+  departure_type: string;
+  departure_month: number;
+  departure_year: number;
+  return_month: number | null;
+  return_year: number | null;
+  vehicle_type: string | null;
+  is_from_data: boolean;
+}
+
+export interface ProjectionMonth {
+  month: number;
+  month_label: string;
+  effectif_brut: number;
+  effectif_net: number;
+  departures: number;
+  arrivals: number;
+  temp_exits: number;
+  turnover_losses: number;
+  absenteeism_rate: number;
+  is_projection: boolean;
+}
+
+// ============================================================
+// Projection engine
+// ============================================================
+
+export function projectHeadcount(
+  employees: Employee[],
+  absences: AbsenceRecord[],
+  scenario: ScenarioParams,
+  year: number,
+  targetTotal?: number
+): ProjectionMonth[] {
+  const currentDate = new Date();
+  const currentMonth = currentDate.getMonth() + 1;
+  const currentYear = currentDate.getFullYear();
+
+  const result: ProjectionMonth[] = [];
+
+  // Build monthly param lookup
+  const monthParamMap = new Map<number, MonthlyParam>();
+  scenario.monthly_params.forEach((mp) => monthParamMap.set(mp.mois, mp));
+
+  // Build known departures by month
+  const departuresByMonth = new Map<number, KnownDeparture[]>();
+  const returnsByMonth = new Map<number, KnownDeparture[]>();
+  scenario.known_departures
+    .filter((d) => d.departure_year === year)
+    .forEach((d) => {
+      const existing = departuresByMonth.get(d.departure_month) || [];
+      existing.push(d);
+      departuresByMonth.set(d.departure_month, existing);
+    });
+  // Returns from temp exits
+  scenario.known_departures
+    .filter((d) => d.return_year === year && d.return_month)
+    .forEach((d) => {
+      const existing = returnsByMonth.get(d.return_month!) || [];
+      existing.push(d);
+      returnsByMonth.set(d.return_month!, existing);
+    });
+
+  // Track running headcount
+  let runningBrut = 0;
+
+  for (let m = 1; m <= 12; m++) {
+    const isProjection = year > currentYear || (year === currentYear && m > currentMonth);
+    const monthDate = `${year}-${String(m).padStart(2, "0")}-28`;
+    const monthStart = `${year}-${String(m).padStart(2, "0")}-01`;
+
+    const monthParam = monthParamMap.get(m) || {
+      mois: m,
+      absenteeism_rate: 5,
+      planned_arrivals: 0,
+      planned_arrivals_bus: 0,
+      planned_arrivals_cam: 0,
+    };
+
+    if (!isProjection) {
+      // Real data: count from employee records
+      const activeAtMonth = employees.filter((e) => {
+        if (!e.date_entree || e.date_entree > monthDate) return false;
+        if (e.date_sortie && e.date_sortie < monthStart) return false;
+        return true;
+      });
+
+      const tempExits = activeAtMonth.filter((e) => e.est_sortie_temporaire).length;
+      const brut = activeAtMonth.length;
+
+      // Use actual absence data if available
+      const monthAbsences = absences.filter((a) => a.mois === m && a.annee === year);
+      const absRate = monthAbsences.length > 0
+        ? monthAbsences.reduce((sum, a) => sum + Number(a.pct_absenteisme), 0) / monthAbsences.length
+        : 0;
+
+      const absentCount = Math.round(brut * absRate / 100);
+      const net = brut - absentCount;
+
+      // Count departures this month (from real data)
+      const monthDepartures = employees.filter((e) => {
+        if (!e.date_sortie) return false;
+        const exitMonth = new Date(e.date_sortie).getMonth() + 1;
+        const exitYear = new Date(e.date_sortie).getFullYear();
+        return exitMonth === m && exitYear === year;
+      }).length;
+
+      runningBrut = brut;
+
+      result.push({
+        month: m,
+        month_label: FRENCH_MONTHS_SHORT[m],
+        effectif_brut: brut,
+        effectif_net: Math.max(0, net),
+        departures: monthDepartures,
+        arrivals: 0,
+        temp_exits: tempExits,
+        turnover_losses: 0,
+        absenteeism_rate: absRate,
+        is_projection: false,
+      });
+    } else {
+      // Projection: apply scenario variables
+      if (runningBrut === 0 && result.length > 0) {
+        runningBrut = result[result.length - 1].effectif_brut;
+      }
+      if (runningBrut === 0) {
+        // Fallback: count current active employees
+        runningBrut = employees.filter((e) => !e.date_sortie || e.date_sortie >= monthStart).length;
+      }
+
+      // Known departures this month
+      const knownDeps = departuresByMonth.get(m) || [];
+      const knownDepartureCount = knownDeps.length;
+
+      // Turnover: monthly rate from annual rate
+      const monthlyTurnoverRate = scenario.turnover_rate / 100 / 12;
+      const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate);
+
+      // Arrivals
+      const arrivals = monthParam.planned_arrivals;
+
+      // Returns from temp exits
+      const returns = returnsByMonth.get(m) || [];
+      const returnCount = returns.length;
+
+      // Also count known departures from data (employees with date_sortie in this month)
+      const dataExits = employees.filter((e) => {
+        if (!e.date_sortie) return false;
+        const d = new Date(e.date_sortie);
+        return d.getMonth() + 1 === m && d.getFullYear() === year;
+      }).length;
+
+      const totalDepartures = Math.max(knownDepartureCount, dataExits) + turnoverLosses;
+
+      runningBrut = runningBrut - totalDepartures + arrivals + returnCount;
+      runningBrut = Math.max(0, runningBrut);
+
+      // Temp exits: estimate from last known data
+      const lastTempExits = result.length > 0 ? result[result.length - 1].temp_exits : 0;
+      const tempExitsProjected = Math.max(0, lastTempExits - returnCount);
+
+      // Apply absenteeism
+      const absRate = monthParam.absenteeism_rate;
+      const absentCount = Math.round(runningBrut * absRate / 100);
+      const net = runningBrut - absentCount;
+
+      result.push({
+        month: m,
+        month_label: FRENCH_MONTHS_SHORT[m],
+        effectif_brut: runningBrut,
+        effectif_net: Math.max(0, net),
+        departures: totalDepartures,
+        arrivals,
+        temp_exits: tempExitsProjected,
+        turnover_losses: turnoverLosses,
+        absenteeism_rate: absRate,
+        is_projection: true,
+      });
+    }
+  }
+
+  return result;
+}
+
+// ============================================================
+// Historical analysis helpers
+// ============================================================
+
+export function calculateHistoricalAbsenteeism(
+  absences: AbsenceRecord[]
+): { mois: number; avg_rate: number; years: number[] }[] {
+  const byMonth = new Map<number, { rates: number[]; years: Set<number> }>();
+
+  absences.forEach((a) => {
+    const existing = byMonth.get(a.mois) || { rates: [], years: new Set() };
+    existing.rates.push(Number(a.pct_absenteisme));
+    existing.years.add(a.annee);
+    byMonth.set(a.mois, existing);
+  });
+
+  return Array.from(byMonth.entries())
+    .map(([mois, data]) => ({
+      mois,
+      avg_rate: data.rates.reduce((s, r) => s + r, 0) / data.rates.length,
+      years: [...data.years],
+    }))
+    .sort((a, b) => a.mois - b.mois);
+}
+
+export function calculateHistoricalTurnover(
+  employees: Employee[],
+  year: number
+): number {
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year}-12-31`;
+
+  const activeAtStart = employees.filter((e) => {
+    if (!e.date_entree || e.date_entree > yearStart) return false;
+    if (e.date_sortie && e.date_sortie < yearStart) return false;
+    return true;
+  }).length;
+
+  const departures = employees.filter((e) => {
+    if (!e.date_sortie) return false;
+    return e.date_sortie >= yearStart && e.date_sortie <= yearEnd;
+  }).length;
+
+  if (activeAtStart === 0) return 0;
+  return (departures / activeAtStart) * 100;
+}
+
+export function detectKnownDeparturesFromData(
+  employees: Employee[],
+  year: number
+): KnownDeparture[] {
+  const today = new Date().toISOString().split("T")[0];
+
+  return employees
+    .filter((e) => {
+      if (!e.date_sortie || e.date_sortie < today) return false;
+      const d = new Date(e.date_sortie);
+      return d.getFullYear() === year;
+    })
+    .map((e) => {
+      const exitDate = new Date(e.date_sortie!);
+      const motif = e.description_motif_sortie || "";
+
+      let departureType = "end_contract";
+      if (motif.includes("retraite") || motif.includes("Pension")) departureType = "retirement";
+      else if (motif.includes("Parental")) departureType = "temp_exit_parental";
+      else if (motif.includes("maternit")) departureType = "temp_exit_maternity";
+      else if (motif.includes("Congé sans") || motif.includes("accompagnement")) departureType = "temp_exit_other";
+      else if (motif.includes("Licenciement") || motif.includes("Demission") || motif.includes("siliation")) departureType = "turnover";
+
+      return {
+        code_salarie: e.code_salarie,
+        departure_type: departureType,
+        departure_month: exitDate.getMonth() + 1,
+        departure_year: exitDate.getFullYear(),
+        return_month: null,
+        return_year: null,
+        vehicle_type: e.vehicle_type,
+        is_from_data: true,
+      };
+    });
+}

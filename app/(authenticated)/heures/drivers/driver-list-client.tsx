@@ -177,7 +177,7 @@ export function DriverListClient({ drivers }: { drivers: DriverSummary[] }) {
                 <TableRow key={d.driver_id}>
                   <TableCell>
                     <Link
-                      href={`/drivers/${d.driver_id}?from=${encodeURIComponent(buildFromParams())}`}
+                      href={`/heures/drivers/${d.driver_id}?from=${encodeURIComponent(buildFromParams())}`}
                       className="font-medium text-primary hover:underline"
                     >
                       {d.code_salarie}

@@ -118,7 +118,7 @@ export default async function DriverDetailPage({ params, searchParams }: Props) 
               size="sm"
               asChild
             >
-              <Link href={`/drivers/${id}?period=${p.id}`}>{p.label}</Link>
+              <Link href={`/heures/drivers/${id}?period=${p.id}`}>{p.label}</Link>
             </Button>
           ))}
         </div>

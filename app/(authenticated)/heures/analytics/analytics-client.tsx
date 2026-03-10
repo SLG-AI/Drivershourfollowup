@@ -467,7 +467,7 @@ export default function AnalyticsClient({
                       <TableRow key={d.driverId}>
                         <TableCell>
                           <Link
-                            href={`/drivers/${d.driverId}`}
+                            href={`/heures/drivers/${d.driverId}`}
                             className="font-medium text-primary hover:underline"
                           >
                             {d.codeSalarie}
@@ -562,7 +562,7 @@ export default function AnalyticsClient({
                       <TableRow key={d.driverId}>
                         <TableCell>
                           <Link
-                            href={`/drivers/${d.driverId}`}
+                            href={`/heures/drivers/${d.driverId}`}
                             className="font-medium text-primary hover:underline"
                           >
                             {d.codeSalarie}

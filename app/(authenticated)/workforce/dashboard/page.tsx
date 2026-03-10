@@ -1,0 +1,286 @@
+import { createClient } from "@/lib/supabase/server";
+import { fetchAll } from "@/lib/supabase/fetch-all";
+import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
+import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
+import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
+import { BreakdownChart, type BreakdownByType, type BreakdownByDepot } from "@/components/workforce/breakdown-chart";
+import { GapAnalysisChart, type GapDataPoint } from "@/components/workforce/gap-analysis-chart";
+import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Upload } from "lucide-react";
+
+const MONTH_LABELS: Record<number, string> = {
+  1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril",
+  5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août",
+  9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre",
+};
+
+function lastDayOfMonth(year: number, month: number): string {
+  const d = new Date(year, month, 0);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+
+interface Props {
+  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string }>;
+}
+
+export default async function WorkforceDashboardPage({ searchParams }: Props) {
+  const params = await searchParams;
+  const supabase = await createClient();
+  const now = new Date();
+  const selectedYear = params.year ? parseInt(params.year) : now.getFullYear();
+  const selectedMonth = params.month ? parseInt(params.month) : now.getMonth() + 1;
+  const selectedFonctions = params.fonctions ? params.fonctions.split(",") : [];
+  const selectedCC = params.cc ? params.cc.split(",") : [];
+  const selectedDepots = params.depots ? params.depots.split(",") : [];
+
+  // Reference date: last day of selected month
+  const refDate = lastDayOfMonth(selectedYear, selectedMonth);
+
+  // Check if we have any data
+  const { count: employeeCount } = await supabase
+    .from("wp_employees")
+    .select("*", { count: "exact", head: true });
+
+  if (!employeeCount || employeeCount === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Workforce Planning</h1>
+          <p className="text-muted-foreground">
+            Prévision et suivi des effectifs chauffeurs.
+          </p>
+        </div>
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12">
+          <p className="text-lg font-medium">Aucune donnée disponible</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Importez vos fichiers RH pour commencer.
+          </p>
+          <Button asChild className="mt-4">
+            <Link href="/workforce/import">
+              <Upload className="mr-2 h-4 w-4" />
+              Importer des données
+            </Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Fetch all data in parallel (paginated to avoid 1000-row limit)
+  const [employees, absences, salaryStats, targets] = await Promise.all([
+    fetchAll(supabase.from("wp_employees").select("*")),
+    fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_target_needs").select("*")),
+  ]);
+
+  // Apply fonction and cost center filters
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allEmployees = employees.filter((e: any) => {
+    if (selectedFonctions.length > 0 && !selectedFonctions.includes(e.description_fonction || "")) return false;
+    if (selectedCC.length > 0 && !selectedCC.includes(e.centre_cout || "")) return false;
+    if (selectedDepots.length > 0 && !selectedDepots.includes(e.description_departement || "")) return false;
+    return true;
+  });
+
+  // Filter absences/salary stats to matching employees
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const employeeCodes = new Set(allEmployees.map((e: any) => e.code_salarie));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allAbsences = absences.filter((a: any) => employeeCodes.has(a.code_salarie));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allSalaryStats = salaryStats.filter((s: any) => employeeCodes.has(s.code_salarie));
+  const allTargets = targets;
+
+  // ============================================================
+  // Helper: employees active at a given date
+  // Active = date_entree <= date (or null = unknown start, count them)
+  //          AND (date_sortie IS NULL OR date_sortie >= date)
+  // ============================================================
+  function getActiveEmployeesAt(date: string) {
+    return allEmployees.filter((e) => {
+      // If date_entree exists and is after the reference date, not yet hired
+      if (e.date_entree && e.date_entree > date) return false;
+      // If date_sortie exists and is before the reference date, already left
+      if (e.date_sortie && e.date_sortie < date) return false;
+      return true;
+    });
+  }
+
+  // ============================================================
+  // Calculate KPIs for selected month
+  // ============================================================
+
+  const activeEmployees = getActiveEmployeesAt(refDate);
+  const effectifBrut = activeEmployees.length;
+  const busCount = activeEmployees.filter((e) => e.vehicle_type === "BUS").length;
+  const camCount = activeEmployees.filter((e) => e.vehicle_type === "CAM").length;
+
+  // Sorties temporaires
+  const sortiesTemporaires = activeEmployees.filter((e) => e.est_sortie_temporaire).length;
+
+  // Effectif net = effectif brut - sorties temporaires
+  const effectifNet = effectifBrut - sortiesTemporaires;
+
+  // Taux d'absentéisme moyen for the selected month
+  const monthAbsences = allAbsences.filter((a) => Number(a.mois) === selectedMonth);
+  const totalAbsPct = monthAbsences.reduce((sum, a) => sum + Number(a.pct_absenteisme || 0), 0);
+  const avgAbsenteeism = monthAbsences.length > 0 ? totalAbsPct / monthAbsences.length : 0;
+
+  // ETP total for the selected month
+  const monthSalaryStats = allSalaryStats.filter((s) => Number(s.mois) === selectedMonth);
+  const etpTotal = monthSalaryStats.reduce((sum, s) => sum + Number(s.etp || 0), 0);
+
+  // Départs prévisibles: employees with date_sortie after refDate but within the selected year
+  const yearEnd = `${selectedYear}-12-31`;
+  const departsPrevus = allEmployees.filter(
+    (e) => e.date_sortie && e.date_sortie > refDate && e.date_sortie <= yearEnd
+  );
+
+  // Gap vs cible
+  const targetTotal = allTargets.reduce((sum, t) => sum + Number(t.target_headcount), 0);
+  const gapVsCible = targetTotal > 0 ? effectifNet - targetTotal : null;
+
+  const stats: WpDashboardStats = {
+    effectif_brut: effectifBrut,
+    effectif_net: effectifNet,
+    bus_count: busCount,
+    cam_count: camCount,
+    taux_absenteisme: avgAbsenteeism,
+    etp_total: etpTotal,
+    departs_prevus: departsPrevus.length,
+    sorties_temporaires: sortiesTemporaires,
+    gap_vs_cible: gapVsCible,
+    target_total: targetTotal > 0 ? targetTotal : null,
+  };
+
+  // ============================================================
+  // Headcount evolution (month by month for selected year)
+  // ============================================================
+
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+
+  const headcountData: HeadcountDataPoint[] = [];
+
+  for (let m = 1; m <= 12; m++) {
+    const monthEnd = lastDayOfMonth(selectedYear, m);
+    const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
+
+    const brutAtMonth = getActiveEmployeesAt(monthEnd).length;
+
+    // Sorties temporaires actives at this month
+    const tempExitsAtMonth = getActiveEmployeesAt(monthEnd).filter((e) => e.est_sortie_temporaire).length;
+
+    // Absence-based net calculation for months with data
+    const mAbsences = allAbsences.filter((a) => Number(a.mois) === m);
+    const absCount = mAbsences.length;
+
+    const netAtMonth = brutAtMonth - (absCount > 0 ? absCount : tempExitsAtMonth);
+
+    headcountData.push({
+      month: FRENCH_MONTHS_SHORT[m],
+      effectif_brut: brutAtMonth,
+      effectif_net: Math.max(0, netAtMonth),
+      is_projection: isProjection,
+      target: targetTotal > 0 ? targetTotal : undefined,
+    });
+  }
+
+  // ============================================================
+  // Departures list
+  // ============================================================
+
+  const departureItems: DepartureItem[] = departsPrevus
+    .sort((a, b) => (a.date_sortie || "").localeCompare(b.date_sortie || ""))
+    .map((e) => ({
+      code_salarie: e.code_salarie,
+      vehicle_type: e.vehicle_type || "?",
+      description_equipe: e.description_equipe || "",
+      date_sortie: e.date_sortie!,
+      motif: e.description_motif_sortie || "Non spécifié",
+      type: e.est_sortie_temporaire ? "temporaire" as const : "definitive" as const,
+    }));
+
+  // ============================================================
+  // Breakdown by type and depot (at selected month)
+  // ============================================================
+
+  const byType: BreakdownByType[] = [
+    {
+      label: "BUS",
+      actifs: activeEmployees.filter((e) => e.vehicle_type === "BUS" && !e.est_sortie_temporaire).length,
+      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "BUS" && e.est_sortie_temporaire).length,
+      departs: departsPrevus.filter((e) => e.vehicle_type === "BUS").length,
+    },
+    {
+      label: "CAM",
+      actifs: activeEmployees.filter((e) => e.vehicle_type === "CAM" && !e.est_sortie_temporaire).length,
+      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "CAM" && e.est_sortie_temporaire).length,
+      departs: departsPrevus.filter((e) => e.vehicle_type === "CAM").length,
+    },
+  ];
+
+  // By depot
+  const depotMap = new Map<string, { bus: number; cam: number }>();
+  activeEmployees.forEach((e) => {
+    const depot = e.description_departement || e.description_service || "Non assigné";
+    if (!depot) return;
+    const existing = depotMap.get(depot) || { bus: 0, cam: 0 };
+    if (e.vehicle_type === "BUS") existing.bus++;
+    else if (e.vehicle_type === "CAM") existing.cam++;
+    depotMap.set(depot, existing);
+  });
+
+  const byDepot: BreakdownByDepot[] = [...depotMap.entries()]
+    .map(([depot, counts]) => ({
+      depot: depot.replace("Depots - ", ""),
+      bus: counts.bus,
+      cam: counts.cam,
+      total: counts.bus + counts.cam,
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+
+  // ============================================================
+  // Gap analysis data
+  // ============================================================
+
+  const gapData: GapDataPoint[] = headcountData.map((hd) => ({
+    month: hd.month,
+    effectif_net: hd.effectif_net,
+    target: targetTotal,
+    gap: hd.effectif_net - targetTotal,
+  }));
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">Workforce Planning</h1>
+        <p className="text-muted-foreground">
+          Prévision et suivi des effectifs — {MONTH_LABELS[selectedMonth]} {selectedYear}
+          {selectedFonctions.length > 0 && ` — ${selectedFonctions.length} fonction(s)`}
+          {selectedCC.length > 0 && ` — ${selectedCC.length} cost center(s)`}
+          {selectedDepots.length > 0 && ` — ${selectedDepots.length} dépôt(s)`}
+        </p>
+      </div>
+
+      <WpKpiCards stats={stats} />
+
+      <HeadcountEvolutionChart data={headcountData} />
+
+      {targetTotal > 0 && <GapAnalysisChart data={gapData} />}
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <DepartureTable departures={departureItems} />
+        <BreakdownChart byType={byType} byDepot={byDepot} />
+      </div>
+    </div>
+  );
+}
