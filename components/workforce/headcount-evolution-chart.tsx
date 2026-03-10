@@ -46,6 +46,19 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
   const projectionStartIndex = data.findIndex((d) => d.is_projection);
   const hasTarget = data.some((d) => d.target != null);
 
+  // Auto-scale Y axis: find min/max across all series with some padding
+  const allValues = data.flatMap((d) => [
+    d.effectif_brut,
+    d.effectif_net,
+    ...(d.target != null ? [d.target] : []),
+  ]);
+  const dataMin = Math.min(...allValues);
+  const dataMax = Math.max(...allValues);
+  const range = dataMax - dataMin || 1;
+  const padding = Math.max(range * 0.15, 5);
+  const yMin = Math.max(0, Math.floor((dataMin - padding) / 10) * 10);
+  const yMax = Math.ceil((dataMax + padding) / 10) * 10;
+
   return (
     <Card>
       <CardHeader>
@@ -63,6 +76,7 @@ export function HeadcountEvolutionChart({ data, title = "Évolution des effectif
             <YAxis
               tick={{ fontSize: 12 }}
               className="text-muted-foreground"
+              domain={[yMin, yMax]}
             />
             <Tooltip
               contentStyle={{

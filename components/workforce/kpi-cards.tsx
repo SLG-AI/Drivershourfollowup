@@ -8,6 +8,7 @@ export interface WpDashboardStats {
   effectif_net: number;
   bus_count: number;
   cam_count: number;
+  headcount: number;
   taux_absenteisme: number;
   etp_total: number;
   departs_prevus: number;
@@ -31,15 +32,15 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
 
   const cards = [
     {
-      title: "Effectif brut",
+      title: "Effectif brut (ETP)",
       value: stats.effectif_brut,
-      description: `${stats.bus_count} BUS / ${stats.cam_count} CAM`,
+      description: `${stats.bus_count} BUS / ${stats.cam_count} CAM — ${stats.headcount} pers.`,
       icon: Users,
       iconColor: "text-blue-600",
       iconBg: "bg-blue-50",
     },
     {
-      title: "Effectif disponible net",
+      title: "Effectif disponible net (ETP)",
       value: stats.effectif_net,
       description: `${stats.sorties_temporaires} sortie(s) temporaire(s)`,
       icon: UserMinus,
@@ -53,14 +54,6 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       icon: Activity,
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
       iconBg: stats.taux_absenteisme > 8 ? "bg-red-50" : stats.taux_absenteisme > 5 ? "bg-amber-50" : "bg-emerald-50",
-    },
-    {
-      title: "ETP total",
-      value: stats.etp_total.toFixed(1),
-      description: "Équivalents temps plein",
-      icon: BarChart3,
-      iconColor: "text-violet-600",
-      iconBg: "bg-violet-50",
     },
     {
       title: "Départs prévisibles",

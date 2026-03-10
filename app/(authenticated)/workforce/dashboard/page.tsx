@@ -118,24 +118,52 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // ============================================================
 
   const activeEmployees = getActiveEmployeesAt(refDate);
-  const effectifBrut = activeEmployees.length;
-  const busCount = activeEmployees.filter((e) => e.vehicle_type === "BUS").length;
-  const camCount = activeEmployees.filter((e) => e.vehicle_type === "CAM").length;
+  const headcount = activeEmployees.length;
 
-  // Sorties temporaires
-  const sortiesTemporaires = activeEmployees.filter((e) => e.est_sortie_temporaire).length;
+  // Build ETP lookup: for the selected month, try exact match then closest available month
+  const allStatsMonths: number[] = [];
+  const allEtpByMonth = new Map<number, Map<string, number>>();
+  for (let m = 1; m <= 12; m++) {
+    const mStats = allSalaryStats.filter((s) => Number(s.mois) === m);
+    if (mStats.length > 0) {
+      const map = new Map<string, number>();
+      mStats.forEach((s) => map.set(s.code_salarie, Number(s.etp || 0)));
+      allEtpByMonth.set(m, map);
+      allStatsMonths.push(m);
+    }
+  }
 
-  // Effectif net = effectif brut - sorties temporaires
-  const effectifNet = effectifBrut - sortiesTemporaires;
+  // Get ETP for an employee: selected month → closest month → taux_occupation/100
+  function getEtp(e: Record<string, unknown>): number {
+    const code = e.code_salarie as string;
+    const exactMap = allEtpByMonth.get(selectedMonth);
+    if (exactMap?.has(code)) return exactMap.get(code)!;
+    if (allStatsMonths.length > 0) {
+      const closest = allStatsMonths.reduce((best, m) =>
+        Math.abs(m - selectedMonth) < Math.abs(best - selectedMonth) ? m : best
+      );
+      const closestMap = allEtpByMonth.get(closest);
+      if (closestMap?.has(code)) return closestMap.get(code)!;
+    }
+    return Number(e.taux_occupation || 100) / 100;
+  }
+
+  // Effectif brut in ETP
+  const effectifBrutEtp = activeEmployees.reduce((sum, e) => sum + getEtp(e), 0);
+  const busEtp = activeEmployees.filter((e) => e.vehicle_type === "BUS").reduce((sum, e) => sum + getEtp(e), 0);
+  const camEtp = activeEmployees.filter((e) => e.vehicle_type === "CAM").reduce((sum, e) => sum + getEtp(e), 0);
+
+  // Sorties temporaires in ETP
+  const sortiesTempEtp = activeEmployees.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtp(e), 0);
+  const sortiesTemporairesCount = activeEmployees.filter((e) => e.est_sortie_temporaire).length;
+
+  // Effectif net in ETP = brut ETP - sorties temporaires ETP
+  const effectifNetEtp = effectifBrutEtp - sortiesTempEtp;
 
   // Taux d'absentéisme moyen for the selected month
   const monthAbsences = allAbsences.filter((a) => Number(a.mois) === selectedMonth);
   const totalAbsPct = monthAbsences.reduce((sum, a) => sum + Number(a.pct_absenteisme || 0), 0);
   const avgAbsenteeism = monthAbsences.length > 0 ? totalAbsPct / monthAbsences.length : 0;
-
-  // ETP total for the selected month
-  const monthSalaryStats = allSalaryStats.filter((s) => Number(s.mois) === selectedMonth);
-  const etpTotal = monthSalaryStats.reduce((sum, s) => sum + Number(s.etp || 0), 0);
 
   // Départs prévisibles: employees with date_sortie after refDate but within the selected year
   const yearEnd = `${selectedYear}-12-31`;
@@ -145,17 +173,18 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
   // Gap vs cible
   const targetTotal = allTargets.reduce((sum, t) => sum + Number(t.target_headcount), 0);
-  const gapVsCible = targetTotal > 0 ? effectifNet - targetTotal : null;
+  const gapVsCible = targetTotal > 0 ? Math.round((effectifNetEtp - targetTotal) * 10) / 10 : null;
 
   const stats: WpDashboardStats = {
-    effectif_brut: effectifBrut,
-    effectif_net: effectifNet,
-    bus_count: busCount,
-    cam_count: camCount,
+    effectif_brut: Math.round(effectifBrutEtp * 10) / 10,
+    effectif_net: Math.round(effectifNetEtp * 10) / 10,
+    bus_count: Math.round(busEtp * 10) / 10,
+    cam_count: Math.round(camEtp * 10) / 10,
+    headcount,
     taux_absenteisme: avgAbsenteeism,
-    etp_total: etpTotal,
+    etp_total: Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
-    sorties_temporaires: sortiesTemporaires,
+    sorties_temporaires: sortiesTemporairesCount,
     gap_vs_cible: gapVsCible,
     target_total: targetTotal > 0 ? targetTotal : null,
   };
@@ -167,27 +196,54 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
 
+  // Build per-month ETP maps, and a "best available" fallback map
+  // For each employee, pick ETP from the closest available month
+  const etpByMonth = new Map<number, Map<string, number>>();
+  const availableMonths: number[] = [];
+  for (let m = 1; m <= 12; m++) {
+    const mStats = allSalaryStats.filter((s) => Number(s.mois) === m);
+    if (mStats.length > 0) {
+      const map = new Map<string, number>();
+      mStats.forEach((s) => map.set(s.code_salarie, Number(s.etp || 0)));
+      etpByMonth.set(m, map);
+      availableMonths.push(m);
+    }
+  }
+
+  // Get ETP for an employee at a given month: exact month → closest month → taux_occupation fallback
+  function getEtpForMonth(e: Record<string, unknown>, month: number): number {
+    const code = e.code_salarie as string;
+    // Try exact month
+    const exactMap = etpByMonth.get(month);
+    if (exactMap?.has(code)) return exactMap.get(code)!;
+    // Try closest available month
+    if (availableMonths.length > 0) {
+      const closest = availableMonths.reduce((best, m) =>
+        Math.abs(m - month) < Math.abs(best - month) ? m : best
+      );
+      const closestMap = etpByMonth.get(closest);
+      if (closestMap?.has(code)) return closestMap.get(code)!;
+    }
+    // Fallback
+    return Number(e.taux_occupation || 100) / 100;
+  }
+
   const headcountData: HeadcountDataPoint[] = [];
 
   for (let m = 1; m <= 12; m++) {
     const monthEnd = lastDayOfMonth(selectedYear, m);
     const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
 
-    const brutAtMonth = getActiveEmployeesAt(monthEnd).length;
+    const activeAtMonth = getActiveEmployeesAt(monthEnd);
 
-    // Sorties temporaires actives at this month
-    const tempExitsAtMonth = getActiveEmployeesAt(monthEnd).filter((e) => e.est_sortie_temporaire).length;
-
-    // Absence-based net calculation for months with data
-    const mAbsences = allAbsences.filter((a) => Number(a.mois) === m);
-    const absCount = mAbsences.length;
-
-    const netAtMonth = brutAtMonth - (absCount > 0 ? absCount : tempExitsAtMonth);
+    const brutEtpAtMonth = activeAtMonth.reduce((sum, e) => sum + getEtpForMonth(e, m), 0);
+    const tempExitsEtp = activeAtMonth.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtpForMonth(e, m), 0);
+    const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
 
     headcountData.push({
       month: FRENCH_MONTHS_SHORT[m],
-      effectif_brut: brutAtMonth,
-      effectif_net: Math.max(0, netAtMonth),
+      effectif_brut: Math.round(brutEtpAtMonth * 10) / 10,
+      effectif_net: Math.max(0, Math.round(netEtpAtMonth * 10) / 10),
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
     });
