@@ -50,7 +50,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     {
       title: "Taux d'absentéisme",
       value: `${stats.taux_absenteisme.toFixed(1)}%`,
-      description: `Sur les absences CNS importées`,
+      description: "(effectif net - effectif réel) / effectif net",
       icon: Activity,
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
       iconBg: stats.taux_absenteisme > 8 ? "bg-red-50" : stats.taux_absenteisme > 5 ? "bg-amber-50" : "bg-emerald-50",

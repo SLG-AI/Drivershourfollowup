@@ -81,10 +81,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_target_needs").select("*")),
-    fetchAll(supabase.from("wp_scenarios").select("id").eq("is_default", true).limit(1)),
+    fetchAll(supabase.from("wp_scenarios").select("id, is_default").order("is_default", { ascending: false }).order("updated_at", { ascending: false })),
   ]);
 
-  // Fetch default scenario monthly params for projection absenteeism rates
+  // Fetch scenario monthly params: prefer default, fallback to most recent
   const defaultScenarioId = defaultScenarios[0]?.id;
   const scenarioMonthlyParams = defaultScenarioId
     ? await fetchAll(
