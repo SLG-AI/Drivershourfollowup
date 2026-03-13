@@ -2,14 +2,17 @@
 
 import { createClient } from "@/lib/supabase/server";
 
+interface MonthlyParamInput {
+  mois: number;
+  projected_absenteeism_rate: number;
+  centre_cout?: string | null;
+}
+
 interface CreateScenarioInput {
   name: string;
   description: string;
   projected_turnover_rate: number;
-  monthly_params: {
-    mois: number;
-    projected_absenteeism_rate: number;
-  }[];
+  monthly_params: MonthlyParamInput[];
 }
 
 export async function createScenario(input: CreateScenarioInput) {
@@ -36,6 +39,7 @@ export async function createScenario(input: CreateScenarioInput) {
       scenario_id: scenario.id,
       mois: mp.mois,
       projected_absenteeism_rate: mp.projected_absenteeism_rate,
+      centre_cout: mp.centre_cout ?? null,
     }));
 
     const { error: paramError } = await supabase
@@ -76,6 +80,7 @@ export async function updateScenario(id: string, input: CreateScenarioInput) {
       scenario_id: id,
       mois: mp.mois,
       projected_absenteeism_rate: mp.projected_absenteeism_rate,
+      centre_cout: mp.centre_cout ?? null,
     }));
 
     const { error: paramError } = await supabase

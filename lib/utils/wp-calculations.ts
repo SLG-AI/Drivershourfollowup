@@ -322,10 +322,9 @@ export function projectHeadcount(
       const lastTempExits = result.length > 0 ? result[result.length - 1].temp_exits : 0;
       const tempExitsProjected = Math.max(0, lastTempExits - returnCount);
 
-      // Apply absenteeism
-      const absRate = monthParam.absenteeism_rate;
-      const absentCount = Math.round(runningBrut * absRate / 100);
-      const net = runningBrut - absentCount;
+      // Le taux d'absentéisme du scénario impacte le MCT, pas le CNS
+      // → effectif_net n'est pas réduit par l'absentéisme
+      const net = runningBrut;
 
       result.push({
         month: m,
@@ -336,7 +335,7 @@ export function projectHeadcount(
         arrivals,
         temp_exits: tempExitsProjected,
         turnover_losses: turnoverLosses,
-        absenteeism_rate: absRate,
+        absenteeism_rate: monthParam.absenteeism_rate,
         is_projection: true,
       });
     }

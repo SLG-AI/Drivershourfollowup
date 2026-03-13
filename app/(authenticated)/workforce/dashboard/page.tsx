@@ -97,14 +97,31 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     ? await fetchAll(
         supabase
           .from("wp_scenario_monthly_params")
-          .select("mois, projected_absenteeism_rate")
+          .select("mois, projected_absenteeism_rate, centre_cout")
           .eq("scenario_id", defaultScenarioId)
       )
     : [];
+  // Global rates (centre_cout IS NULL)
   const scenarioAbsRateByMonth = new Map<number, number>();
+  // Per-cost-center rates: Map<"mois:centre_cout", rate>
+  const scenarioAbsRateByCc = new Map<string, number>();
   scenarioMonthlyParams.forEach((p) => {
-    scenarioAbsRateByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate));
+    const mois = Number(p.mois);
+    const rate = Number(p.projected_absenteeism_rate);
+    if (p.centre_cout) {
+      scenarioAbsRateByCc.set(`${mois}:${p.centre_cout}`, rate);
+    } else {
+      scenarioAbsRateByMonth.set(mois, rate);
+    }
   });
+  /** Get scenario absenteeism rate for a month+cost_center, with global fallback */
+  const getScenarioAbsRate = (mois: number, centreCout?: string | null): number => {
+    if (centreCout) {
+      const specific = scenarioAbsRateByCc.get(`${mois}:${centreCout}`);
+      if (specific !== undefined) return specific;
+    }
+    return scenarioAbsRateByMonth.get(mois) ?? 5;
+  };
 
   // Apply fonction and cost center filters
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -373,6 +390,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const currentYear = now.getFullYear();
 
   const headcountData: HeadcountDataPoint[] = [];
+  let lastKnownCnsRate: number | null = null;
+  let lastKnownMctRate: number | null = null;
 
   for (let m = 1; m <= 12; m++) {
     const monthEnd = lastDayOfMonth(selectedYear, m);
@@ -393,6 +412,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     const monthAbs = allAbsences.filter((a) => Number(a.mois) === m);
     const hasAbsenceData = monthAbs.length > 0;
 
+    let effectifReel: number;
     if (hasAbsenceData) {
       const nonTempSet = new Set(
         activeAtMonth.filter((e) => !e.est_sortie_temporaire).map((e) => e.code_salarie)
@@ -405,11 +425,17 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         const etp = empTauxMap.get(a.code_salarie) ?? 0;
         return sum + (Number(a.pct_absenteisme || 0) / 100) * etp;
       }, 0);
+      effectifReel = netEtpAtMonth - absentEtp;
+      // Mémoriser le dernier taux CNS connu
+      if (netEtpAtMonth > 0) {
+        lastKnownCnsRate = (absentEtp / netEtpAtMonth) * 100;
+      }
     } else {
-      const scenarioRate = scenarioAbsRateByMonth.get(m) ?? 5;
-      absentEtp = netEtpAtMonth * (scenarioRate / 100);
+      // Pas de données réelles CNS → appliquer le dernier taux CNS connu
+      const cnsRate = lastKnownCnsRate ?? 0;
+      absentEtp = netEtpAtMonth * (cnsRate / 100);
+      effectifReel = netEtpAtMonth - absentEtp;
     }
-    const effectifReel = netEtpAtMonth - absentEtp;
 
     // Capturer le taux d'absentéisme pour le mois sélectionné
     if (m === selectedMonth && netEtpAtMonth > 0) {
@@ -419,11 +445,20 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     // Effectif après MCT = effectif réel - FTE perdus par maladies court terme non CNS
     const monthMct = allAbsencesMct.filter((a) => Number(a.mois) === m);
     let effectifApresMct: number | undefined;
+    let projectedApresMct: number | undefined;
     if (monthMct.length > 0) {
       const totalMctHrs = monthMct.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
       const workableHrs = getWorkableHoursInMonth(selectedYear, m);
       const ftePerdus = workableHrs > 0 ? totalMctHrs / workableHrs : 0;
       effectifApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
+      // Mémoriser le dernier taux MCT connu
+      if (effectifReel > 0) {
+        lastKnownMctRate = (ftePerdus / effectifReel) * 100;
+      }
+    } else if (lastKnownMctRate !== null) {
+      // Projeter avec le dernier taux MCT connu (affiché en pointillé)
+      const ftePerdus = effectifReel * (lastKnownMctRate / 100);
+      projectedApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
     }
 
     // Effectif après absences injustifiées = effectif après MCT - FTE perdus par absences injustifiées
@@ -443,10 +478,17 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       effectif_net: Math.max(0, Math.round(netEtpAtMonth * 10) / 10),
       effectif_reel: Math.max(0, Math.round(effectifReel * 10) / 10),
       effectif_apres_mct: effectifApresMct,
+      projected_apres_mct: projectedApresMct,
       effectif_apres_injustifiees: effectifApresInjustifiees,
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
     });
+  }
+
+  // Jonction pour la projection MCT : ajouter le point projeté sur le dernier mois avec données réelles
+  const lastMctRealIdx = headcountData.reduce((last, d, i) => d.effectif_apres_mct != null ? i : last, -1);
+  if (lastMctRealIdx >= 0 && headcountData.some((d) => d.projected_apres_mct != null)) {
+    headcountData[lastMctRealIdx].projected_apres_mct = headcountData[lastMctRealIdx].effectif_apres_mct;
   }
 
   // ============================================================
@@ -478,8 +520,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       const scDetail = scenarioDetailsAll.find((s) => s.id === sc.id);
       const turnoverRate = Number(scDetail?.projected_turnover_rate ?? 0);
 
+      // Use global rates (centre_cout IS NULL) for scenario overlay
       const absRateByMonth = new Map<number, number>();
-      scParams.forEach((p) => absRateByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate)));
+      scParams
+        .filter((p) => !p.centre_cout)
+        .forEach((p) => absRateByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate)));
 
       // Build departure counts by month
       const depCountByMonth = new Map<number, number>();
@@ -541,15 +586,21 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
         const scenarioNet = runningBrut - runningTempExitsEtp;
 
+        // Réel projeté = net - dernier taux CNS connu
+        const cnsRate = lastKnownCnsRate ?? 0;
+        const scenarioCnsEtp = scenarioNet * (cnsRate / 100);
+        const scenarioReel = scenarioNet - scenarioCnsEtp;
+
+        // Le taux d'absentéisme du scénario impacte le MCT
         const absRate = absRateByMonth.get(m) ?? 5;
-        const absentEtp = scenarioNet * (absRate / 100);
-        const scenarioReel = scenarioNet - absentEtp;
+        const scenarioMctFte = scenarioNet * (absRate / 100);
 
         months.push({
           month_index: m,
           scenario_brut: Math.round(runningBrut * 10) / 10,
           scenario_net: Math.max(0, Math.round(scenarioNet * 10) / 10),
           scenario_reel: Math.max(0, Math.round(scenarioReel * 10) / 10),
+          scenario_apres_mct: Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10),
         });
       }
 
@@ -569,7 +620,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const totalMctHrsSelected = selectedMonthMct.reduce(
     (sum, a) => sum + Number(a.duree_hrs || 0), 0
   );
-  const tauxMct = totalAdjustedWorkableHrs > 0
+  // Taux MCT = uniquement basé sur les données réelles (pas de projection scénario ici)
+  const tauxMct = (selectedMonthMct.length > 0 && totalAdjustedWorkableHrs > 0)
     ? (totalMctHrsSelected / totalAdjustedWorkableHrs) * 100
     : 0;
 

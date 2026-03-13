@@ -22,12 +22,14 @@ export interface HeadcountDataPoint {
   effectif_net: number;
   effectif_reel?: number;
   effectif_apres_mct?: number;
+  projected_apres_mct?: number;
   effectif_apres_injustifiees?: number;
   is_projection: boolean;
   target?: number;
   scenario_brut?: number;
   scenario_net?: number;
   scenario_reel?: number;
+  scenario_apres_mct?: number;
 }
 
 export interface ScenarioOption {
@@ -43,6 +45,7 @@ export interface ScenarioProjectionData {
     scenario_brut: number;
     scenario_net: number;
     scenario_reel: number;
+    scenario_apres_mct: number;
   }[];
 }
 
@@ -59,11 +62,13 @@ const ALL_SERIES: SeriesDef[] = [
   { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)" },
   { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)" },
   { key: "effectif_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)" },
+  { key: "projected_apres_mct", label: "Après MCT (projeté)", color: "hsl(330, 70%, 55%)", dashed: true },
   { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées", color: "hsl(45, 93%, 47%)" },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
   { key: "scenario_brut", label: "Scénario — sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Scénario — net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
-  { key: "scenario_reel", label: "Scénario — réel", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
+  { key: "scenario_reel", label: "Scénario — réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
+  { key: "scenario_apres_mct", label: "Scénario — après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true },
 ];
 
 interface Props {
@@ -83,17 +88,47 @@ export function HeadcountEvolutionChart({
   const showScenario = selectedScenarioId !== null;
 
   // Merge scenario projection data into chart data
+  // When a scenario is active, hide solid lines for projected months
+  // (the dashed scenario lines take over)
+  const selectedProjection = showScenario
+    ? scenarioProjections.find((sp) => sp.scenario_id === selectedScenarioId)
+    : null;
+  const firstProjectedMonthIdx = selectedProjection
+    ? Math.min(...selectedProjection.months.map((m) => m.month_index))
+    : null;
+  // Le dernier mois réel = mois juste avant la première projection
+  const lastRealMonthIdx = firstProjectedMonthIdx != null ? firstProjectedMonthIdx - 1 : null;
+
   const chartData = data.map((d, idx) => {
-    if (!showScenario) return d;
-    const projection = scenarioProjections.find((sp) => sp.scenario_id === selectedScenarioId);
-    if (!projection) return d;
-    const monthData = projection.months.find((m) => m.month_index === idx + 1);
+    if (!showScenario || !selectedProjection) return d;
+    const monthIndex = idx + 1;
+
+    // Sur le dernier mois réel, ajouter les valeurs scénario = valeurs réelles
+    // pour que les pointillés démarrent depuis ce point
+    if (monthIndex === lastRealMonthIdx) {
+      return {
+        ...d,
+        scenario_brut: d.effectif_brut,
+        scenario_net: d.effectif_net,
+        scenario_reel: d.effectif_reel,
+        scenario_apres_mct: d.effectif_apres_mct ?? d.effectif_reel,
+      };
+    }
+
+    const monthData = selectedProjection.months.find((m) => m.month_index === monthIndex);
     if (!monthData) return d;
     return {
       ...d,
+      // Masquer les lignes continues pour les mois projetés couverts par le scénario
+      effectif_brut: undefined,
+      effectif_net: undefined,
+      effectif_reel: undefined,
+      effectif_apres_mct: undefined,
+      effectif_apres_injustifiees: undefined,
       scenario_brut: monthData.scenario_brut,
       scenario_net: monthData.scenario_net,
       scenario_reel: monthData.scenario_reel,
+      scenario_apres_mct: monthData.scenario_apres_mct,
     };
   });
 
@@ -118,11 +153,13 @@ export function HeadcountEvolutionChart({
     effectif_net: true,
     effectif_reel: chartData.some((d) => d.effectif_reel != null),
     effectif_apres_mct: chartData.some((d) => d.effectif_apres_mct != null),
+    projected_apres_mct: chartData.some((d) => d.projected_apres_mct != null),
     effectif_apres_injustifiees: chartData.some((d) => d.effectif_apres_injustifiees != null),
     target: chartData.some((d) => d.target != null),
     scenario_brut: showScenario && chartData.some((d) => d.scenario_brut != null),
     scenario_net: showScenario && chartData.some((d) => d.scenario_net != null),
     scenario_reel: showScenario && chartData.some((d) => d.scenario_reel != null),
+    scenario_apres_mct: showScenario && chartData.some((d) => d.scenario_apres_mct != null),
   };
 
   const availableSeries = ALL_SERIES.filter((s) => hasData[s.key]);
@@ -237,12 +274,40 @@ export function HeadcountEvolutionChart({
               itemSorter={(item) => {
                 const order: Record<string, number> = {
                   effectif_brut: 0, effectif_net: 1, effectif_reel: 2,
-                  effectif_apres_mct: 3, effectif_apres_injustifiees: 4, target: 5,
-                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8,
+                  effectif_apres_mct: 3, projected_apres_mct: 3.5, effectif_apres_injustifiees: 4, target: 5,
+                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8, scenario_apres_mct: 9,
                 };
                 return order[String(item.dataKey)] ?? 99;
               }}
-              formatter={(value, name) => [value ?? 0, labelMap[String(name)] || String(name)]}
+              labelFormatter={() => ""}
+              formatter={(value: number, name: string, _props: unknown, _index: number, payload: Array<{ dataKey: string; value: number }>) => {
+                const label = labelMap[String(name)] || String(name);
+                const val = value ?? 0;
+                const key = String(name);
+
+                // Define which line each should compare to for delta
+                const deltaParent: Record<string, string> = {
+                  effectif_net: "effectif_brut",
+                  effectif_reel: "effectif_net",
+                  effectif_apres_mct: "effectif_reel",
+                  projected_apres_mct: "effectif_reel",
+                  effectif_apres_injustifiees: "effectif_apres_mct",
+                  scenario_net: "scenario_brut",
+                  scenario_reel: "scenario_net",
+                  scenario_apres_mct: "scenario_reel",
+                };
+
+                const parentKey = deltaParent[key];
+                if (parentKey) {
+                  const parent = payload.find((p) => p.dataKey === parentKey);
+                  if (parent?.value != null) {
+                    const delta = val - parent.value;
+                    const sign = delta >= 0 ? "+" : "";
+                    return [<span key={key}>{val} <span style={{ fontSize: "0.75em", color: "#999" }}>({sign}{Math.round(delta * 10) / 10})</span></span>, label];
+                  }
+                }
+                return [val, label];
+              }}
             />
             <Legend
               content={() => null}

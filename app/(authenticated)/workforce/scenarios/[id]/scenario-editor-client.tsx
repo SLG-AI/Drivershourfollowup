@@ -9,14 +9,19 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
 import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
 import { updateScenario, autoPopulateDepartures } from "../actions";
 import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
-import { Save, RefreshCw, ArrowLeft, TrendingDown, Calendar } from "lucide-react";
+import { Save, RefreshCw, ArrowLeft, TrendingDown, Calendar, ChevronDown, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
+
+/** Key for global (fallback) rate - not tied to any cost center */
+const GLOBAL_KEY = "__GLOBAL__";
 
 interface ComboboxOptions {
   fonctions: string[];
@@ -29,6 +34,7 @@ interface DbMonthlyParam {
   scenario_id: string;
   mois: number;
   projected_absenteeism_rate: number;
+  centre_cout: string | null;
 }
 
 interface DbDeparture {
@@ -94,36 +100,113 @@ export function ScenarioEditorClient({
   const [saving, setSaving] = useState(false);
   const [populating, setPopulating] = useState(false);
 
-  // Monthly params state
-  const [monthlyParams, setMonthlyParams] = useState<MonthlyParam[]>(() => {
-    const params: MonthlyParam[] = [];
-    for (let m = 1; m <= 12; m++) {
-      const existing = initialMonthlyParams.find((p) => p.mois === m);
-      params.push({
-        mois: m,
-        absenteeism_rate: existing ? Number(existing.projected_absenteeism_rate) : 5,
-      });
+  // Monthly params state: Map<costCenterKey, MonthlyParam[]>
+  // GLOBAL_KEY = global fallback rates, other keys = cost-center-specific
+  const [allMonthlyParams, setAllMonthlyParams] = useState<Map<string, MonthlyParam[]>>(() => {
+    const map = new Map<string, MonthlyParam[]>();
+
+    // Group DB rows by centre_cout
+    const grouped = new Map<string, DbMonthlyParam[]>();
+    initialMonthlyParams.forEach((p) => {
+      const key = p.centre_cout ?? GLOBAL_KEY;
+      const arr = grouped.get(key) || [];
+      arr.push(p);
+      grouped.set(key, arr);
+    });
+
+    // Build MonthlyParam[] for each group
+    for (const [key, dbParams] of grouped) {
+      const params: MonthlyParam[] = [];
+      for (let m = 1; m <= 12; m++) {
+        const existing = dbParams.find((p) => p.mois === m);
+        params.push({
+          mois: m,
+          absenteeism_rate: existing ? Number(existing.projected_absenteeism_rate) : 5,
+        });
+      }
+      map.set(key, params);
     }
-    return params;
+
+    // Ensure global always exists
+    if (!map.has(GLOBAL_KEY)) {
+      const params: MonthlyParam[] = [];
+      for (let m = 1; m <= 12; m++) {
+        params.push({ mois: m, absenteeism_rate: 5 });
+      }
+      map.set(GLOBAL_KEY, params);
+    }
+
+    return map;
   });
+
+  // Selected cost centers in the multi-select (for editing)
+  const [selectedCostCenters, setSelectedCostCenters] = useState<string[]>([GLOBAL_KEY]);
+
+  // Derive the "effective" monthly params for display (first selected, with global fallback)
+  const displayedParams = useMemo((): MonthlyParam[] => {
+    const first = selectedCostCenters[0] || GLOBAL_KEY;
+    const specific = allMonthlyParams.get(first);
+    if (specific) return specific;
+    // Fallback: clone global values
+    return allMonthlyParams.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+  }, [allMonthlyParams, selectedCostCenters]);
+
+  // Global monthly params (for projection engine, which uses global)
+  const monthlyParams = allMonthlyParams.get(GLOBAL_KEY)!;
 
   // Arrival hypotheses state (managed by sub-component, but needed for projection)
   const [arrivalHypotheses, setArrivalHypotheses] = useState<ArrivalHypothesis[]>(initialArrivalHypotheses);
 
+  // Check if any selected cost center has specific rates
+  const hasSpecificRates = useMemo(() => {
+    return selectedCostCenters.some((cc) => cc !== GLOBAL_KEY && allMonthlyParams.has(cc));
+  }, [selectedCostCenters, allMonthlyParams]);
+
   const updateMonthParam = useCallback((mois: number, field: keyof MonthlyParam, value: number) => {
-    setMonthlyParams((prev) =>
-      prev.map((p) => {
-        if (p.mois === mois) return { ...p, [field]: value };
-        return p;
-      })
-    );
-  }, []);
+    setAllMonthlyParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedCostCenters) {
+        // Get or create params for this cost center
+        let params = next.get(cc);
+        if (!params) {
+          // Initialize from global
+          params = next.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+        }
+        params = params.map((p) => {
+          if (p.mois === mois) return { ...p, [field]: value };
+          return p;
+        });
+        next.set(cc, params);
+      }
+      return next;
+    });
+  }, [selectedCostCenters]);
 
   const setUniformRate = useCallback((rate: number) => {
-    setMonthlyParams((prev) =>
-      prev.map((p) => ({ ...p, absenteeism_rate: rate }))
-    );
-  }, []);
+    setAllMonthlyParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedCostCenters) {
+        let params = next.get(cc);
+        if (!params) {
+          params = next.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+        }
+        next.set(cc, params.map((p) => ({ ...p, absenteeism_rate: rate })));
+      }
+      return next;
+    });
+  }, [selectedCostCenters]);
+
+  const resetToGlobal = useCallback(() => {
+    setAllMonthlyParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedCostCenters) {
+        if (cc !== GLOBAL_KEY) {
+          next.delete(cc);
+        }
+      }
+      return next;
+    });
+  }, [selectedCostCenters]);
 
   // Build scenario params for projection
   const scenarioParams: ScenarioParams = useMemo(() => ({
@@ -163,14 +246,22 @@ export function ScenarioEditorClient({
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Flatten all cost center params into a single array
+      const allParams: { mois: number; projected_absenteeism_rate: number; centre_cout?: string | null }[] = [];
+      for (const [key, params] of allMonthlyParams) {
+        for (const mp of params) {
+          allParams.push({
+            mois: mp.mois,
+            projected_absenteeism_rate: mp.absenteeism_rate,
+            centre_cout: key === GLOBAL_KEY ? null : key,
+          });
+        }
+      }
       await updateScenario(scenario.id, {
         name,
         description,
         projected_turnover_rate: turnoverRate,
-        monthly_params: monthlyParams.map((mp) => ({
-          mois: mp.mois,
-          projected_absenteeism_rate: mp.absenteeism_rate,
-        })),
+        monthly_params: allParams,
       });
       toast.success("Scénario sauvegardé");
     } catch (error) {
@@ -334,10 +425,72 @@ export function ScenarioEditorClient({
         <TabsContent value="monthly">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
-                Paramètres mensuels — {selectedYear}
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Calendar className="h-4 w-4" />
+                  Paramètres mensuels — {selectedYear}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  {/* Multi-select cost center */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-8 text-xs">
+                        {selectedCostCenters.length === 1 && selectedCostCenters[0] === GLOBAL_KEY
+                          ? "Global"
+                          : selectedCostCenters.length === 1
+                            ? selectedCostCenters[0]
+                            : `${selectedCostCenters.length} sélectionnés`}
+                        <ChevronDown className="ml-2 h-3 w-3" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 p-2" align="end">
+                      <div className="space-y-1 max-h-64 overflow-auto">
+                        <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer">
+                          <Checkbox
+                            checked={selectedCostCenters.includes(GLOBAL_KEY)}
+                            onCheckedChange={(checked) => {
+                              // Global is exclusive: selecting it deselects all CCs
+                              if (checked) setSelectedCostCenters([GLOBAL_KEY]);
+                            }}
+                          />
+                          <span className="text-sm font-medium">Global (défaut)</span>
+                        </label>
+                        <div className="border-t my-1" />
+                        {comboboxOptions.centres_cout.map((cc) => (
+                          <label key={cc} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer">
+                            <Checkbox
+                              checked={selectedCostCenters.includes(cc)}
+                              onCheckedChange={(checked) => {
+                                setSelectedCostCenters((prev) => {
+                                  // Selecting a CC removes Global from selection
+                                  const withoutGlobal = prev.filter((c) => c !== GLOBAL_KEY);
+                                  if (checked) {
+                                    return [...withoutGlobal, cc];
+                                  }
+                                  const result = withoutGlobal.filter((c) => c !== cc);
+                                  // If nothing left, fallback to Global
+                                  return result.length > 0 ? result : [GLOBAL_KEY];
+                                });
+                              }}
+                            />
+                            <span className="text-sm">{cc}</span>
+                            {allMonthlyParams.has(cc) && (
+                              <Badge variant="secondary" className="text-[10px] ml-auto">Spécifique</Badge>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  {/* Reset to global button */}
+                  {hasSpecificRates && (
+                    <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={resetToGlobal}>
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                      Réinitialiser vers global
+                    </Button>
+                  )}
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="overflow-auto">
@@ -349,7 +502,7 @@ export function ScenarioEditorClient({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {monthlyParams.map((mp) => (
+                    {displayedParams.map((mp) => (
                       <TableRow key={mp.mois}>
                         <TableCell className="font-medium text-sm">{FRENCH_MONTHS_SHORT[mp.mois]}</TableCell>
                         <TableCell>
