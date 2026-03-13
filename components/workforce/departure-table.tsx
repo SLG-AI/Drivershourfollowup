@@ -41,7 +41,13 @@ const SUBCATEGORIES_TEMPORAIRE: Record<string, { label: string; color: string; m
   parental: { label: "Congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"] },
   maternite: { label: "Congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"] },
   sans_solde: { label: "Congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"] },
+  accompagnement: { label: "Congé d'accompagnement", color: "text-violet-600", motifs: ["Congé d'accompagnement"] },
 };
+
+/** Motifs qui correspondent à des sorties temporaires (congés structurels) */
+const MOTIFS_TEMPORAIRES = new Set(
+  Object.values(SUBCATEGORIES_TEMPORAIRE).flatMap((s) => s.motifs)
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -191,8 +197,9 @@ function CategorySection({
 // ---------------------------------------------------------------------------
 
 export function DepartureTable({ departures }: { departures: DepartureItem[] }) {
-  const definitifs = departures.filter((d) => d.type === "definitive");
-  const temporaires = departures.filter((d) => d.type === "temporaire");
+  // Classer par motif : si le motif est un congé structurel → temporaire, sinon → définitif
+  const definitifs = departures.filter((d) => !MOTIFS_TEMPORAIRES.has(d.motif));
+  const temporaires = departures.filter((d) => MOTIFS_TEMPORAIRES.has(d.motif));
 
   return (
     <Card>
