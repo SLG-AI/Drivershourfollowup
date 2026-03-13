@@ -1,6 +1,75 @@
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 
 // ============================================================
+// Luxembourg working days calculation
+// ============================================================
+
+/** Compute Easter Sunday for a given year using the Anonymous Gregorian algorithm */
+function easterSunday(year: number): Date {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+/** Get all 11 Luxembourg public holidays for a given year */
+function getLuxembourgPublicHolidays(year: number): Date[] {
+  const easter = easterSunday(year);
+  const easterMs = easter.getTime();
+  const day = 86400000;
+
+  return [
+    new Date(year, 0, 1),   // Nouvel An
+    new Date(easterMs + 1 * day),  // Lundi de Pâques
+    new Date(year, 4, 1),   // Fête du Travail
+    new Date(year, 4, 9),   // Journée de l'Europe
+    new Date(easterMs + 39 * day), // Ascension
+    new Date(easterMs + 50 * day), // Lundi de Pentecôte
+    new Date(year, 5, 23),  // Fête nationale
+    new Date(year, 7, 15),  // Assomption
+    new Date(year, 10, 1),  // Toussaint
+    new Date(year, 11, 25), // Noël
+    new Date(year, 11, 26), // Saint-Étienne
+  ];
+}
+
+/** Count working days (Mon-Fri, excluding Luxembourg public holidays) in a given month */
+export function getWorkingDaysInMonth(year: number, month: number): number {
+  const holidays = getLuxembourgPublicHolidays(year);
+  const holidaySet = new Set(holidays.map((d) => d.toISOString().split("T")[0]));
+
+  const daysInMonth = new Date(year, month, 0).getDate();
+  let count = 0;
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = new Date(year, month - 1, d);
+    const dayOfWeek = date.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) continue; // weekend
+    const iso = date.toISOString().split("T")[0];
+    if (holidaySet.has(iso)) continue; // public holiday
+    count++;
+  }
+
+  return count;
+}
+
+/** Get workable hours in a month = working days x 8 */
+export function getWorkableHoursInMonth(year: number, month: number): number {
+  return getWorkingDaysInMonth(year, month) * 8;
+}
+
+// ============================================================
 // Types
 // ============================================================
 

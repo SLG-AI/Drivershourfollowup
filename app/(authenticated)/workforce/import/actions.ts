@@ -49,6 +49,9 @@ export async function importWpData(input: WpImportInput) {
       case "absences_cns":
         await importAbsencesCNS(supabase, input.data, importId, input.annee || new Date().getFullYear());
         break;
+      case "absences_mct":
+        await importAbsencesMCT(supabase, input.data, importId, input.mois, input.annee || new Date().getFullYear());
+        break;
     }
 
     // Update import status
@@ -149,6 +152,33 @@ async function importAbsencesCNS(supabase: any, data: Record<string, unknown>[],
 
     const { error } = await supabase.from("wp_absences").insert(batch);
     if (error) throw new Error(`Erreur insertion absences (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function importAbsencesMCT(supabase: any, data: Record<string, unknown>[], importId: string, mois?: number, annee?: number) {
+  if (data.length === 0) return;
+
+  const targetMois = mois || (data[0].mois as number);
+  const targetAnnee = annee || (data[0].annee as number);
+
+  // Delete existing data for the same month/year
+  if (targetMois && targetAnnee) {
+    await supabase
+      .from("wp_absences_mct")
+      .delete()
+      .eq("mois", targetMois)
+      .eq("annee", targetAnnee);
+  }
+
+  for (let i = 0; i < data.length; i += 200) {
+    const batch = data.slice(i, i + 200).map((row) => ({
+      ...row,
+      import_id: importId,
+    }));
+
+    const { error } = await supabase.from("wp_absences_mct").insert(batch);
+    if (error) throw new Error(`Erreur insertion absences MCT (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
 }
 

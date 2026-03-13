@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
+import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -77,10 +77,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   }
 
   // Fetch all data in parallel (paginated to avoid 1000-row limit)
-  const [employees, absences, salaryStats, targets, defaultScenarios, allScenariosRaw] = await Promise.all([
+  const [employees, absences, salaryStats, absencesMct, targets, defaultScenarios, allScenariosRaw] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*")),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_target_needs").select("*")),
     fetchAll(supabase.from("wp_scenarios").select("id, is_default").order("is_default", { ascending: false }).order("updated_at", { ascending: false })),
     fetchAll(supabase.from("wp_scenarios").select("id, name").order("created_at", { ascending: false })),
@@ -117,6 +118,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const allAbsences = absences.filter((a: any) => employeeCodes.has(a.code_salarie));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allSalaryStats = salaryStats.filter((s: any) => employeeCodes.has(s.code_salarie));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allAbsencesMct = absencesMct.filter((a: any) => employeeCodes.size === 0 || employeeCodes.has(a.code_salarie));
   const allTargets = targets;
 
   // ============================================================
@@ -274,11 +277,22 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       avgAbsenteeism = (absentEtp / netEtpAtMonth) * 100;
     }
 
+    // Effectif après MCT = effectif réel - FTE perdus par maladies court terme non CNS
+    const monthMct = allAbsencesMct.filter((a) => Number(a.mois) === m);
+    let effectifApresMct: number | undefined;
+    if (monthMct.length > 0) {
+      const totalMctHrs = monthMct.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
+      const workableHrs = getWorkableHoursInMonth(selectedYear, m);
+      const ftePerdus = workableHrs > 0 ? totalMctHrs / workableHrs : 0;
+      effectifApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
+    }
+
     headcountData.push({
       month: FRENCH_MONTHS_SHORT[m],
       effectif_brut: Math.round(brutEtpAtMonth * 10) / 10,
       effectif_net: Math.max(0, Math.round(netEtpAtMonth * 10) / 10),
       effectif_reel: Math.max(0, Math.round(effectifReel * 10) / 10),
+      effectif_apres_mct: effectifApresMct,
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
     });

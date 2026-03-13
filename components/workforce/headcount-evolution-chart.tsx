@@ -21,6 +21,7 @@ export interface HeadcountDataPoint {
   effectif_brut: number;
   effectif_net: number;
   effectif_reel?: number;
+  effectif_apres_mct?: number;
   is_projection: boolean;
   target?: number;
   scenario_brut?: number;
@@ -96,11 +97,13 @@ export function HeadcountEvolutionChart({
 
   // Auto-scale Y axis: find min/max across all series with some padding
   const hasEffectifReel = chartData.some((d) => d.effectif_reel != null);
+  const hasEffectifApresMct = chartData.some((d) => d.effectif_apres_mct != null);
 
   const allValues = chartData.flatMap((d) => [
     d.effectif_brut,
     d.effectif_net,
     ...(d.effectif_reel != null ? [d.effectif_reel] : []),
+    ...(d.effectif_apres_mct != null ? [d.effectif_apres_mct] : []),
     ...(d.target != null ? [d.target] : []),
     ...(d.scenario_brut != null ? [d.scenario_brut] : []),
     ...(d.scenario_net != null ? [d.scenario_net] : []),
@@ -159,11 +162,25 @@ export function HeadcountEvolutionChart({
                 border: "1px solid hsl(var(--border))",
                 backgroundColor: "hsl(var(--background))",
               }}
+              itemSorter={(item) => {
+                const order: Record<string, number> = {
+                  effectif_brut: 0,
+                  effectif_net: 1,
+                  effectif_reel: 2,
+                  effectif_apres_mct: 3,
+                  target: 4,
+                  scenario_brut: 5,
+                  scenario_net: 6,
+                  scenario_reel: 7,
+                };
+                return order[String(item.dataKey)] ?? 99;
+              }}
               formatter={(value, name) => {
                 const labels: Record<string, string> = {
                   effectif_brut: "Effectif sous contrat",
                   effectif_net: "Effectif net",
                   effectif_reel: "Effectif réel (après maladie)",
+                  effectif_apres_mct: "Effectif après MCT",
                   target: "Cible",
                   scenario_brut: "Scénario — sous contrat",
                   scenario_net: "Scénario — net",
@@ -178,6 +195,7 @@ export function HeadcountEvolutionChart({
                   effectif_brut: "Effectif sous contrat",
                   effectif_net: "Effectif net",
                   effectif_reel: "Effectif réel (après maladie)",
+                  effectif_apres_mct: "Effectif après MCT",
                   target: "Cible",
                   scenario_brut: "Scénario — sous contrat",
                   scenario_net: "Scénario — net",
@@ -206,6 +224,15 @@ export function HeadcountEvolutionChart({
                 type="monotone"
                 dataKey="effectif_reel"
                 stroke="hsl(142, 71%, 45%)"
+                strokeWidth={2}
+                dot={{ r: 3 }}
+              />
+            )}
+            {hasEffectifApresMct && (
+              <Line
+                type="monotone"
+                dataKey="effectif_apres_mct"
+                stroke="hsl(330, 70%, 55%)"
                 strokeWidth={2}
                 dot={{ r: 3 }}
               />

@@ -36,6 +36,13 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
     icon: Activity,
     example: "SLA_Maladies_CNS_*.xlsx",
   },
+  {
+    id: "absences_mct",
+    label: "Absences MCT",
+    description: "Maladies court terme non prises en charge CNS.",
+    icon: Activity,
+    example: "ExportRechercheAbsences_*.xlsx",
+  },
 ];
 
 type Stage = "select" | "preview" | "importing" | "done";
@@ -171,7 +178,7 @@ export default function WorkforceImportPage() {
 
       {/* Stage: File type selection + upload */}
       {stage === "select" && (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {FILE_TYPES.map((ft) => (
             <Card
               key={ft.id}
@@ -272,7 +279,7 @@ export default function WorkforceImportPage() {
             </div>
 
             {/* Month/Year override for salary_stats and absences */}
-            {(selectedType === "salary_stats" || selectedType === "absences_cns") && (
+            {(selectedType === "salary_stats" || selectedType === "absences_cns" || selectedType === "absences_mct") && (
               <div className="flex items-end gap-4">
                 <div className="space-y-1">
                   <Label className="text-xs">Mois</Label>

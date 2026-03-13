@@ -65,7 +65,7 @@ function findCol(headers: string[], ...keywords: string[]): number {
 // Types
 // ============================================================
 
-export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns";
+export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns" | "absences_mct";
 
 export interface WpParseResult {
   fileType: WpFileType;
@@ -505,6 +505,119 @@ export function parseAbsencesCNS(buffer: ArrayBuffer): WpParseResult {
 }
 
 // ============================================================
+// 4. Absences MCT parser (Maladie Court Terme non CNS)
+// ============================================================
+
+export interface AbsenceMctRow {
+  code_salarie: string;
+  nom_salarie: string;
+  equipe: string;
+  prestation: string;
+  date_absence: string | null;
+  duree_hrs: number;
+  a_charge_cns: string;
+  mois: number;
+  annee: number;
+}
+
+export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: "array" });
+  } catch {
+    return { fileType: "absences_mct", data: [], rowCount: 0, errors: ["Impossible de lire le fichier Excel."], warnings };
+  }
+
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
+
+  const header = findHeaderRow(rows, ["code salarie", "duree", "a charge"]);
+  if (!header) {
+    return { fileType: "absences_mct", data: [], rowCount: 0, errors: ["En-têtes non détectés. Colonnes 'Code salarié', 'Durée (hrs)', 'A charge CNS' requises."], warnings };
+  }
+
+  const h = header.headers;
+  const colCode = findCol(h, "code", "salarie");
+  const colNom = findCol(h, "nom", "salarie");
+  const colEquipe = findCol(h, "equipe");
+  const colPrestation = findCol(h, "prestation");
+  const colDate = findCol(h, "date");
+  const colDuree = findCol(h, "duree");
+  const colCns = findCol(h, "charge", "cns");
+
+  if (colCode === -1) {
+    return { fileType: "absences_mct", data: [], rowCount: 0, errors: ["Colonne 'Code salarié' non trouvée."], warnings };
+  }
+  if (colDuree === -1) {
+    return { fileType: "absences_mct", data: [], rowCount: 0, errors: ["Colonne 'Durée (hrs)' non trouvée."], warnings };
+  }
+  if (colCns === -1) {
+    return { fileType: "absences_mct", data: [], rowCount: 0, errors: ["Colonne 'A charge CNS' non trouvée."], warnings };
+  }
+
+  const data: AbsenceMctRow[] = [];
+  let totalRows = 0;
+  let filteredOut = 0;
+
+  for (let i = header.index + 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[];
+    if (!row || row.length === 0) continue;
+
+    const codeSalarie = String(row[colCode] || "").trim();
+    if (!codeSalarie) continue;
+
+    totalRows++;
+
+    const aChargeCns = String(row[colCns] || "").trim().toUpperCase();
+    const dureeHrs = parseNumeric(row[colDuree]);
+
+    // Only keep rows where CNS = "N" and duration > 0
+    if (aChargeCns !== "N" || dureeHrs <= 0) {
+      filteredOut++;
+      continue;
+    }
+
+    const dateAbsence = colDate >= 0 ? excelDateToDate(row[colDate]) : null;
+    const mois = dateAbsence ? dateAbsence.getMonth() + 1 : 0;
+    const annee = dateAbsence ? dateAbsence.getFullYear() : 0;
+
+    data.push({
+      code_salarie: codeSalarie,
+      nom_salarie: colNom >= 0 ? String(row[colNom] || "") : "",
+      equipe: colEquipe >= 0 ? String(row[colEquipe] || "") : "",
+      prestation: colPrestation >= 0 ? String(row[colPrestation] || "") : "",
+      date_absence: dateToISO(dateAbsence),
+      duree_hrs: dureeHrs,
+      a_charge_cns: aChargeCns,
+      mois,
+      annee,
+    });
+  }
+
+  if (data.length === 0) {
+    if (totalRows > 0) {
+      warnings.push(`${totalRows} lignes lues mais aucune avec A charge CNS = "N" et Durée > 0.`);
+    } else {
+      errors.push("Aucune donnée d'absence trouvée.");
+    }
+  } else {
+    warnings.push(`${data.length} absences MCT retenues sur ${totalRows} lignes (${filteredOut} filtrées).`);
+  }
+
+  // Detect month/year from data
+  const monthSet = new Set(data.map((d) => d.mois).filter((m) => m > 0));
+  const yearSet = new Set(data.map((d) => d.annee).filter((y) => y > 0));
+  const detectedMonth = monthSet.size === 1 ? [...monthSet][0] : undefined;
+  const detectedYear = yearSet.size === 1 ? [...yearSet][0] : undefined;
+
+  return { fileType: "absences_mct", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, detectedMonth, detectedYear };
+}
+
+// ============================================================
 // Auto-detect file type
 // ============================================================
 
@@ -530,6 +643,9 @@ export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
   if (allText.includes("statistiques rapides") || allText.includes("hrs base decsal") || allText.includes("etat du salaire")) {
     return "salary_stats";
   }
+  if (allText.includes("motif absence") || allText.includes("avec justificatif") || allText.includes("a charge cns")) {
+    return "absences_mct";
+  }
   if (allText.includes("maladie") || allText.includes("absenteisme") || allText.includes("maternite")) {
     return "absences_cns";
   }
@@ -548,5 +664,7 @@ export function parseWpFile(buffer: ArrayBuffer, fileType: WpFileType): WpParseR
       return parseSalaryStats(buffer);
     case "absences_cns":
       return parseAbsencesCNS(buffer);
+    case "absences_mct":
+      return parseAbsencesMCT(buffer);
   }
 }
