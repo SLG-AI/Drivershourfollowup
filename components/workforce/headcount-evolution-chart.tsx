@@ -99,9 +99,20 @@ export function HeadcountEvolutionChart({
   // Le dernier mois réel = mois juste avant la première projection
   const lastRealMonthIdx = firstProjectedMonthIdx != null ? firstProjectedMonthIdx - 1 : null;
 
+  // Trouver le dernier mois ayant des données MCT réelles (pour jonction scénario)
+  const lastMctRealMonth = data.reduce((last, d, i) => d.effectif_apres_mct != null ? i + 1 : last, 0);
+
   const chartData = data.map((d, idx) => {
     if (!showScenario || !selectedProjection) return d;
     const monthIndex = idx + 1;
+
+    // Sur le dernier mois avec données MCT réelles, ajouter le point de jonction scenario_apres_mct
+    if (monthIndex === lastMctRealMonth && lastMctRealMonth < (lastRealMonthIdx ?? 0)) {
+      return {
+        ...d,
+        scenario_apres_mct: d.effectif_apres_mct,
+      };
+    }
 
     // Sur le dernier mois réel, ajouter les valeurs scénario = valeurs réelles
     // pour que les pointillés démarrent depuis ce point
@@ -111,7 +122,7 @@ export function HeadcountEvolutionChart({
         scenario_brut: d.effectif_brut,
         scenario_net: d.effectif_net,
         scenario_reel: d.effectif_reel,
-        scenario_apres_mct: d.effectif_apres_mct ?? d.effectif_reel,
+        scenario_apres_mct: d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
       };
     }
 
@@ -124,6 +135,7 @@ export function HeadcountEvolutionChart({
       effectif_net: undefined,
       effectif_reel: undefined,
       effectif_apres_mct: undefined,
+      projected_apres_mct: undefined,
       effectif_apres_injustifiees: undefined,
       scenario_brut: monthData.scenario_brut,
       scenario_net: monthData.scenario_net,
@@ -324,7 +336,7 @@ export function HeadcountEvolutionChart({
                 strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
                 dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
                 activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined}
-                connectNulls={false}
+                connectNulls={s.dashed === true}
               />
             ))}
 

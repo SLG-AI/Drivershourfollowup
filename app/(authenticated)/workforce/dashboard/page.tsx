@@ -520,11 +520,36 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       const scDetail = scenarioDetailsAll.find((s) => s.id === sc.id);
       const turnoverRate = Number(scDetail?.projected_turnover_rate ?? 0);
 
-      // Use global rates (centre_cout IS NULL) for scenario overlay
+      // Build per-month absenteeism rate: weighted average across cost centers
+      // Global rates (centre_cout IS NULL) as fallback
+      const globalRateByMonth = new Map<number, number>();
+      const ccRateByMonthCc = new Map<string, number>();
+      scParams.forEach((p) => {
+        const mois = Number(p.mois);
+        const rate = Number(p.projected_absenteeism_rate);
+        if (!p.centre_cout) {
+          globalRateByMonth.set(mois, rate);
+        } else {
+          ccRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
+        }
+      });
+      // Compute weighted average rate per month using active employees
       const absRateByMonth = new Map<number, number>();
-      scParams
-        .filter((p) => !p.centre_cout)
-        .forEach((p) => absRateByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate)));
+      for (let m = 1; m <= 12; m++) {
+        const monthEnd = lastDayOfMonth(selectedYear, m);
+        const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !e.est_sortie_temporaire);
+        const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
+        if (totalEtp > 0 && ccRateByMonthCc.size > 0) {
+          const weightedRate = activeAtM.reduce((sum, e) => {
+            const ccKey = `${m}:${e.centre_cout}`;
+            const rate = ccRateByMonthCc.get(ccKey) ?? globalRateByMonth.get(m) ?? 5;
+            return sum + getEtp(e) * rate;
+          }, 0);
+          absRateByMonth.set(m, weightedRate / totalEtp);
+        } else {
+          absRateByMonth.set(m, globalRateByMonth.get(m) ?? 5);
+        }
+      }
 
       // Build departure counts by month
       const depCountByMonth = new Map<number, number>();
