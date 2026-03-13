@@ -65,7 +65,7 @@ function findCol(headers: string[], ...keywords: string[]): number {
 // Types
 // ============================================================
 
-export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns" | "absences_mct";
+export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns" | "absences_mct" | "absences_injustifiees";
 
 export interface WpParseResult {
   fileType: WpFileType;
@@ -618,6 +618,165 @@ export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
 }
 
 // ============================================================
+// 5. Absences Injustifiées parser (CSV)
+// ============================================================
+
+export interface AbsenceInjustifieeRow {
+  code_salarie: string;
+  nom_salarie: string;
+  mois: number;
+  annee: number;
+  date_debut: string | null;
+  date_fin: string | null;
+  duree_hrs: number;
+  complete: boolean;
+}
+
+/** Simple CSV parser that preserves all values as strings (no auto type-detection) */
+function parseCsvText(text: string): string[][] {
+  const rows: string[][] = [];
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const cells: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else if (ch === '"') {
+          inQuotes = false;
+        } else {
+          current += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === ",") {
+          cells.push(current);
+          current = "";
+        } else {
+          current += ch;
+        }
+      }
+    }
+    cells.push(current);
+    rows.push(cells);
+  }
+  return rows;
+}
+
+const MONTH_NAME_TO_NUM: Record<string, number> = {
+  janvier: 1, fevrier: 2, mars: 3, avril: 4, mai: 5, juin: 6,
+  juillet: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12,
+};
+
+function parseDateDDMMYYYY(val: string): Date | null {
+  if (!val) return null;
+  const parts = val.trim().split(".");
+  if (parts.length !== 3) return null;
+  const day = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const year = parseInt(parts[2], 10);
+  if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+  return new Date(year, month - 1, day);
+}
+
+export function parseAbsencesInjustifiees(buffer: ArrayBuffer): WpParseResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Parse CSV as raw text to prevent XLSX from auto-converting DD.MM.YYYY dates
+  // into serial numbers using US date format (MM.DD.YYYY)
+  let rows: string[][];
+  try {
+    const text = new TextDecoder("utf-8").decode(buffer);
+    rows = parseCsvText(text);
+  } catch {
+    return { fileType: "absences_injustifiees", data: [], rowCount: 0, errors: ["Impossible de lire le fichier CSV."], warnings };
+  }
+
+  const header = findHeaderRow(rows, ["code salarie", "nombre", "heure"]);
+  if (!header) {
+    return { fileType: "absences_injustifiees", data: [], rowCount: 0, errors: ["En-têtes non détectés. Colonnes 'Code Salarié', 'Nombre d'Heures' requises."], warnings };
+  }
+
+  const h = header.headers;
+  const colCode = findCol(h, "code", "salarie");
+  const colNom = findCol(h, "nom");
+  const colMois = findCol(h, "mois");
+  const colDebut = findCol(h, "debut");
+  const colFin = findCol(h, "fin");
+  const colHeures = findCol(h, "nombre", "heure");
+  const colComplete = findCol(h, "complete");
+
+  if (colCode === -1) {
+    return { fileType: "absences_injustifiees", data: [], rowCount: 0, errors: ["Colonne 'Code Salarié' non trouvée."], warnings };
+  }
+  if (colHeures === -1) {
+    return { fileType: "absences_injustifiees", data: [], rowCount: 0, errors: ["Colonne 'Nombre d'Heures d'Absence' non trouvée."], warnings };
+  }
+
+  const data: AbsenceInjustifieeRow[] = [];
+
+  for (let i = header.index + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0) continue;
+
+    const codeSalarie = (row[colCode] || "").trim();
+    if (!codeSalarie) continue;
+
+    const dureeHrs = parseNumeric(row[colHeures]);
+    if (dureeHrs <= 0) continue;
+
+    const dateDebut = colDebut >= 0 ? parseDateDDMMYYYY(row[colDebut] || "") : null;
+    const dateFin = colFin >= 0 ? parseDateDDMMYYYY(row[colFin] || "") : null;
+
+    // Extract month/year from date_debut; fallback to text month column
+    let mois = dateDebut ? dateDebut.getMonth() + 1 : 0;
+    let annee = dateDebut ? dateDebut.getFullYear() : 0;
+
+    if ((!mois || !annee) && colMois >= 0) {
+      const moisText = normalizeText(row[colMois] || "");
+      const monthNum = MONTH_NAME_TO_NUM[moisText];
+      if (monthNum) mois = monthNum;
+    }
+
+    if (!mois || !annee) continue;
+
+    const completeVal = colComplete >= 0 ? normalizeText(row[colComplete] || "") : "vrai";
+    const complete = completeVal === "vrai" || completeVal === "true" || completeVal === "1";
+
+    data.push({
+      code_salarie: codeSalarie,
+      nom_salarie: colNom >= 0 ? (row[colNom] || "") : "",
+      mois,
+      annee,
+      date_debut: dateDebut ? dateToISO(dateDebut) : null,
+      date_fin: dateFin ? dateToISO(dateFin) : null,
+      duree_hrs: dureeHrs,
+      complete,
+    });
+  }
+
+  if (data.length === 0) {
+    errors.push("Aucune donnée d'absence injustifiée trouvée.");
+  } else {
+    warnings.push(`${data.length} absences injustifiées retenues.`);
+  }
+
+  const yearSet = new Set(data.map((d) => d.annee).filter((y) => y > 0));
+  const monthSet = new Set(data.map((d) => d.mois).filter((m) => m > 0));
+  const detectedYear = yearSet.size === 1 ? [...yearSet][0] : undefined;
+  const detectedMonth = monthSet.size === 1 ? [...monthSet][0] : undefined;
+
+  return { fileType: "absences_injustifiees", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, detectedMonth, detectedYear };
+}
+
+// ============================================================
 // Auto-detect file type
 // ============================================================
 
@@ -643,6 +802,9 @@ export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
   if (allText.includes("statistiques rapides") || allText.includes("hrs base decsal") || allText.includes("etat du salaire")) {
     return "salary_stats";
   }
+  if (allText.includes("injustifi") || (allText.includes("complete") && allText.includes("nombre") && allText.includes("heure"))) {
+    return "absences_injustifiees";
+  }
   if (allText.includes("motif absence") || allText.includes("avec justificatif") || allText.includes("a charge cns")) {
     return "absences_mct";
   }
@@ -666,5 +828,7 @@ export function parseWpFile(buffer: ArrayBuffer, fileType: WpFileType): WpParseR
       return parseAbsencesCNS(buffer);
     case "absences_mct":
       return parseAbsencesMCT(buffer);
+    case "absences_injustifiees":
+      return parseAbsencesInjustifiees(buffer);
   }
 }

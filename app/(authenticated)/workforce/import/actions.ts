@@ -52,6 +52,9 @@ export async function importWpData(input: WpImportInput) {
       case "absences_mct":
         await importAbsencesMCT(supabase, input.data, importId, input.mois, input.annee || new Date().getFullYear());
         break;
+      case "absences_injustifiees":
+        await importAbsencesInjustifiees(supabase, input.data, importId);
+        break;
     }
 
     // Update import status
@@ -179,6 +182,27 @@ async function importAbsencesMCT(supabase: any, data: Record<string, unknown>[],
 
     const { error } = await supabase.from("wp_absences_mct").insert(batch);
     if (error) throw new Error(`Erreur insertion absences MCT (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function importAbsencesInjustifiees(supabase: any, data: Record<string, unknown>[], importId: string) {
+  if (data.length === 0) return;
+
+  // Delete all existing data (full replace — multi-year file)
+  await supabase
+    .from("wp_absences_injustifiees")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+
+  for (let i = 0; i < data.length; i += 200) {
+    const batch = data.slice(i, i + 200).map((row) => ({
+      ...row,
+      import_id: importId,
+    }));
+
+    const { error } = await supabase.from("wp_absences_injustifiees").insert(batch);
+    if (error) throw new Error(`Erreur insertion absences injustifiées (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
 }
 

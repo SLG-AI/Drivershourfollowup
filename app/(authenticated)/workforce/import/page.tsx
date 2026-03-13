@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, FileSpreadsheet, Users, Activity, CheckCircle2, AlertCircle, Clock } from "lucide-react";
+import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
 
 const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: typeof Users; example: string }[] = [
@@ -42,6 +42,13 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
     description: "Maladies court terme non prises en charge CNS.",
     icon: Activity,
     example: "ExportRechercheAbsences_*.xlsx",
+  },
+  {
+    id: "absences_injustifiees",
+    label: "Absences injustifiées",
+    description: "Absences injustifiées (complètes et incomplètes).",
+    icon: AlertTriangle,
+    example: "Absences injustifiées.csv",
   },
 ];
 
@@ -77,8 +84,8 @@ export default function WorkforceImportPage() {
 
   const handleFile = useCallback(
     async (file: File, forceType?: WpFileType) => {
-      if (!file.name.match(/\.xlsx?$/i) && !file.name.endsWith(".xlsb")) {
-        toast.error("Veuillez sélectionner un fichier Excel (.xlsx)");
+      if (!file.name.match(/\.xlsx?$/i) && !file.name.endsWith(".xlsb") && !file.name.endsWith(".csv")) {
+        toast.error("Veuillez sélectionner un fichier Excel (.xlsx) ou CSV (.csv)");
         return;
       }
 
@@ -178,7 +185,7 @@ export default function WorkforceImportPage() {
 
       {/* Stage: File type selection + upload */}
       {stage === "select" && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {FILE_TYPES.map((ft) => (
             <Card
               key={ft.id}
@@ -209,7 +216,7 @@ export default function WorkforceImportPage() {
                       Sélectionner
                       <input
                         type="file"
-                        accept=".xlsx,.xls,.xlsb"
+                        accept=".xlsx,.xls,.xlsb,.csv"
                         className="hidden"
                         onChange={(e) => {
                           const file = e.target.files?.[0];

@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, UserMinus, TrendingDown, Activity, Target } from "lucide-react";
+import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3 } from "lucide-react";
 
 export interface WpDashboardStats {
   effectif_brut: number;
@@ -10,6 +10,8 @@ export interface WpDashboardStats {
   cam_count: number;
   headcount: number;
   taux_absenteisme: number;
+  taux_mct: number;
+  taux_injustifiees: number;
   etp_total: number;
   departs_prevus: number;
   sorties_temporaires: number;
@@ -40,20 +42,44 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       iconBg: "bg-blue-50",
     },
     {
-      title: "Effectif net après sorties temporaires (ETP)",
+      title: "Effectif après suspension de contrat (ETP)",
       value: stats.effectif_net,
-      description: `${stats.sorties_temporaires} ETP en sortie(s) temporaire(s)`,
+      description: `${stats.sorties_temporaires} ETP en suspension(s) de contrat`,
       icon: UserMinus,
       iconColor: "text-indigo-600",
       iconBg: "bg-indigo-50",
     },
     {
-      title: "Taux d'absentéisme",
+      title: "Taux de couverture CNS",
       value: `${stats.taux_absenteisme.toFixed(1)}%`,
       description: "(effectif net - effectif réel) / effectif net",
       icon: Activity,
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
       iconBg: stats.taux_absenteisme > 8 ? "bg-red-50" : stats.taux_absenteisme > 5 ? "bg-amber-50" : "bg-emerald-50",
+    },
+    {
+      title: "Taux de maladies non prises en charge",
+      value: `${stats.taux_mct.toFixed(1)}%`,
+      description: "heures MCT / heures travaillables ajustées",
+      icon: Thermometer,
+      iconColor: stats.taux_mct > 8 ? "text-red-600" : stats.taux_mct > 5 ? "text-amber-600" : "text-emerald-600",
+      iconBg: stats.taux_mct > 8 ? "bg-red-50" : stats.taux_mct > 5 ? "bg-amber-50" : "bg-emerald-50",
+    },
+    {
+      title: "Taux absences injustifiées",
+      value: `${stats.taux_injustifiees.toFixed(1)}%`,
+      description: "heures injustifiées / heures travaillables ajustées",
+      icon: AlertTriangle,
+      iconColor: stats.taux_injustifiees > 5 ? "text-red-600" : stats.taux_injustifiees > 2 ? "text-amber-600" : "text-yellow-600",
+      iconBg: stats.taux_injustifiees > 5 ? "bg-red-50" : stats.taux_injustifiees > 2 ? "bg-amber-50" : "bg-yellow-50",
+    },
+    {
+      title: "Taux d'absentéisme global",
+      value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
+      description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
+      icon: BarChart3,
+      iconColor: (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 15 ? "text-red-600" : (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 10 ? "text-amber-600" : "text-emerald-600",
+      iconBg: (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 15 ? "bg-red-50" : (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 10 ? "bg-amber-50" : "bg-emerald-50",
     },
     {
       title: "Départs prévisibles",

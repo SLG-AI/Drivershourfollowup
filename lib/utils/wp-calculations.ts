@@ -154,24 +154,13 @@ export interface ProjectionMonth {
 // Arrival hypothesis helpers
 // ============================================================
 
-function isMonthInRange(
-  month: number, year: number,
-  startMonth: number, startYear: number,
-  endMonth: number | null, endYear: number | null
-): boolean {
-  const val = year * 12 + month;
-  const start = startYear * 12 + startMonth;
-  const end = endMonth && endYear ? endYear * 12 + endMonth : start;
-  return val >= start && val <= end;
-}
-
 export function getArrivalsForMonth(
   hypotheses: ArrivalHypothesis[],
   month: number,
   year: number
 ): number {
   return hypotheses
-    .filter((h) => isMonthInRange(month, year, h.start_month, h.start_year, h.end_month, h.end_year))
+    .filter((h) => h.start_month === month && h.start_year === year)
     .reduce((sum, h) => sum + h.nb_personnes, 0);
 }
 
@@ -183,10 +172,13 @@ export function getCddDeparturesForMonth(
   return hypotheses
     .filter((h) => {
       if (h.type_contrat !== "CDD") return false;
-      // CDD auto-depart at end of period
+      // CDD auto-depart the month AFTER end of contract
+      // (end_month is the last month the CDD is active)
       const endMonth = h.end_month ?? h.start_month;
       const endYear = h.end_year ?? h.start_year;
-      return endMonth === month && endYear === year;
+      const departMonth = endMonth === 12 ? 1 : endMonth + 1;
+      const departYear = endMonth === 12 ? endYear + 1 : endYear;
+      return departMonth === month && departYear === year;
     })
     .reduce((sum, h) => sum + h.nb_personnes, 0);
 }

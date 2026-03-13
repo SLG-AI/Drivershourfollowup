@@ -22,6 +22,7 @@ export interface HeadcountDataPoint {
   effectif_net: number;
   effectif_reel?: number;
   effectif_apres_mct?: number;
+  effectif_apres_injustifiees?: number;
   is_projection: boolean;
   target?: number;
   scenario_brut?: number;
@@ -44,6 +45,26 @@ export interface ScenarioProjectionData {
     scenario_reel: number;
   }[];
 }
+
+interface SeriesDef {
+  key: string;
+  label: string;
+  color: string;
+  dashed?: boolean;
+  isScenario?: boolean;
+}
+
+const ALL_SERIES: SeriesDef[] = [
+  { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)" },
+  { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)" },
+  { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)" },
+  { key: "effectif_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)" },
+  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées", color: "hsl(45, 93%, 47%)" },
+  { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
+  { key: "scenario_brut", label: "Scénario — sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
+  { key: "scenario_net", label: "Scénario — net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
+  { key: "scenario_reel", label: "Scénario — réel", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
+];
 
 interface Props {
   data: HeadcountDataPoint[];
@@ -75,6 +96,7 @@ export function HeadcountEvolutionChart({
       scenario_reel: monthData.scenario_reel,
     };
   });
+
   if (data.length === 0) {
     return (
       <Card>
@@ -90,36 +112,57 @@ export function HeadcountEvolutionChart({
     );
   }
 
+  // Determine which series have data
+  const hasData: Record<string, boolean> = {
+    effectif_brut: true,
+    effectif_net: true,
+    effectif_reel: chartData.some((d) => d.effectif_reel != null),
+    effectif_apres_mct: chartData.some((d) => d.effectif_apres_mct != null),
+    effectif_apres_injustifiees: chartData.some((d) => d.effectif_apres_injustifiees != null),
+    target: chartData.some((d) => d.target != null),
+    scenario_brut: showScenario && chartData.some((d) => d.scenario_brut != null),
+    scenario_net: showScenario && chartData.some((d) => d.scenario_net != null),
+    scenario_reel: showScenario && chartData.some((d) => d.scenario_reel != null),
+  };
+
+  const availableSeries = ALL_SERIES.filter((s) => hasData[s.key]);
+
+  // Visibility state — all visible by default
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+
+  const toggleSeries = (key: string) => {
+    setHiddenSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const visibleSeries = availableSeries.filter((s) => !hiddenSeries.has(s.key));
+
   // Find the boundary between real and projected data
   const projectionStartIndex = chartData.findIndex((d) => d.is_projection);
-  const hasTarget = chartData.some((d) => d.target != null);
-  const hasScenarioData = showScenario && chartData.some((d) => d.scenario_brut != null);
 
-  // Auto-scale Y axis: find min/max across all series with some padding
-  const hasEffectifReel = chartData.some((d) => d.effectif_reel != null);
-  const hasEffectifApresMct = chartData.some((d) => d.effectif_apres_mct != null);
-
-  const allValues = chartData.flatMap((d) => [
-    d.effectif_brut,
-    d.effectif_net,
-    ...(d.effectif_reel != null ? [d.effectif_reel] : []),
-    ...(d.effectif_apres_mct != null ? [d.effectif_apres_mct] : []),
-    ...(d.target != null ? [d.target] : []),
-    ...(d.scenario_brut != null ? [d.scenario_brut] : []),
-    ...(d.scenario_net != null ? [d.scenario_net] : []),
-    ...(d.scenario_reel != null ? [d.scenario_reel] : []),
-  ]);
-  const dataMin = Math.min(...allValues);
-  const dataMax = Math.max(...allValues);
+  // Auto-scale Y axis based on visible series only
+  const allValues = chartData.flatMap((d) =>
+    visibleSeries.map((s) => (d as Record<string, unknown>)[s.key] as number | undefined).filter((v): v is number => v != null)
+  );
+  const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0;
+  const dataMax = allValues.length > 0 ? Math.max(...allValues) : 100;
   const range = dataMax - dataMin || 1;
   const padding = Math.max(range * 0.15, 5);
   const yMin = Math.max(0, Math.floor((dataMin - padding) / 10) * 10);
   const yMax = Math.ceil((dataMax + padding) / 10) * 10;
 
+  // Tooltip labels
+  const labelMap: Record<string, string> = {};
+  ALL_SERIES.forEach((s) => { labelMap[s.key] = s.label; });
+
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <CardTitle className="text-base">{title}</CardTitle>
           {scenarios.length > 0 && (
             <div className="flex items-center gap-2">
@@ -140,6 +183,35 @@ export function HeadcountEvolutionChart({
               </Select>
             </div>
           )}
+        </div>
+
+        {/* Series toggles */}
+        <div className="flex flex-wrap gap-2 pt-2">
+          {availableSeries.map((s) => {
+            const active = !hiddenSeries.has(s.key);
+            return (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => toggleSeries(s.key)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                  active
+                    ? "border-transparent text-white"
+                    : "border-border bg-muted/40 text-muted-foreground"
+                }`}
+                style={active ? { backgroundColor: s.color } : undefined}
+              >
+                <span
+                  className="inline-block h-2 w-4 rounded-sm"
+                  style={{
+                    backgroundColor: active ? "rgba(255,255,255,0.6)" : s.color,
+                    borderBottom: s.dashed ? `2px dashed ${active ? "rgba(255,255,255,0.8)" : s.color}` : undefined,
+                  }}
+                />
+                {s.label}
+              </button>
+            );
+          })}
         </div>
       </CardHeader>
       <CardContent>
@@ -164,120 +236,33 @@ export function HeadcountEvolutionChart({
               }}
               itemSorter={(item) => {
                 const order: Record<string, number> = {
-                  effectif_brut: 0,
-                  effectif_net: 1,
-                  effectif_reel: 2,
-                  effectif_apres_mct: 3,
-                  target: 4,
-                  scenario_brut: 5,
-                  scenario_net: 6,
-                  scenario_reel: 7,
+                  effectif_brut: 0, effectif_net: 1, effectif_reel: 2,
+                  effectif_apres_mct: 3, effectif_apres_injustifiees: 4, target: 5,
+                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8,
                 };
                 return order[String(item.dataKey)] ?? 99;
               }}
-              formatter={(value, name) => {
-                const labels: Record<string, string> = {
-                  effectif_brut: "Effectif sous contrat",
-                  effectif_net: "Effectif net",
-                  effectif_reel: "Effectif réel (après maladie)",
-                  effectif_apres_mct: "Effectif après MCT",
-                  target: "Cible",
-                  scenario_brut: "Scénario — sous contrat",
-                  scenario_net: "Scénario — net",
-                  scenario_reel: "Scénario — réel",
-                };
-                return [value ?? 0, labels[String(name)] || String(name)];
-              }}
+              formatter={(value, name) => [value ?? 0, labelMap[String(name)] || String(name)]}
             />
             <Legend
-              formatter={(value: string) => {
-                const labels: Record<string, string> = {
-                  effectif_brut: "Effectif sous contrat",
-                  effectif_net: "Effectif net",
-                  effectif_reel: "Effectif réel (après maladie)",
-                  effectif_apres_mct: "Effectif après MCT",
-                  target: "Cible",
-                  scenario_brut: "Scénario — sous contrat",
-                  scenario_net: "Scénario — net",
-                  scenario_reel: "Scénario — réel",
-                };
-                return labels[value] || value;
-              }}
+              content={() => null}
             />
-            <Line
-              type="monotone"
-              dataKey="effectif_brut"
-              stroke="hsl(221, 83%, 53%)"
-              strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="effectif_net"
-              stroke="hsl(262, 83%, 58%)"
-              strokeWidth={2}
-              dot={{ r: 3 }}
-            />
-            {hasEffectifReel && (
+
+            {/* Render only visible series */}
+            {visibleSeries.map((s) => (
               <Line
+                key={s.key}
                 type="monotone"
-                dataKey="effectif_reel"
-                stroke="hsl(142, 71%, 45%)"
+                dataKey={s.key}
+                stroke={s.color}
                 strokeWidth={2}
-                dot={{ r: 3 }}
+                strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
+                dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
+                activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined}
+                connectNulls={false}
               />
-            )}
-            {hasEffectifApresMct && (
-              <Line
-                type="monotone"
-                dataKey="effectif_apres_mct"
-                stroke="hsl(330, 70%, 55%)"
-                strokeWidth={2}
-                dot={{ r: 3 }}
-              />
-            )}
-            {hasTarget && (
-              <Line
-                type="monotone"
-                dataKey="target"
-                stroke="hsl(0, 84%, 60%)"
-                strokeWidth={2}
-                strokeDasharray="8 4"
-                dot={false}
-              />
-            )}
-            {hasScenarioData && (
-              <>
-                <Line
-                  type="monotone"
-                  dataKey="scenario_brut"
-                  stroke="hsl(221, 83%, 53%)"
-                  strokeWidth={2}
-                  strokeDasharray="6 3"
-                  dot={{ r: 2 }}
-                  connectNulls={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="scenario_net"
-                  stroke="hsl(262, 83%, 58%)"
-                  strokeWidth={2}
-                  strokeDasharray="6 3"
-                  dot={{ r: 2 }}
-                  connectNulls={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="scenario_reel"
-                  stroke="hsl(142, 71%, 45%)"
-                  strokeWidth={2}
-                  strokeDasharray="6 3"
-                  dot={{ r: 2 }}
-                  connectNulls={false}
-                />
-              </>
-            )}
+            ))}
+
             {projectionStartIndex > 0 && (
               <ReferenceLine
                 x={data[projectionStartIndex].month}
