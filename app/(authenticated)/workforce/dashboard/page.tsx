@@ -557,10 +557,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         }
       }
 
-      // Build departure counts by month
+      // Build departure counts by month (exclude temporary exits — they stay "sous contrat")
       const depCountByMonth = new Map<number, number>();
       scDepartures
-        .filter((d) => Number(d.departure_year) === selectedYear)
+        .filter((d) => Number(d.departure_year) === selectedYear && !String(d.departure_type || "").startsWith("temp_exit"))
         .forEach((d) => {
           const m = Number(d.departure_month);
           depCountByMonth.set(m, (depCountByMonth.get(m) || 0) + 1);
@@ -595,12 +595,28 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         // Known departures
         const knownDeps = depCountByMonth.get(m) || 0;
 
-        // Data-based departures (employees with date_sortie in this month)
+        // Data-based departures in ETP (employees with date_sortie in this month)
+        // Exclude temporary exits — they stay "sous contrat"
+        // If date_sortie is the last day of its month, effective departure is next month
         const dataExits = allEmployees.filter((e) => {
-          if (!e.date_sortie) return false;
+          if (!e.date_sortie || e.est_sortie_temporaire) return false;
           const d = new Date(e.date_sortie);
+          let depMonth = d.getMonth() + 1;
+          let depYear = d.getFullYear();
+          const ldm = lastDayOfMonth(depYear, depMonth);
+          if (e.date_sortie === ldm) {
+            depMonth += 1;
+            if (depMonth > 12) { depMonth = 1; depYear += 1; }
+          }
+          return depMonth === m && depYear === selectedYear;
+        }).reduce((sum, e) => sum + getEtp(e), 0);
+
+        // Arrivals from data (employees with date_entree in this month)
+        const dataArrivals = allEmployees.filter((e) => {
+          if (!e.date_entree) return false;
+          const d = new Date(e.date_entree);
           return d.getMonth() + 1 === m && d.getFullYear() === selectedYear;
-        }).length;
+        }).reduce((sum, e) => sum + getEtp(e), 0);
 
         // Arrivals from hypotheses
         const arrivals = getArrivalsForMonth(scArrivals, m, selectedYear);
@@ -611,9 +627,16 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         const returns = returnCountByMonth.get(m) || 0;
 
         const totalDepartures = Math.max(knownDeps, dataExits) + turnoverLosses + cddDepartures;
+        const totalArrivals = arrivals + dataArrivals;
 
-        runningBrut = Math.max(0, runningBrut - totalDepartures + arrivals + returns);
-        runningTempExitsEtp = Math.max(0, runningTempExitsEtp - returns);
+        runningBrut = Math.max(0, runningBrut - totalDepartures + totalArrivals + returns);
+
+        // Calculate temp exits ETP directly from employee data for this month
+        const monthEnd = lastDayOfMonth(selectedYear, m);
+        const activeAtMonth = getActiveEmployeesAt(monthEnd);
+        runningTempExitsEtp = activeAtMonth
+          .filter((e) => isTempExitAt(e, monthEnd))
+          .reduce((sum, e) => sum + getEtp(e), 0);
 
         const scenarioNet = runningBrut - runningTempExitsEtp;
 

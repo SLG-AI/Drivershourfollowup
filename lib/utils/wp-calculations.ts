@@ -329,9 +329,9 @@ export function projectHeadcount(
         runningBrut = employees.filter((e) => !e.date_sortie || e.date_sortie >= monthEnd).length;
       }
 
-      // Known departures this month
+      // Known departures this month (exclude temporary exits — they stay "sous contrat")
       const knownDeps = departuresByMonth.get(m) || [];
-      const knownDepartureCount = knownDeps.length;
+      const knownDepartureCount = knownDeps.filter((d) => !d.departure_type.startsWith("temp_exit")).length;
 
       // Turnover: monthly rate from annual rate
       const monthlyTurnoverRate = scenario.turnover_rate / 100 / 12;
@@ -348,9 +348,10 @@ export function projectHeadcount(
       const returnCount = returns.length;
 
       // Also count known departures from data (employees with date_sortie in this month)
+      // Exclude temporary exits — they stay "sous contrat"
       // If date_sortie is the last day of its month, effective departure is next month
       const dataExits = employees.filter((e) => {
-        if (!e.date_sortie) return false;
+        if (!e.date_sortie || e.est_sortie_temporaire) return false;
         const d = new Date(e.date_sortie);
         let depMonth = d.getMonth() + 1;
         let depYear = d.getFullYear();
