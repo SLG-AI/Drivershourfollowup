@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ComboboxFreeText } from "@/components/ui/combobox-free-text";
-import { Plus, Pencil, Trash2, Users } from "lucide-react";
+import { Plus, Pencil, Trash2, Users, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { addArrivalHypothesis, updateArrivalHypothesis, deleteArrivalHypothesis } from "../actions";
 import type { ArrivalHypothesis } from "@/lib/utils/wp-calculations";
@@ -89,6 +89,26 @@ export function ArrivalHypothesesTab({ scenarioId, hypotheses: initialHypotheses
 
   const openEdit = useCallback((h: ArrivalHypothesis) => {
     setEditingId(h.id);
+    setForm({
+      nb_personnes: h.nb_personnes,
+      taux_occupation: h.taux_occupation,
+      fonction: h.fonction,
+      centre_cout: h.centre_cout,
+      depot: h.depot,
+      type_contrat: h.type_contrat,
+      vehicle_type: h.vehicle_type,
+      start_day: h.start_day,
+      start_month: h.start_month,
+      start_year: h.start_year,
+      end_day: h.end_day,
+      end_month: h.end_month,
+      end_year: h.end_year,
+    });
+    setDialogOpen(true);
+  }, []);
+
+  const openDuplicate = useCallback((h: ArrivalHypothesis) => {
+    setEditingId(null);
     setForm({
       nb_personnes: h.nb_personnes,
       taux_occupation: h.taux_occupation,
@@ -219,7 +239,10 @@ export function ArrivalHypothesesTab({ scenarioId, hypotheses: initialHypotheses
                           <TableCell className="text-sm">{period}</TableCell>
                           <TableCell>
                             <div className="flex gap-1">
-                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(h)}>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openDuplicate(h)} title="Dupliquer">
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(h)} title="Modifier">
                                 <Pencil className="h-3 w-3" />
                               </Button>
                               <Button
@@ -228,6 +251,7 @@ export function ArrivalHypothesesTab({ scenarioId, hypotheses: initialHypotheses
                                 className="h-7 w-7 text-destructive"
                                 onClick={() => handleDelete(h.id)}
                                 disabled={deletingId === h.id}
+                                title="Supprimer"
                               >
                                 <Trash2 className="h-3 w-3" />
                               </Button>

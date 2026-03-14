@@ -137,7 +137,7 @@ export async function updateScenario(id: string, input: CreateScenarioInput) {
     if (tpError) throw new Error("Erreur paramètres turnover mensuels: " + tpError.message);
   }
 
-  revalidatePath(`/workforce/scenarios/${id}`);
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -152,7 +152,7 @@ export async function deleteScenario(id: string) {
     .eq("id", id);
 
   if (error) throw new Error("Erreur suppression scénario: " + error.message);
-  revalidatePath("/workforce/scenarios");
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -234,7 +234,7 @@ export async function duplicateScenario(sourceId: string) {
     );
   }
 
-  revalidatePath("/workforce/scenarios");
+  revalidatePath("/", "layout");
   return { id: newId };
 }
 
@@ -297,7 +297,7 @@ export async function addArrivalHypothesis(scenarioId: string, data: {
     .single();
 
   if (error) throw new Error("Erreur ajout hypothèse: " + error.message);
-  revalidatePath(`/workforce/scenarios/${scenarioId}`);
+  revalidatePath("/", "layout");
   return result;
 }
 
@@ -326,7 +326,7 @@ export async function updateArrivalHypothesis(id: string, data: {
     .eq("id", id);
 
   if (error) throw new Error("Erreur mise à jour hypothèse: " + error.message);
-  revalidatePath("/workforce/scenarios", "layout");
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -335,13 +335,39 @@ export async function deleteArrivalHypothesis(id: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Non authentifié");
 
-  const { error } = await supabase
+  // Check row exists and is accessible
+  const { data: before } = await supabase
+    .from("wp_scenario_arrival_hypotheses")
+    .select("id, scenario_id")
+    .eq("id", id)
+    .single();
+
+  console.log("[DELETE arrival] user:", user.id, "target id:", id, "found:", !!before, "scenario_id:", before?.scenario_id);
+
+  if (!before) throw new Error("Hypothèse introuvable ou accès refusé");
+
+  const { error, count } = await supabase
     .from("wp_scenario_arrival_hypotheses")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .select();
+
+  console.log("[DELETE arrival] error:", error, "count:", count);
 
   if (error) throw new Error("Erreur suppression hypothèse: " + error.message);
-  revalidatePath("/workforce/scenarios", "layout");
+
+  // Verify deletion
+  const { data: after } = await supabase
+    .from("wp_scenario_arrival_hypotheses")
+    .select("id")
+    .eq("id", id)
+    .single();
+
+  console.log("[DELETE arrival] still exists after delete:", !!after);
+
+  if (after) throw new Error("La suppression a échoué silencieusement - la ligne existe toujours");
+
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -375,7 +401,7 @@ export async function addTempExitHypothesis(scenarioId: string, data: {
     .single();
 
   if (error) throw new Error("Erreur ajout sortie temporaire: " + error.message);
-  revalidatePath(`/workforce/scenarios/${scenarioId}`);
+  revalidatePath("/", "layout");
   return result;
 }
 
@@ -404,7 +430,7 @@ export async function updateTempExitHypothesis(id: string, data: {
     .eq("id", id);
 
   if (error) throw new Error("Erreur mise à jour sortie temporaire: " + error.message);
-  revalidatePath("/workforce/scenarios", "layout");
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -419,7 +445,7 @@ export async function deleteTempExitHypothesis(id: string) {
     .eq("id", id);
 
   if (error) throw new Error("Erreur suppression sortie temporaire: " + error.message);
-  revalidatePath("/workforce/scenarios", "layout");
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -470,7 +496,7 @@ export async function addDepartureHypothesis(scenarioId: string, data: {
     .single();
 
   if (error) throw new Error("Erreur ajout hypothèse de départ: " + error.message);
-  revalidatePath(`/workforce/scenarios/${scenarioId}`);
+  revalidatePath("/", "layout");
   return result;
 }
 
@@ -497,7 +523,7 @@ export async function updateDepartureHypothesis(id: string, data: {
     .eq("id", id);
 
   if (error) throw new Error("Erreur mise à jour hypothèse de départ: " + error.message);
-  revalidatePath("/workforce/scenarios", "layout");
+  revalidatePath("/", "layout");
   return { success: true };
 }
 
@@ -512,6 +538,6 @@ export async function deleteDepartureHypothesis(id: string) {
     .eq("id", id);
 
   if (error) throw new Error("Erreur suppression hypothèse de départ: " + error.message);
-  revalidatePath("/workforce/scenarios", "layout");
+  revalidatePath("/", "layout");
   return { success: true };
 }
