@@ -6,7 +6,6 @@ import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth,
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
-import { BreakdownChart, type BreakdownByType, type BreakdownByDepot } from "@/components/workforce/breakdown-chart";
 import { GapAnalysisChart, type GapDataPoint } from "@/components/workforce/gap-analysis-chart";
 import { AbsenteeismTable, type AbsenteeismItem } from "@/components/workforce/absenteeism-table";
 import { MctTable, type MctItem } from "@/components/workforce/mct-table";
@@ -1147,46 +1146,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   ];
 
   // ============================================================
-  // Breakdown by type and depot (at selected month)
-  // ============================================================
-
-  const byType: BreakdownByType[] = [
-    {
-      label: "BUS",
-      actifs: activeEmployees.filter((e) => e.vehicle_type === "BUS" && !isTempExitAt(e, refDate)).length,
-      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "BUS" && isTempExitAt(e, refDate)).length,
-      departs: departsPrevus.filter((e) => e.vehicle_type === "BUS").length,
-    },
-    {
-      label: "CAM",
-      actifs: activeEmployees.filter((e) => e.vehicle_type === "CAM" && !isTempExitAt(e, refDate)).length,
-      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "CAM" && isTempExitAt(e, refDate)).length,
-      departs: departsPrevus.filter((e) => e.vehicle_type === "CAM").length,
-    },
-  ];
-
-  // By depot
-  const depotMap = new Map<string, { bus: number; cam: number }>();
-  activeEmployees.forEach((e) => {
-    const depot = e.description_departement || e.description_service || "Non assigné";
-    if (!depot) return;
-    const existing = depotMap.get(depot) || { bus: 0, cam: 0 };
-    if (e.vehicle_type === "BUS") existing.bus++;
-    else if (e.vehicle_type === "CAM") existing.cam++;
-    depotMap.set(depot, existing);
-  });
-
-  const byDepot: BreakdownByDepot[] = [...depotMap.entries()]
-    .map(([depot, counts]) => ({
-      depot: depot.replace("Depots - ", ""),
-      bus: counts.bus,
-      cam: counts.cam,
-      total: counts.bus + counts.cam,
-    }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 10);
-
-  // ============================================================
   // Gap analysis data
   // ============================================================
 
@@ -1260,7 +1219,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         />
       )}
 
-      <BreakdownChart byType={byType} byDepot={byDepot} />
     </div>
   );
 }

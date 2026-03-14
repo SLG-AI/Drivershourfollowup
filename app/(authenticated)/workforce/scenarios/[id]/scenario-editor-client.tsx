@@ -402,39 +402,6 @@ export function ScenarioEditorClient({
         </Button>
       </div>
 
-      {/* Projection chart */}
-      <HeadcountEvolutionChart data={chartData} title={`Projection ${selectedYear} — ${name}`} />
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">Effectif fin d&apos;année</p>
-            <p className="text-xl font-bold">{lastMonth?.effectif_brut || "-"}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">Départs projetés</p>
-            <p className="text-xl font-bold text-red-600">{projectedDepartures}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">Arrivées prévues</p>
-            <p className="text-xl font-bold text-emerald-600">{projectedArrivals}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">Gap vs cible</p>
-            <p className={`text-xl font-bold ${targetTotal ? (lastMonth && lastMonth.effectif_net >= targetTotal ? "text-emerald-600" : "text-red-600") : ""}`}>
-              {targetTotal && lastMonth ? lastMonth.effectif_net - targetTotal : "-"}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
       {/* Configuration tabs */}
       <Tabs defaultValue="params">
         <TabsList>
