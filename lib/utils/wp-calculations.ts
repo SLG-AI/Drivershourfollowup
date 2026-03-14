@@ -70,6 +70,35 @@ export function getWorkableHoursInMonth(year: number, month: number): number {
 }
 
 // ============================================================
+// Date helpers
+// ============================================================
+
+/** Last calendar day of a given month (1-indexed) as YYYY-MM-DD */
+export function lastDayOfMonth(year: number, month: number): string {
+  const d = new Date(year, month, 0);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Is the employee effectively on temporary exit at the given month-end date?
+ * - Departure on the last day of the month = still active that month (starts next month)
+ * - Return on the last day of the month = still on temp exit that month (active next month)
+ */
+export function isTempExitAt(
+  e: { est_sortie_temporaire: boolean; date_sortie?: string | null; date_fin_sortie_temporaire?: string | null },
+  monthEnd: string,
+): boolean {
+  return (
+    e.est_sortie_temporaire &&
+    (!e.date_sortie || e.date_sortie < monthEnd) &&
+    (!e.date_fin_sortie_temporaire || monthEnd <= e.date_fin_sortie_temporaire)
+  );
+}
+
+// ============================================================
 // Types
 // ============================================================
 
@@ -77,6 +106,8 @@ export interface Employee {
   code_salarie: string;
   date_entree: string | null;
   date_sortie: string | null;
+  date_debut_sortie_temporaire?: string | null;
+  date_fin_sortie_temporaire?: string | null;
   vehicle_type: string | null;
   taux_occupation: number;
   est_sortie_temporaire: boolean;
@@ -228,8 +259,7 @@ export function projectHeadcount(
 
   for (let m = 1; m <= 12; m++) {
     const isProjection = year > currentYear || (year === currentYear && m > currentMonth);
-    const monthDate = `${year}-${String(m).padStart(2, "0")}-28`;
-    const monthStart = `${year}-${String(m).padStart(2, "0")}-01`;
+    const monthEnd = lastDayOfMonth(year, m);
 
     const monthParam = monthParamMap.get(m) || {
       mois: m,
@@ -239,12 +269,16 @@ export function projectHeadcount(
     if (!isProjection) {
       // Real data: count from employee records
       const activeAtMonth = employees.filter((e) => {
-        if (!e.date_entree || e.date_entree > monthDate) return false;
-        if (e.date_sortie && e.date_sortie < monthStart) return false;
+        if (!e.date_entree || e.date_entree > monthEnd) return false;
+        if (e.date_sortie && e.date_sortie < monthEnd) {
+          // Keep if on temporary exit (will return)
+          if (e.est_sortie_temporaire) return true;
+          return false;
+        }
         return true;
       });
 
-      const tempExits = activeAtMonth.filter((e) => e.est_sortie_temporaire).length;
+      const tempExits = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd)).length;
       const brut = activeAtMonth.length;
 
       // Use actual absence data if available
@@ -257,11 +291,18 @@ export function projectHeadcount(
       const net = brut - absentCount;
 
       // Count departures this month (from real data)
+      // If date_sortie is the last day of its month, effective departure is next month
       const monthDepartures = employees.filter((e) => {
         if (!e.date_sortie) return false;
-        const exitMonth = new Date(e.date_sortie).getMonth() + 1;
-        const exitYear = new Date(e.date_sortie).getFullYear();
-        return exitMonth === m && exitYear === year;
+        const d = new Date(e.date_sortie);
+        let depMonth = d.getMonth() + 1;
+        let depYear = d.getFullYear();
+        const ldm = lastDayOfMonth(depYear, depMonth);
+        if (e.date_sortie === ldm) {
+          depMonth += 1;
+          if (depMonth > 12) { depMonth = 1; depYear += 1; }
+        }
+        return depMonth === m && depYear === year;
       }).length;
 
       runningBrut = brut;
@@ -285,7 +326,7 @@ export function projectHeadcount(
       }
       if (runningBrut === 0) {
         // Fallback: count current active employees
-        runningBrut = employees.filter((e) => !e.date_sortie || e.date_sortie >= monthStart).length;
+        runningBrut = employees.filter((e) => !e.date_sortie || e.date_sortie >= monthEnd).length;
       }
 
       // Known departures this month
@@ -307,10 +348,18 @@ export function projectHeadcount(
       const returnCount = returns.length;
 
       // Also count known departures from data (employees with date_sortie in this month)
+      // If date_sortie is the last day of its month, effective departure is next month
       const dataExits = employees.filter((e) => {
         if (!e.date_sortie) return false;
         const d = new Date(e.date_sortie);
-        return d.getMonth() + 1 === m && d.getFullYear() === year;
+        let depMonth = d.getMonth() + 1;
+        let depYear = d.getFullYear();
+        const ldm = lastDayOfMonth(depYear, depMonth);
+        if (e.date_sortie === ldm) {
+          depMonth += 1;
+          if (depMonth > 12) { depMonth = 1; depYear += 1; }
+        }
+        return depMonth === m && depYear === year;
       }).length;
 
       const totalDepartures = Math.max(knownDepartureCount, dataExits) + turnoverLosses + cddDepartures;
@@ -414,11 +463,19 @@ export function detectKnownDeparturesFromData(
       else if (motif.includes("Congé sans") || motif.includes("accompagnement")) departureType = "temp_exit_other";
       else if (motif.includes("Licenciement") || motif.includes("Demission") || motif.includes("siliation")) departureType = "turnover";
 
+      let depMonth = exitDate.getMonth() + 1;
+      let depYear = exitDate.getFullYear();
+      const ldm = lastDayOfMonth(depYear, depMonth);
+      if (e.date_sortie === ldm) {
+        depMonth += 1;
+        if (depMonth > 12) { depMonth = 1; depYear += 1; }
+      }
+
       return {
         code_salarie: e.code_salarie,
         departure_type: departureType,
-        departure_month: exitDate.getMonth() + 1,
-        departure_year: exitDate.getFullYear(),
+        departure_month: depMonth,
+        departure_year: depYear,
         return_month: null,
         return_year: null,
         vehicle_type: e.vehicle_type,

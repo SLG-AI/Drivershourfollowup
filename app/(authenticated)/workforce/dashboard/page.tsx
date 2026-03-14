@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
+import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, lastDayOfMonth, isTempExitAt, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -21,14 +21,6 @@ const MONTH_LABELS: Record<number, string> = {
   5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août",
   9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre",
 };
-
-function lastDayOfMonth(year: number, month: number): string {
-  const d = new Date(year, month, 0);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
 
 
 interface Props {
@@ -178,6 +170,18 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     }
   });
 
+  // Reclassification inverse : employés avec un motif de congé structurel
+  // mais pas encore flaggés comme sortie temporaire (départs futurs)
+  allEmployees.forEach((e) => {
+    if (
+      !e.est_sortie_temporaire &&
+      e.date_sortie &&
+      CONGES_STRUCTURELS.has(e.description_motif_sortie || "")
+    ) {
+      e.est_sortie_temporaire = true;
+    }
+  });
+
   // ============================================================
   // Helper: employees active at a given date
   // Active = date_entree <= date (or null = unknown start, count them)
@@ -193,9 +197,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       // UNLESS the employee has an active temporary exit (e.g. maternity) that extends beyond
       if (e.date_sortie && e.date_sortie < date) {
         if (isDebug) console.log(`[DEBUG] ${e.code_salarie}: date_sortie=${e.date_sortie} < ${date}, est_sortie_temporaire=${e.est_sortie_temporaire}, date_fin_sortie_temporaire=${e.date_fin_sortie_temporaire}`);
-        if (e.est_sortie_temporaire && e.date_fin_sortie_temporaire && e.date_fin_sortie_temporaire >= date) {
+        if (e.est_sortie_temporaire) {
           if (isDebug) console.log(`[DEBUG] ${e.code_salarie}: RECOVERED ✓`);
-          return true; // Still active due to ongoing temporary exit (congé maternité, etc.)
+          return true; // Temporary exit — keep in system (will return)
         }
         if (isDebug) console.log(`[DEBUG] ${e.code_salarie}: EXCLUDED ✗`);
         return false;
@@ -222,7 +226,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const camEtp = activeEmployees.filter((e) => e.vehicle_type === "CAM").reduce((sum, e) => sum + getEtp(e), 0);
 
   // Sorties temporaires in ETP
-  const sortiesTemp = activeEmployees.filter((e) => e.est_sortie_temporaire);
+  const sortiesTemp = activeEmployees.filter((e) => isTempExitAt(e, refDate));
   const sortiesTempEtp = sortiesTemp.reduce((sum, e) => sum + getEtp(e), 0);
   const sortiesTemporairesCount = sortiesTemp.length;
 
@@ -249,7 +253,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // ============================================================
 
   const selectedMonthAbsences = allAbsences.filter((a) => Number(a.mois) === selectedMonth);
-  const nonTempActiveAtRef = activeEmployees.filter((e) => !e.est_sortie_temporaire);
+  const nonTempActiveAtRef = activeEmployees.filter((e) => !isTempExitAt(e, refDate));
   const nonTempCodes = new Set(nonTempActiveAtRef.map((e) => e.code_salarie));
   const empEtpMap = new Map<string, number>();
   const empVehicleMap = new Map<string, string>();
@@ -373,7 +377,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Départs prévisibles: employees with date_sortie after refDate but within the selected year
   const yearEnd = `${selectedYear}-12-31`;
   const departsPrevus = allEmployees.filter(
-    (e) => e.date_sortie && e.date_sortie > refDate && e.date_sortie <= yearEnd
+    (e) => e.date_sortie && e.date_sortie >= refDate && e.date_sortie <= yearEnd
   );
 
   // Gap vs cible
@@ -400,7 +404,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     const activeAtMonth = getActiveEmployeesAt(monthEnd);
 
     const brutEtpAtMonth = activeAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
-    const tempExitsEtp = activeAtMonth.filter((e) => e.est_sortie_temporaire).reduce((sum, e) => sum + getEtp(e), 0);
+    const tempExitsAtMonth = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd));
+    const tempExitsEtp = tempExitsAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
     const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
 
     // Effectif réel après maladie
@@ -414,8 +419,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
     let effectifReel: number;
     if (hasAbsenceData) {
+      const tempExitCodes = new Set(tempExitsAtMonth.map((e) => e.code_salarie));
       const nonTempSet = new Set(
-        activeAtMonth.filter((e) => !e.est_sortie_temporaire).map((e) => e.code_salarie)
+        activeAtMonth.filter((e) => !tempExitCodes.has(e.code_salarie)).map((e) => e.code_salarie)
       );
       const empTauxMap = new Map<string, number>();
       activeAtMonth.forEach((e) => empTauxMap.set(e.code_salarie, getEtp(e)));
@@ -537,7 +543,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       const absRateByMonth = new Map<number, number>();
       for (let m = 1; m <= 12; m++) {
         const monthEnd = lastDayOfMonth(selectedYear, m);
-        const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !e.est_sortie_temporaire);
+        const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
         const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
         if (totalEtp > 0 && ccRateByMonthCc.size > 0) {
           const weightedRate = activeAtM.reduce((sum, e) => {
@@ -740,14 +746,14 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const byType: BreakdownByType[] = [
     {
       label: "BUS",
-      actifs: activeEmployees.filter((e) => e.vehicle_type === "BUS" && !e.est_sortie_temporaire).length,
-      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "BUS" && e.est_sortie_temporaire).length,
+      actifs: activeEmployees.filter((e) => e.vehicle_type === "BUS" && !isTempExitAt(e, refDate)).length,
+      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "BUS" && isTempExitAt(e, refDate)).length,
       departs: departsPrevus.filter((e) => e.vehicle_type === "BUS").length,
     },
     {
       label: "CAM",
-      actifs: activeEmployees.filter((e) => e.vehicle_type === "CAM" && !e.est_sortie_temporaire).length,
-      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "CAM" && e.est_sortie_temporaire).length,
+      actifs: activeEmployees.filter((e) => e.vehicle_type === "CAM" && !isTempExitAt(e, refDate)).length,
+      sorties_temp: activeEmployees.filter((e) => e.vehicle_type === "CAM" && isTempExitAt(e, refDate)).length,
       departs: departsPrevus.filter((e) => e.vehicle_type === "CAM").length,
     },
   ];

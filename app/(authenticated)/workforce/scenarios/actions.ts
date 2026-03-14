@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { lastDayOfMonth } from "@/lib/utils/wp-calculations";
 
 interface MonthlyParamInput {
   mois: number;
@@ -285,12 +286,21 @@ export async function autoPopulateDepartures(scenarioId: string, year: number) {
       else if (motif.toLowerCase().includes("congé sans") || motif.toLowerCase().includes("accompagnement")) departureType = "temp_exit_other";
       else if (motif.toLowerCase().includes("licenciement") || motif.toLowerCase().includes("demission") || motif.toLowerCase().includes("siliation")) departureType = "turnover";
 
+      // If departure is on the last day of the month, effective departure is next month
+      let depMonth = exitDate.getMonth() + 1;
+      let depYear = exitDate.getFullYear();
+      const ldm = lastDayOfMonth(depYear, depMonth);
+      if (e.date_sortie === ldm) {
+        depMonth += 1;
+        if (depMonth > 12) { depMonth = 1; depYear += 1; }
+      }
+
       return {
         scenario_id: scenarioId,
         code_salarie: e.code_salarie,
         departure_type: departureType,
-        departure_month: exitDate.getMonth() + 1,
-        departure_year: exitDate.getFullYear(),
+        departure_month: depMonth,
+        departure_year: depYear,
         return_month: null as number | null,
         return_year: null as number | null,
         vehicle_type: e.vehicle_type,
