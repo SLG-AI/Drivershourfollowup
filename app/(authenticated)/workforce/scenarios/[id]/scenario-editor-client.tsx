@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,12 +11,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
-import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
-import { updateScenario, autoPopulateDepartures } from "../actions";
+import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type MonthlyTurnoverParam, type ArrivalHypothesis, type TempExitHypothesis, type DepartureHypothesis } from "@/lib/utils/wp-calculations";
+import { updateScenario } from "../actions";
 import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
 import { TemporaryExitsTab } from "./temporary-exits-tab";
+import { DepartureHypothesesTab } from "./departure-hypotheses-tab";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
-import { Save, RefreshCw, ArrowLeft, TrendingDown, Calendar, ChevronDown, RotateCcw } from "lucide-react";
+import { Save, ArrowLeft, Calendar, ChevronDown, RotateCcw, Repeat } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -38,18 +38,12 @@ interface DbMonthlyParam {
   centre_cout: string | null;
 }
 
-interface DbDeparture {
+interface DbMonthlyTurnoverParam {
   id: string;
   scenario_id: string;
-  code_salarie: string | null;
-  departure_type: string;
-  departure_month: number;
-  departure_year: number;
-  return_month: number | null;
-  return_year: number | null;
-  vehicle_type: string | null;
-  depot: string | null;
-  is_from_data: boolean;
+  mois: number;
+  projected_turnover_rate: number;
+  centre_cout: string | null;
 }
 
 interface DbScenario {
@@ -62,7 +56,8 @@ interface DbScenario {
 interface Props {
   scenario: DbScenario;
   monthlyParams: DbMonthlyParam[];
-  departures: DbDeparture[];
+  monthlyTurnoverParams: DbMonthlyTurnoverParam[];
+  departureHypotheses: DepartureHypothesis[];
   arrivalHypotheses: ArrivalHypothesis[];
   tempExitHypotheses: TempExitHypothesis[];
   comboboxOptions: ComboboxOptions;
@@ -72,19 +67,11 @@ interface Props {
   targetTotal?: number;
 }
 
-const DEPARTURE_TYPE_LABELS: Record<string, string> = {
-  retirement: "Retraite",
-  end_contract: "Fin de contrat",
-  turnover: "Turnover",
-  temp_exit_parental: "Congé parental",
-  temp_exit_maternity: "Maternité",
-  temp_exit_other: "Sortie temp. autre",
-};
-
 export function ScenarioEditorClient({
   scenario,
   monthlyParams: initialMonthlyParams,
-  departures,
+  monthlyTurnoverParams: initialMonthlyTurnoverParams,
+  departureHypotheses: initialDepartureHypotheses,
   arrivalHypotheses: initialArrivalHypotheses,
   tempExitHypotheses: initialTempExitHypotheses,
   comboboxOptions,
@@ -93,15 +80,12 @@ export function ScenarioEditorClient({
   selectedYear,
   targetTotal,
 }: Props) {
-  const router = useRouter();
-
   // Editable state
   const [name, setName] = useState(scenario.name);
   const [description, setDescription] = useState(scenario.description || "");
   const [turnoverRate, setTurnoverRate] = useState(Number(scenario.projected_turnover_rate));
-  const [uniformAbsenteeism, setUniformAbsenteeism] = useState(false);
+  const [uniformAbsenteeism, setUniformAbsenteeism] = useState(initialMonthlyParams.length > 0);
   const [saving, setSaving] = useState(false);
-  const [populating, setPopulating] = useState(false);
 
   // Monthly params state: Map<costCenterKey, MonthlyParam[]>
   // GLOBAL_KEY = global fallback rates, other keys = cost-center-specific
@@ -124,7 +108,7 @@ export function ScenarioEditorClient({
         const existing = dbParams.find((p) => p.mois === m);
         params.push({
           mois: m,
-          absenteeism_rate: existing ? Number(existing.projected_absenteeism_rate) : 5,
+          absenteeism_rate: existing ? Number(existing.projected_absenteeism_rate) : 0,
         });
       }
       map.set(key, params);
@@ -134,7 +118,7 @@ export function ScenarioEditorClient({
     if (!map.has(GLOBAL_KEY)) {
       const params: MonthlyParam[] = [];
       for (let m = 1; m <= 12; m++) {
-        params.push({ mois: m, absenteeism_rate: 5 });
+        params.push({ mois: m, absenteeism_rate: 0 });
       }
       map.set(GLOBAL_KEY, params);
     }
@@ -142,8 +126,48 @@ export function ScenarioEditorClient({
     return map;
   });
 
-  // Selected cost centers in the multi-select (for editing)
+  // Monthly turnover params state: Map<costCenterKey, MonthlyTurnoverParam[]>
+  const [allMonthlyTurnoverParams, setAllMonthlyTurnoverParams] = useState<Map<string, MonthlyTurnoverParam[]>>(() => {
+    const map = new Map<string, MonthlyTurnoverParam[]>();
+
+    const grouped = new Map<string, DbMonthlyTurnoverParam[]>();
+    initialMonthlyTurnoverParams.forEach((p) => {
+      const key = p.centre_cout ?? GLOBAL_KEY;
+      const arr = grouped.get(key) || [];
+      arr.push(p);
+      grouped.set(key, arr);
+    });
+
+    for (const [key, dbParams] of grouped) {
+      const params: MonthlyTurnoverParam[] = [];
+      for (let m = 1; m <= 12; m++) {
+        const existing = dbParams.find((p) => p.mois === m);
+        params.push({
+          mois: m,
+          turnover_rate: existing ? Number(existing.projected_turnover_rate) : Number(scenario.projected_turnover_rate),
+        });
+      }
+      map.set(key, params);
+    }
+
+    if (!map.has(GLOBAL_KEY)) {
+      const params: MonthlyTurnoverParam[] = [];
+      for (let m = 1; m <= 12; m++) {
+        params.push({ mois: m, turnover_rate: Number(scenario.projected_turnover_rate) });
+      }
+      map.set(GLOBAL_KEY, params);
+    }
+
+    return map;
+  });
+
+  const [uniformTurnover, setUniformTurnover] = useState(false);
+
+  // Selected cost centers in the multi-select (for editing absenteeism)
   const [selectedCostCenters, setSelectedCostCenters] = useState<string[]>([GLOBAL_KEY]);
+
+  // Selected cost centers for turnover tab
+  const [selectedTurnoverCostCenters, setSelectedTurnoverCostCenters] = useState<string[]>([GLOBAL_KEY]);
 
   // Derive the "effective" monthly params for display (first selected, with global fallback)
   const displayedParams = useMemo((): MonthlyParam[] => {
@@ -161,6 +185,8 @@ export function ScenarioEditorClient({
   const [arrivalHypotheses, setArrivalHypotheses] = useState<ArrivalHypothesis[]>(initialArrivalHypotheses);
   // Temp exit hypotheses state
   const [tempExitHypotheses, setTempExitHypotheses] = useState<TempExitHypothesis[]>(initialTempExitHypotheses);
+  // Departure hypotheses state
+  const [departureHypotheses, setDepartureHypotheses] = useState<DepartureHypothesis[]>(initialDepartureHypotheses);
 
   // Check if any selected cost center has specific rates
   const hasSpecificRates = useMemo(() => {
@@ -213,23 +239,74 @@ export function ScenarioEditorClient({
     });
   }, [selectedCostCenters]);
 
+  // Turnover displayed params
+  const displayedTurnoverParams = useMemo((): MonthlyTurnoverParam[] => {
+    const first = selectedTurnoverCostCenters[0] || GLOBAL_KEY;
+    const specific = allMonthlyTurnoverParams.get(first);
+    if (specific) return specific;
+    return allMonthlyTurnoverParams.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+  }, [allMonthlyTurnoverParams, selectedTurnoverCostCenters]);
+
+  const globalTurnoverParams = allMonthlyTurnoverParams.get(GLOBAL_KEY)!;
+
+  const hasSpecificTurnoverRates = useMemo(() => {
+    return selectedTurnoverCostCenters.some((cc) => cc !== GLOBAL_KEY && allMonthlyTurnoverParams.has(cc));
+  }, [selectedTurnoverCostCenters, allMonthlyTurnoverParams]);
+
+  const updateTurnoverMonthParam = useCallback((mois: number, value: number) => {
+    setAllMonthlyTurnoverParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedTurnoverCostCenters) {
+        let params = next.get(cc);
+        if (!params) {
+          params = next.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+        }
+        params = params.map((p) => {
+          if (p.mois === mois) return { ...p, turnover_rate: value };
+          return p;
+        });
+        next.set(cc, params);
+      }
+      return next;
+    });
+  }, [selectedTurnoverCostCenters]);
+
+  const setUniformTurnoverRate = useCallback((rate: number) => {
+    setAllMonthlyTurnoverParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedTurnoverCostCenters) {
+        let params = next.get(cc);
+        if (!params) {
+          params = next.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+        }
+        next.set(cc, params.map((p) => ({ ...p, turnover_rate: rate })));
+      }
+      return next;
+    });
+  }, [selectedTurnoverCostCenters]);
+
+  const resetTurnoverToGlobal = useCallback(() => {
+    setAllMonthlyTurnoverParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedTurnoverCostCenters) {
+        if (cc !== GLOBAL_KEY) {
+          next.delete(cc);
+        }
+      }
+      return next;
+    });
+  }, [selectedTurnoverCostCenters]);
+
   // Build scenario params for projection
   const scenarioParams: ScenarioParams = useMemo(() => ({
     turnover_rate: turnoverRate,
     monthly_params: monthlyParams,
-    known_departures: departures.map((d) => ({
-      code_salarie: d.code_salarie,
-      departure_type: d.departure_type,
-      departure_month: d.departure_month,
-      departure_year: d.departure_year,
-      return_month: d.return_month,
-      return_year: d.return_year,
-      vehicle_type: d.vehicle_type,
-      is_from_data: d.is_from_data,
-    })),
+    monthly_turnover_params: globalTurnoverParams,
+    known_departures: [],
     arrival_hypotheses: arrivalHypotheses,
     temp_exit_hypotheses: tempExitHypotheses,
-  }), [turnoverRate, monthlyParams, departures, arrivalHypotheses, tempExitHypotheses]);
+    departure_hypotheses: departureHypotheses,
+  }), [turnoverRate, monthlyParams, globalTurnoverParams, arrivalHypotheses, tempExitHypotheses, departureHypotheses]);
 
   // Run projection (recalculates on every param change)
   const projection = useMemo(() =>
@@ -253,12 +330,26 @@ export function ScenarioEditorClient({
     setSaving(true);
     try {
       // Flatten all cost center params into a single array
+      // When uniform absenteeism is unchecked, don't save absenteeism rates (let dashboard use its default)
       const allParams: { mois: number; projected_absenteeism_rate: number; centre_cout?: string | null }[] = [];
-      for (const [key, params] of allMonthlyParams) {
-        for (const mp of params) {
-          allParams.push({
-            mois: mp.mois,
-            projected_absenteeism_rate: mp.absenteeism_rate,
+      if (uniformAbsenteeism) {
+        for (const [key, params] of allMonthlyParams) {
+          for (const mp of params) {
+            allParams.push({
+              mois: mp.mois,
+              projected_absenteeism_rate: mp.absenteeism_rate,
+              centre_cout: key === GLOBAL_KEY ? null : key,
+            });
+          }
+        }
+      }
+      // Flatten all turnover cost center params
+      const allTurnoverParams: { mois: number; projected_turnover_rate: number; centre_cout?: string | null }[] = [];
+      for (const [key, params] of allMonthlyTurnoverParams) {
+        for (const tp of params) {
+          allTurnoverParams.push({
+            mois: tp.mois,
+            projected_turnover_rate: tp.turnover_rate,
             centre_cout: key === GLOBAL_KEY ? null : key,
           });
         }
@@ -268,25 +359,13 @@ export function ScenarioEditorClient({
         description,
         projected_turnover_rate: turnoverRate,
         monthly_params: allParams,
+        monthly_turnover_params: allTurnoverParams,
       });
       toast.success("Scénario sauvegardé");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Erreur");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleAutoPopulate = async () => {
-    setPopulating(true);
-    try {
-      const result = await autoPopulateDepartures(scenario.id, selectedYear);
-      toast.success(`${result.count} départ(s) identifié(s) depuis les données`);
-      router.refresh();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Erreur");
-    } finally {
-      setPopulating(false);
     }
   };
 
@@ -354,9 +433,10 @@ export function ScenarioEditorClient({
         <TabsList>
           <TabsTrigger value="params">Variables globales</TabsTrigger>
           <TabsTrigger value="monthly">Paramètres mensuels non pris en charge CNS</TabsTrigger>
+          <TabsTrigger value="turnover">Paramètres turnover mensuel</TabsTrigger>
           <TabsTrigger value="arrivals">Hypothèses d&apos;arrivées</TabsTrigger>
           <TabsTrigger value="temp_exits">Sorties temporaires ({tempExitHypotheses.length})</TabsTrigger>
-          <TabsTrigger value="departures">Départs ({departures.length})</TabsTrigger>
+          <TabsTrigger value="departures">Départs ({departureHypotheses.length})</TabsTrigger>
           <TabsTrigger value="detail">Détail projection</TabsTrigger>
         </TabsList>
 
@@ -414,12 +494,12 @@ export function ScenarioEditorClient({
                       min="0"
                       max="30"
                       step="0.5"
-                      value={monthlyParams[0]?.absenteeism_rate || 5}
+                      value={monthlyParams[0]?.absenteeism_rate ?? 0}
                       onChange={(e) => setUniformRate(parseFloat(e.target.value))}
                       className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                     <span className="text-sm font-medium w-16 text-right">
-                      {(monthlyParams[0]?.absenteeism_rate || 5).toFixed(1)}%
+                      {(monthlyParams[0]?.absenteeism_rate ?? 0).toFixed(1)}%
                     </span>
                   </div>
                 )}
@@ -545,6 +625,145 @@ export function ScenarioEditorClient({
           </Card>
         </TabsContent>
 
+        {/* Monthly turnover params */}
+        <TabsContent value="turnover">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Repeat className="h-4 w-4" />
+                  Paramètres turnover mensuel — {selectedYear}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  {/* Uniform toggle */}
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={uniformTurnover}
+                      onChange={(e) => setUniformTurnover(e.target.checked)}
+                      className="accent-primary"
+                    />
+                    Même taux tous les mois
+                  </label>
+                  {/* Multi-select cost center */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-8 text-xs">
+                        {selectedTurnoverCostCenters.length === 1 && selectedTurnoverCostCenters[0] === GLOBAL_KEY
+                          ? "Global"
+                          : selectedTurnoverCostCenters.length === 1
+                            ? selectedTurnoverCostCenters[0]
+                            : `${selectedTurnoverCostCenters.length} sélectionnés`}
+                        <ChevronDown className="ml-2 h-3 w-3" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 p-2" align="end">
+                      <div className="space-y-1 max-h-64 overflow-auto">
+                        <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer">
+                          <Checkbox
+                            checked={selectedTurnoverCostCenters.includes(GLOBAL_KEY)}
+                            onCheckedChange={(checked) => {
+                              if (checked) setSelectedTurnoverCostCenters([GLOBAL_KEY]);
+                            }}
+                          />
+                          <span className="text-sm font-medium">Global (défaut)</span>
+                        </label>
+                        <div className="border-t my-1" />
+                        {comboboxOptions.centres_cout.map((cc) => (
+                          <label key={cc} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer">
+                            <Checkbox
+                              checked={selectedTurnoverCostCenters.includes(cc)}
+                              onCheckedChange={(checked) => {
+                                setSelectedTurnoverCostCenters((prev) => {
+                                  const withoutGlobal = prev.filter((c) => c !== GLOBAL_KEY);
+                                  if (checked) {
+                                    return [...withoutGlobal, cc];
+                                  }
+                                  const result = withoutGlobal.filter((c) => c !== cc);
+                                  return result.length > 0 ? result : [GLOBAL_KEY];
+                                });
+                              }}
+                            />
+                            <span className="text-sm">{cc}</span>
+                            {allMonthlyTurnoverParams.has(cc) && (
+                              <Badge variant="secondary" className="text-[10px] ml-auto">Spécifique</Badge>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  {hasSpecificTurnoverRates && (
+                    <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={resetTurnoverToGlobal}>
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                      Réinitialiser vers global
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {uniformTurnover && (
+                <div className="flex items-center gap-4 mb-4">
+                  <input
+                    type="range"
+                    min="0"
+                    max="30"
+                    step="0.5"
+                    value={displayedTurnoverParams[0]?.turnover_rate || turnoverRate}
+                    onChange={(e) => setUniformTurnoverRate(parseFloat(e.target.value))}
+                    className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  />
+                  <span className="text-sm font-medium w-16 text-right">
+                    {(displayedTurnoverParams[0]?.turnover_rate || turnoverRate).toFixed(1)}%
+                  </span>
+                </div>
+              )}
+              <div className="overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Mois</TableHead>
+                      <TableHead className="text-xs">Taux turnover annuel (%)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayedTurnoverParams.map((tp) => (
+                      <TableRow key={tp.mois}>
+                        <TableCell className="font-medium text-sm">{FRENCH_MONTHS_SHORT[tp.mois]}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="range"
+                              min="0"
+                              max="30"
+                              step="0.5"
+                              value={tp.turnover_rate}
+                              onChange={(e) => updateTurnoverMonthParam(tp.mois, parseFloat(e.target.value))}
+                              disabled={uniformTurnover}
+                              className="w-24 h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                            />
+                            <Input
+                              type="number"
+                              value={tp.turnover_rate}
+                              onChange={(e) => updateTurnoverMonthParam(tp.mois, parseFloat(e.target.value) || 0)}
+                              disabled={uniformTurnover}
+                              className="w-20 h-7 text-xs"
+                              step="0.5"
+                              min="0"
+                              max="100"
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         {/* Arrival hypotheses */}
         <TabsContent value="arrivals">
           <ArrivalHypothesesTab
@@ -567,66 +786,13 @@ export function ScenarioEditorClient({
 
         {/* Departures */}
         <TabsContent value="departures">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <TrendingDown className="h-4 w-4" />
-                  Départs connus
-                </CardTitle>
-                <Button variant="outline" size="sm" onClick={handleAutoPopulate} disabled={populating}>
-                  <RefreshCw className={`mr-2 h-4 w-4 ${populating ? "animate-spin" : ""}`} />
-                  {populating ? "Détection..." : "Détecter depuis les données"}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {departures.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  Aucun départ enregistré. Cliquez sur &quot;Détecter depuis les données&quot; pour auto-remplir.
-                </p>
-              ) : (
-                <div className="max-h-96 overflow-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-xs">Code salarié</TableHead>
-                        <TableHead className="text-xs">Type</TableHead>
-                        <TableHead className="text-xs">Véhicule</TableHead>
-                        <TableHead className="text-xs">Mois départ</TableHead>
-                        <TableHead className="text-xs">Retour</TableHead>
-                        <TableHead className="text-xs">Source</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {departures.map((d) => (
-                        <TableRow key={d.id}>
-                          <TableCell className="text-sm font-medium">{d.code_salarie || "-"}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-xs">
-                              {DEPARTURE_TYPE_LABELS[d.departure_type] || d.departure_type}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm">{d.vehicle_type || "-"}</TableCell>
-                          <TableCell className="text-sm">
-                            {FRENCH_MONTHS_SHORT[d.departure_month]} {d.departure_year}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {d.return_month ? `${FRENCH_MONTHS_SHORT[d.return_month]} ${d.return_year}` : "-"}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={d.is_from_data ? "secondary" : "outline"} className="text-xs">
-                              {d.is_from_data ? "Données" : "Manuel"}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <DepartureHypothesesTab
+            scenarioId={scenario.id}
+            hypotheses={departureHypotheses}
+            comboboxOptions={comboboxOptions}
+            employees={employees}
+            selectedYear={selectedYear}
+          />
         </TabsContent>
 
         {/* Projection detail */}

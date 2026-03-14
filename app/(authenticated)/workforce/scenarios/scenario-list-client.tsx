@@ -38,10 +38,10 @@ export function ScenarioListClient({ scenarios }: { scenarios: Scenario[] }) {
 
     setCreating(true);
     try {
-      // Create with default monthly params (5% absenteeism, 0 arrivals per month)
+      // Create with default monthly params (0% absenteeism, 0 arrivals per month)
       const defaultMonthlyParams = Array.from({ length: 12 }, (_, i) => ({
         mois: i + 1,
-        projected_absenteeism_rate: 5,
+        projected_absenteeism_rate: 0,
         planned_arrivals: 0,
         planned_arrivals_bus: 0,
         planned_arrivals_cam: 0,
@@ -50,7 +50,7 @@ export function ScenarioListClient({ scenarios }: { scenarios: Scenario[] }) {
       const result = await createScenario({
         name: name.trim(),
         description: description.trim(),
-        projected_turnover_rate: 5,
+        projected_turnover_rate: 0,
         monthly_params: defaultMonthlyParams,
       });
 

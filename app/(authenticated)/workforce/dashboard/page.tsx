@@ -12,6 +12,7 @@ import { AbsenteeismTable, type AbsenteeismItem } from "@/components/workforce/a
 import { MctTable, type MctItem } from "@/components/workforce/mct-table";
 import { InjustifieesTable, type InjustifieeItem } from "@/components/workforce/injustifiees-table";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
+import { ScenarioHypothesesCard, type ArrivalHypothesisItem, type DepartureHypothesisItem, type TempExitHypothesisItem, type RateByMonthCC } from "@/components/workforce/scenario-hypotheses-card";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Upload } from "lucide-react";
@@ -24,7 +25,7 @@ const MONTH_LABELS: Record<number, string> = {
 
 
 interface Props {
-  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string }>;
 }
 
 export default async function WorkforceDashboardPage({ searchParams }: Props) {
@@ -37,6 +38,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const selectedFonctions = params.fonctions === "__none__" ? ["__none__"] : (params.fonctions ? params.fonctions.split(SEP) : []);
   const selectedCC = params.cc === "__none__" ? ["__none__"] : (params.cc ? params.cc.split(SEP) : []);
   const selectedDepots = params.depots === "__none__" ? ["__none__"] : (params.depots ? params.depots.split(SEP) : []);
+  const selectedEmployee = params.employee || null;
+  const selectedScenarioIds = params.scenarios ? params.scenarios.split(",").filter(Boolean) : [];
+  const turnoverSrcId = params.turnover_src || null;
+  const absSrcId = params.abs_src || null;
 
   // Reference date: last day of selected month
   const refDate = lastDayOfMonth(selectedYear, selectedMonth);
@@ -115,12 +120,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     return scenarioAbsRateByMonth.get(mois) ?? 5;
   };
 
-  // Apply fonction and cost center filters
+  // Apply fonction, cost center, depot and employee filters
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allEmployees = employees.filter((e: any) => {
     if (selectedFonctions.length > 0 && !selectedFonctions.includes(e.description_fonction || "")) return false;
     if (selectedCC.length > 0 && !selectedCC.includes(e.centre_cout || "")) return false;
     if (selectedDepots.length > 0 && !selectedDepots.includes(e.description_service || "")) return false;
+    if (selectedEmployee && e.code_salarie !== selectedEmployee) return false;
     return true;
   });
 
@@ -508,12 +514,20 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
   // Fetch all scenario data in parallel
   const scenarioProjections: ScenarioProjectionData[] = [];
+  let hypArrivals: ArrivalHypothesisItem[] = [];
+  let hypDepartures: DepartureHypothesisItem[] = [];
+  let hypTempExits: TempExitHypothesisItem[] = [];
+  let hypTurnoverRates: RateByMonthCC[] = [];
+  let hypAbsRates: RateByMonthCC[] = [];
+  let hypTurnoverSrcName: string | null = null;
+  let hypAbsSrcName: string | null = null;
 
   if (scenarioOptions.length > 0) {
     const scenarioIds = scenarioOptions.map((s) => s.id);
 
-    const [scenarioParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = await Promise.all([
+    const [scenarioParamsAll, scenarioTurnoverParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = await Promise.all([
       fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
+      fetchAll(supabase.from("wp_scenario_monthly_turnover_params").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_departures").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_arrival_hypotheses").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_temp_exit_hypotheses").select("*").in("scenario_id", scenarioIds)),
@@ -546,6 +560,36 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       const scDetail = scenarioDetailsAll.find((s) => s.id === sc.id);
       const turnoverRate = Number(scDetail?.projected_turnover_rate ?? 0);
 
+      // Build per-month turnover rate: weighted average across cost centers
+      const scTurnoverParams = scenarioTurnoverParamsAll.filter((p) => p.scenario_id === sc.id);
+      const globalTurnoverByMonth = new Map<number, number>();
+      const ccTurnoverByMonthCc = new Map<string, number>();
+      scTurnoverParams.forEach((p) => {
+        const mois = Number(p.mois);
+        const rate = Number(p.projected_turnover_rate);
+        if (!p.centre_cout) {
+          globalTurnoverByMonth.set(mois, rate);
+        } else {
+          ccTurnoverByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
+        }
+      });
+      const turnoverRateByMonth = new Map<number, number>();
+      for (let m = 1; m <= 12; m++) {
+        const monthEnd = lastDayOfMonth(selectedYear, m);
+        const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
+        const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
+        if (totalEtp > 0 && ccTurnoverByMonthCc.size > 0) {
+          const weightedRate = activeAtM.reduce((sum, e) => {
+            const ccKey = `${m}:${e.centre_cout}`;
+            const rate = ccTurnoverByMonthCc.get(ccKey) ?? globalTurnoverByMonth.get(m) ?? turnoverRate;
+            return sum + getEtp(e) * rate;
+          }, 0);
+          turnoverRateByMonth.set(m, weightedRate / totalEtp);
+        } else {
+          turnoverRateByMonth.set(m, globalTurnoverByMonth.get(m) ?? turnoverRate);
+        }
+      }
+
       // Build per-month absenteeism rate: weighted average across cost centers
       // Global rates (centre_cout IS NULL) as fallback
       const globalRateByMonth = new Map<number, number>();
@@ -577,13 +621,16 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         }
       }
 
-      // Build departure counts by month (exclude temporary exits — they stay "sous contrat")
+      // Build departure ETP by month (exclude temporary exits — they stay "sous contrat")
       const depCountByMonth = new Map<number, number>();
       scDepartures
         .filter((d) => Number(d.departure_year) === selectedYear && !String(d.departure_type || "").startsWith("temp_exit"))
         .forEach((d) => {
           const m = Number(d.departure_month);
-          depCountByMonth.set(m, (depCountByMonth.get(m) || 0) + 1);
+          const nb = Number(d.nb_personnes) || 1;
+          const taux = Number(d.taux_occupation) || 100;
+          const etp = nb * taux / 100;
+          depCountByMonth.set(m, (depCountByMonth.get(m) || 0) + etp);
         });
 
       // Return counts from temp exits
@@ -609,8 +656,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
         if (!isProjection) continue;
 
-        // Turnover losses
-        const monthlyTurnoverRate = turnoverRate / 100 / 12;
+        // Turnover losses (use per-month weighted rate)
+        const effectiveTurnoverRate = turnoverRateByMonth.get(m) ?? turnoverRate;
+        const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
         const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate * 10) / 10;
 
         // Known departures
@@ -686,6 +734,261 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       }
 
       scenarioProjections.push({ scenario_id: sc.id, months });
+    }
+
+    // ============================================================
+    // Combined projection: merge selected scenarios
+    // ============================================================
+    if (selectedScenarioIds.length > 0) {
+      const selectedScs = scenarioOptions.filter((s) => selectedScenarioIds.includes(s.id));
+      if (selectedScs.length > 0) {
+        // Merge hypotheses from all selected scenarios
+        const combinedArrivals: ArrivalHypothesis[] = [];
+        const combinedDepCountByMonth = new Map<number, number>();
+        const combinedReturnCountByMonth = new Map<number, number>();
+        const combinedTempExits: TempExitHypothesis[] = [];
+
+        for (const sc of selectedScs) {
+          const scArrivals = scenarioArrivalsAll.filter((a) => a.scenario_id === sc.id) as unknown as ArrivalHypothesis[];
+          const scDepartures = scenarioDeparturesAll.filter((d) => d.scenario_id === sc.id);
+          const scTempExits = scenarioTempExitsAll
+            .filter((t) => t.scenario_id === sc.id)
+            .map((t) => ({
+              id: t.id as string,
+              scenario_id: t.scenario_id as string,
+              nb_personnes: Number(t.nb_personnes),
+              taux_occupation: Number(t.taux_occupation),
+              fonction: (t.fonction as string) || null,
+              centre_cout: (t.centre_cout as string) || null,
+              depot: (t.depot as string) || null,
+              vehicle_type: (t.vehicle_type as "BUS" | "CAM") || null,
+              motif: (t.motif as string) || "Congé parental",
+              departure_day: Number(t.departure_day) || 1,
+              departure_month: Number(t.departure_month),
+              departure_year: Number(t.departure_year),
+              return_day: t.return_day ? Number(t.return_day) : null,
+              return_month: t.return_month ? Number(t.return_month) : null,
+              return_year: t.return_year ? Number(t.return_year) : null,
+            })) as TempExitHypothesis[];
+
+          combinedArrivals.push(...scArrivals);
+          combinedTempExits.push(...scTempExits);
+
+          // Accumulate departures by month
+          scDepartures
+            .filter((d) => Number(d.departure_year) === selectedYear && !String(d.departure_type || "").startsWith("temp_exit"))
+            .forEach((d) => {
+              const m = Number(d.departure_month);
+              const nb = Number(d.nb_personnes) || 1;
+              const taux = Number(d.taux_occupation) || 100;
+              const etp = nb * taux / 100;
+              combinedDepCountByMonth.set(m, (combinedDepCountByMonth.get(m) || 0) + etp);
+            });
+
+          // Accumulate return counts
+          scDepartures
+            .filter((d) => Number(d.return_year) === selectedYear && d.return_month)
+            .forEach((d) => {
+              const m = Number(d.return_month);
+              combinedReturnCountByMonth.set(m, (combinedReturnCountByMonth.get(m) || 0) + 1);
+            });
+        }
+
+        // Select turnover rates from source scenario
+        const turnoverSrcScId = turnoverSrcId && selectedScenarioIds.includes(turnoverSrcId)
+          ? turnoverSrcId : selectedScenarioIds[0];
+        const turnoverSrcParams = scenarioTurnoverParamsAll.filter((p) => p.scenario_id === turnoverSrcScId);
+        const turnoverSrcDetail = scenarioDetailsAll.find((s) => s.id === turnoverSrcScId);
+        const combinedTurnoverFallback = Number(turnoverSrcDetail?.projected_turnover_rate ?? 0);
+        const combinedGlobalTurnoverByMonth = new Map<number, number>();
+        const combinedCcTurnoverByMonthCc = new Map<string, number>();
+        turnoverSrcParams.forEach((p) => {
+          const mois = Number(p.mois);
+          const rate = Number(p.projected_turnover_rate);
+          if (!p.centre_cout) {
+            combinedGlobalTurnoverByMonth.set(mois, rate);
+          } else {
+            combinedCcTurnoverByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
+          }
+        });
+        const combinedTurnoverRateByMonth = new Map<number, number>();
+        for (let m = 1; m <= 12; m++) {
+          const monthEnd = lastDayOfMonth(selectedYear, m);
+          const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
+          const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
+          if (totalEtp > 0 && combinedCcTurnoverByMonthCc.size > 0) {
+            const weightedRate = activeAtM.reduce((sum, e) => {
+              const ccKey = `${m}:${e.centre_cout}`;
+              const rate = combinedCcTurnoverByMonthCc.get(ccKey) ?? combinedGlobalTurnoverByMonth.get(m) ?? combinedTurnoverFallback;
+              return sum + getEtp(e) * rate;
+            }, 0);
+            combinedTurnoverRateByMonth.set(m, weightedRate / totalEtp);
+          } else {
+            combinedTurnoverRateByMonth.set(m, combinedGlobalTurnoverByMonth.get(m) ?? combinedTurnoverFallback);
+          }
+        }
+
+        // Select absenteeism rates from source scenario
+        const absSrcScId = absSrcId && selectedScenarioIds.includes(absSrcId)
+          ? absSrcId : selectedScenarioIds[0];
+        const absSrcParams = scenarioParamsAll.filter((p) => p.scenario_id === absSrcScId);
+        const combinedGlobalAbsRateByMonth = new Map<number, number>();
+        const combinedCcAbsRateByMonthCc = new Map<string, number>();
+        absSrcParams.forEach((p) => {
+          const mois = Number(p.mois);
+          const rate = Number(p.projected_absenteeism_rate);
+          if (!p.centre_cout) {
+            combinedGlobalAbsRateByMonth.set(mois, rate);
+          } else {
+            combinedCcAbsRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
+          }
+        });
+        const combinedAbsRateByMonth = new Map<number, number>();
+        for (let m = 1; m <= 12; m++) {
+          const monthEnd = lastDayOfMonth(selectedYear, m);
+          const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
+          const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
+          if (totalEtp > 0 && combinedCcAbsRateByMonthCc.size > 0) {
+            const weightedRate = activeAtM.reduce((sum, e) => {
+              const ccKey = `${m}:${e.centre_cout}`;
+              const rate = combinedCcAbsRateByMonthCc.get(ccKey) ?? combinedGlobalAbsRateByMonth.get(m) ?? 5;
+              return sum + getEtp(e) * rate;
+            }, 0);
+            combinedAbsRateByMonth.set(m, weightedRate / totalEtp);
+          } else {
+            combinedAbsRateByMonth.set(m, combinedGlobalAbsRateByMonth.get(m) ?? 5);
+          }
+        }
+
+        // Compile hypotheses for the card
+        hypArrivals = combinedArrivals.map((a) => ({
+          nb_personnes: a.nb_personnes,
+          taux_occupation: a.taux_occupation,
+          type_contrat: a.type_contrat,
+          fonction: a.fonction,
+          centre_cout: a.centre_cout,
+          vehicle_type: a.vehicle_type,
+          start_month: a.start_month,
+          start_year: a.start_year,
+          end_month: a.end_month,
+          end_year: a.end_year,
+        }));
+        hypDepartures = selectedScs.flatMap((sc) =>
+          scenarioDeparturesAll
+            .filter((d) => d.scenario_id === sc.id && !d.is_from_data)
+            .map((d) => ({
+              nb_personnes: Number(d.nb_personnes) || 1,
+              taux_occupation: Number(d.taux_occupation) || 100,
+              departure_type: String(d.departure_type || ""),
+              fonction: (d.fonction as string) || null,
+              centre_cout: (d.centre_cout as string) || null,
+              vehicle_type: (d.vehicle_type as "BUS" | "CAM") || null,
+              departure_month: Number(d.departure_month),
+              departure_year: Number(d.departure_year),
+            }))
+        );
+        hypTempExits = combinedTempExits.map((t) => ({
+          nb_personnes: t.nb_personnes,
+          taux_occupation: t.taux_occupation,
+          motif: t.motif,
+          fonction: t.fonction,
+          centre_cout: t.centre_cout,
+          vehicle_type: t.vehicle_type,
+          departure_month: t.departure_month,
+          departure_year: t.departure_year,
+          return_month: t.return_month,
+          return_year: t.return_year,
+        }));
+        hypTurnoverRates = turnoverSrcParams.map((p) => ({
+          mois: Number(p.mois),
+          centre_cout: (p.centre_cout as string) || null,
+          rate: Number(p.projected_turnover_rate),
+        }));
+        hypAbsRates = absSrcParams.map((p) => ({
+          mois: Number(p.mois),
+          centre_cout: (p.centre_cout as string) || null,
+          rate: Number(p.projected_absenteeism_rate),
+        }));
+        hypTurnoverSrcName = scenarioOptions.find((s) => s.id === turnoverSrcScId)?.name ?? null;
+        hypAbsSrcName = scenarioOptions.find((s) => s.id === absSrcScId)?.name ?? null;
+
+        // Run the same projection loop with combined data
+        const lastRealIdx = headcountData.findIndex((d) => d.is_projection) - 1;
+        const lastReal = lastRealIdx >= 0 ? headcountData[lastRealIdx] : headcountData[headcountData.length - 1];
+        let runningBrut = lastReal.effectif_brut;
+        let cumulTempExitHyp = 0;
+
+        const combinedMonths: ScenarioProjectionData["months"] = [];
+
+        for (let m = 1; m <= 12; m++) {
+          const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
+          if (!isProjection) continue;
+
+          const effectiveTurnoverRate = combinedTurnoverRateByMonth.get(m) ?? combinedTurnoverFallback;
+          const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
+          const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate * 10) / 10;
+
+          const knownDeps = combinedDepCountByMonth.get(m) || 0;
+
+          const dataExits = allEmployees.filter((e) => {
+            if (!e.date_sortie || e.est_sortie_temporaire) return false;
+            const d = new Date(e.date_sortie);
+            let depMonth = d.getMonth() + 1;
+            let depYear = d.getFullYear();
+            const ldm = lastDayOfMonth(depYear, depMonth);
+            if (e.date_sortie === ldm) {
+              depMonth += 1;
+              if (depMonth > 12) { depMonth = 1; depYear += 1; }
+            }
+            return depMonth === m && depYear === selectedYear;
+          }).reduce((sum, e) => sum + getEtp(e), 0);
+
+          const dataArrivals = allEmployees.filter((e) => {
+            if (!e.date_entree) return false;
+            const d = new Date(e.date_entree);
+            return d.getMonth() + 1 === m && d.getFullYear() === selectedYear;
+          }).reduce((sum, e) => sum + getEtp(e), 0);
+
+          const arrivals = getArrivalsForMonth(combinedArrivals, m, selectedYear);
+          const cddDepartures = getCddDeparturesForMonth(combinedArrivals, m, selectedYear);
+          const returns = combinedReturnCountByMonth.get(m) || 0;
+
+          const totalDepartures = Math.max(knownDeps, dataExits) + turnoverLosses + cddDepartures;
+          const totalArrivals = arrivals + dataArrivals;
+
+          runningBrut = Math.max(0, runningBrut - totalDepartures + totalArrivals + returns);
+
+          const monthEnd = lastDayOfMonth(selectedYear, m);
+          const activeAtMonth = getActiveEmployeesAt(monthEnd);
+          const dataTempExitsEtp = activeAtMonth
+            .filter((e) => isTempExitAt(e, monthEnd))
+            .reduce((sum, e) => sum + getEtp(e), 0);
+
+          const tempExitHypDepartures = getTempExitDeparturesForMonth(combinedTempExits, m, selectedYear);
+          const tempExitHypReturns = getTempExitReturnsForMonth(combinedTempExits, m, selectedYear);
+          cumulTempExitHyp = Math.max(0, cumulTempExitHyp + tempExitHypDepartures - tempExitHypReturns);
+          const runningTempExitsEtp = dataTempExitsEtp + cumulTempExitHyp;
+
+          const scenarioNet = runningBrut - runningTempExitsEtp;
+
+          const cnsRate = lastKnownCnsRate ?? 0;
+          const scenarioCnsEtp = scenarioNet * (cnsRate / 100);
+          const scenarioReel = scenarioNet - scenarioCnsEtp;
+
+          const absRate = combinedAbsRateByMonth.get(m) ?? 5;
+          const scenarioMctFte = scenarioNet * (absRate / 100);
+
+          combinedMonths.push({
+            month_index: m,
+            scenario_brut: Math.round(runningBrut * 10) / 10,
+            scenario_net: Math.max(0, Math.round(scenarioNet * 10) / 10),
+            scenario_reel: Math.max(0, Math.round(scenarioReel * 10) / 10),
+            scenario_apres_mct: Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10),
+          });
+        }
+
+        scenarioProjections.push({ scenario_id: "__combined__", months: combinedMonths });
+      }
     }
   }
 
@@ -858,6 +1161,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         data={headcountData}
         scenarios={scenarioOptions}
         scenarioProjections={scenarioProjections}
+        initialSelectedScenarios={selectedScenarioIds}
+        initialTurnoverSrc={turnoverSrcId}
+        initialAbsSrc={absSrcId}
+        combinedProjection={scenarioProjections.find((sp) => sp.scenario_id === "__combined__") ?? null}
       />
 
       {targetTotal > 0 && <GapAnalysisChart data={gapData} />}
@@ -886,6 +1193,18 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         <DepartureTable departures={departureItems} />
         <ArrivalTable arrivals={arrivalItems} />
       </div>
+
+      {selectedScenarioIds.length > 0 && (
+        <ScenarioHypothesesCard
+          arrivals={hypArrivals}
+          departures={hypDepartures}
+          tempExits={hypTempExits}
+          turnoverRates={hypTurnoverRates}
+          absRates={hypAbsRates}
+          turnoverSrcName={hypTurnoverSrcName}
+          absSrcName={hypAbsSrcName}
+        />
+      )}
 
       <BreakdownChart byType={byType} byDepot={byDepot} />
     </div>
