@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, lastDayOfMonth, isTempExitAt, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
+import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, lastDayOfMonth, isTempExitAt, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -512,10 +512,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   if (scenarioOptions.length > 0) {
     const scenarioIds = scenarioOptions.map((s) => s.id);
 
-    const [scenarioParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioDetailsAll] = await Promise.all([
+    const [scenarioParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = await Promise.all([
       fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_departures").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_arrival_hypotheses").select("*").in("scenario_id", scenarioIds)),
+      fetchAll(supabase.from("wp_scenario_temp_exit_hypotheses").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenarios").select("id, projected_turnover_rate").in("id", scenarioIds)),
     ]);
 
@@ -523,6 +524,25 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       const scParams = scenarioParamsAll.filter((p) => p.scenario_id === sc.id);
       const scDepartures = scenarioDeparturesAll.filter((d) => d.scenario_id === sc.id);
       const scArrivals = scenarioArrivalsAll.filter((a) => a.scenario_id === sc.id) as unknown as ArrivalHypothesis[];
+      const scTempExits = scenarioTempExitsAll
+        .filter((t) => t.scenario_id === sc.id)
+        .map((t) => ({
+          id: t.id as string,
+          scenario_id: t.scenario_id as string,
+          nb_personnes: Number(t.nb_personnes),
+          taux_occupation: Number(t.taux_occupation),
+          fonction: (t.fonction as string) || null,
+          centre_cout: (t.centre_cout as string) || null,
+          depot: (t.depot as string) || null,
+          vehicle_type: (t.vehicle_type as "BUS" | "CAM") || null,
+          motif: (t.motif as string) || "Congé parental",
+          departure_day: Number(t.departure_day) || 1,
+          departure_month: Number(t.departure_month),
+          departure_year: Number(t.departure_year),
+          return_day: t.return_day ? Number(t.return_day) : null,
+          return_month: t.return_month ? Number(t.return_month) : null,
+          return_year: t.return_year ? Number(t.return_year) : null,
+        })) as TempExitHypothesis[];
       const scDetail = scenarioDetailsAll.find((s) => s.id === sc.id);
       const turnoverRate = Number(scDetail?.projected_turnover_rate ?? 0);
 
@@ -581,6 +601,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
       let runningBrut = lastReal.effectif_brut;
       let runningTempExitsEtp = lastReal.effectif_brut - lastReal.effectif_net;
+      let cumulTempExitHyp = 0; // cumulative ETP from temp exit hypotheses
 
       const months: ScenarioProjectionData["months"] = [];
 
@@ -634,9 +655,15 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         // Calculate temp exits ETP directly from employee data for this month
         const monthEnd = lastDayOfMonth(selectedYear, m);
         const activeAtMonth = getActiveEmployeesAt(monthEnd);
-        runningTempExitsEtp = activeAtMonth
+        const dataTempExitsEtp = activeAtMonth
           .filter((e) => isTempExitAt(e, monthEnd))
           .reduce((sum, e) => sum + getEtp(e), 0);
+
+        // Add cumulative temp exit hypotheses from scenario
+        const tempExitHypDepartures = getTempExitDeparturesForMonth(scTempExits, m, selectedYear);
+        const tempExitHypReturns = getTempExitReturnsForMonth(scTempExits, m, selectedYear);
+        cumulTempExitHyp = Math.max(0, cumulTempExitHyp + tempExitHypDepartures - tempExitHypReturns);
+        runningTempExitsEtp = dataTempExitsEtp + cumulTempExitHyp;
 
         const scenarioNet = runningBrut - runningTempExitsEtp;
 

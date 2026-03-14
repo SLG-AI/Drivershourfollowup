@@ -12,9 +12,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
-import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type ArrivalHypothesis } from "@/lib/utils/wp-calculations";
+import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
 import { updateScenario, autoPopulateDepartures } from "../actions";
 import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
+import { TemporaryExitsTab } from "./temporary-exits-tab";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { Save, RefreshCw, ArrowLeft, TrendingDown, Calendar, ChevronDown, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
@@ -63,6 +64,7 @@ interface Props {
   monthlyParams: DbMonthlyParam[];
   departures: DbDeparture[];
   arrivalHypotheses: ArrivalHypothesis[];
+  tempExitHypotheses: TempExitHypothesis[];
   comboboxOptions: ComboboxOptions;
   employees: Employee[];
   absences: AbsenceRecord[];
@@ -84,6 +86,7 @@ export function ScenarioEditorClient({
   monthlyParams: initialMonthlyParams,
   departures,
   arrivalHypotheses: initialArrivalHypotheses,
+  tempExitHypotheses: initialTempExitHypotheses,
   comboboxOptions,
   employees,
   absences,
@@ -156,6 +159,8 @@ export function ScenarioEditorClient({
 
   // Arrival hypotheses state (managed by sub-component, but needed for projection)
   const [arrivalHypotheses, setArrivalHypotheses] = useState<ArrivalHypothesis[]>(initialArrivalHypotheses);
+  // Temp exit hypotheses state
+  const [tempExitHypotheses, setTempExitHypotheses] = useState<TempExitHypothesis[]>(initialTempExitHypotheses);
 
   // Check if any selected cost center has specific rates
   const hasSpecificRates = useMemo(() => {
@@ -223,7 +228,8 @@ export function ScenarioEditorClient({
       is_from_data: d.is_from_data,
     })),
     arrival_hypotheses: arrivalHypotheses,
-  }), [turnoverRate, monthlyParams, departures, arrivalHypotheses]);
+    temp_exit_hypotheses: tempExitHypotheses,
+  }), [turnoverRate, monthlyParams, departures, arrivalHypotheses, tempExitHypotheses]);
 
   // Run projection (recalculates on every param change)
   const projection = useMemo(() =>
@@ -347,8 +353,9 @@ export function ScenarioEditorClient({
       <Tabs defaultValue="params">
         <TabsList>
           <TabsTrigger value="params">Variables globales</TabsTrigger>
-          <TabsTrigger value="monthly">Paramètres mensuels</TabsTrigger>
+          <TabsTrigger value="monthly">Paramètres mensuels non pris en charge CNS</TabsTrigger>
           <TabsTrigger value="arrivals">Hypothèses d&apos;arrivées</TabsTrigger>
+          <TabsTrigger value="temp_exits">Sorties temporaires ({tempExitHypotheses.length})</TabsTrigger>
           <TabsTrigger value="departures">Départs ({departures.length})</TabsTrigger>
           <TabsTrigger value="detail">Détail projection</TabsTrigger>
         </TabsList>
@@ -428,7 +435,7 @@ export function ScenarioEditorClient({
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Calendar className="h-4 w-4" />
-                  Paramètres mensuels — {selectedYear}
+                  Paramètres mensuels non pris en charge CNS — {selectedYear}
                 </CardTitle>
                 <div className="flex items-center gap-2">
                   {/* Multi-select cost center */}
@@ -543,6 +550,16 @@ export function ScenarioEditorClient({
           <ArrivalHypothesesTab
             scenarioId={scenario.id}
             hypotheses={arrivalHypotheses}
+            comboboxOptions={comboboxOptions}
+            selectedYear={selectedYear}
+          />
+        </TabsContent>
+
+        {/* Temporary exits */}
+        <TabsContent value="temp_exits">
+          <TemporaryExitsTab
+            scenarioId={scenario.id}
+            hypotheses={tempExitHypotheses}
             comboboxOptions={comboboxOptions}
             selectedYear={selectedYear}
           />

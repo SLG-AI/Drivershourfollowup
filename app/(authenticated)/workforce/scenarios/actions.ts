@@ -210,6 +210,81 @@ export async function deleteArrivalHypothesis(id: string) {
   return { success: true };
 }
 
+// ============================================================
+// Temp exit hypotheses CRUD
+// ============================================================
+
+export async function addTempExitHypothesis(scenarioId: string, data: {
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  vehicle_type: string | null;
+  motif: string;
+  departure_day: number;
+  departure_month: number;
+  departure_year: number;
+  return_day: number | null;
+  return_month: number | null;
+  return_year: number | null;
+}) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { data: result, error } = await supabase
+    .from("wp_scenario_temp_exit_hypotheses")
+    .insert({ scenario_id: scenarioId, ...data })
+    .select()
+    .single();
+
+  if (error) throw new Error("Erreur ajout sortie temporaire: " + error.message);
+  return result;
+}
+
+export async function updateTempExitHypothesis(id: string, data: {
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  vehicle_type: string | null;
+  motif: string;
+  departure_day: number;
+  departure_month: number;
+  departure_year: number;
+  return_day: number | null;
+  return_month: number | null;
+  return_year: number | null;
+}) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { error } = await supabase
+    .from("wp_scenario_temp_exit_hypotheses")
+    .update(data)
+    .eq("id", id);
+
+  if (error) throw new Error("Erreur mise à jour sortie temporaire: " + error.message);
+  return { success: true };
+}
+
+export async function deleteTempExitHypothesis(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { error } = await supabase
+    .from("wp_scenario_temp_exit_hypotheses")
+    .delete()
+    .eq("id", id);
+
+  if (error) throw new Error("Erreur suppression sortie temporaire: " + error.message);
+  return { success: true };
+}
+
 export async function getDistinctEmployeeValues() {
   const supabase = await createClient();
 

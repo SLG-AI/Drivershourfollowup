@@ -145,11 +145,30 @@ export interface ArrivalHypothesis {
   end_year: number | null;
 }
 
+export interface TempExitHypothesis {
+  id: string;
+  scenario_id: string;
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  vehicle_type: "BUS" | "CAM" | null;
+  motif: string;
+  departure_day: number;
+  departure_month: number;
+  departure_year: number;
+  return_day: number | null;
+  return_month: number | null;
+  return_year: number | null;
+}
+
 export interface ScenarioParams {
   turnover_rate: number; // annual %
   monthly_params: MonthlyParam[];
   known_departures: KnownDeparture[];
   arrival_hypotheses: ArrivalHypothesis[];
+  temp_exit_hypotheses: TempExitHypothesis[];
 }
 
 export interface MonthlyParam {
@@ -212,6 +231,24 @@ export function getCddDeparturesForMonth(
       return departMonth === month && departYear === year;
     })
     .reduce((sum, h) => sum + h.nb_personnes, 0);
+}
+
+/** ETP of temp exit hypotheses departing in a given month */
+export function getTempExitDeparturesForMonth(
+  hypotheses: TempExitHypothesis[], month: number, year: number
+): number {
+  return hypotheses
+    .filter((h) => h.departure_month === month && h.departure_year === year)
+    .reduce((sum, h) => sum + h.nb_personnes * (h.taux_occupation / 100), 0);
+}
+
+/** ETP of temp exit hypotheses returning in a given month */
+export function getTempExitReturnsForMonth(
+  hypotheses: TempExitHypothesis[], month: number, year: number
+): number {
+  return hypotheses
+    .filter((h) => h.return_month === month && h.return_year === year)
+    .reduce((sum, h) => sum + h.nb_personnes * (h.taux_occupation / 100), 0);
 }
 
 // ============================================================
@@ -368,9 +405,11 @@ export function projectHeadcount(
       runningBrut = runningBrut - totalDepartures + arrivals + returnCount;
       runningBrut = Math.max(0, runningBrut);
 
-      // Temp exits: estimate from last known data
+      // Temp exits: estimate from last known data + hypotheses
       const lastTempExits = result.length > 0 ? result[result.length - 1].temp_exits : 0;
-      const tempExitsProjected = Math.max(0, lastTempExits - returnCount);
+      const tempExitHypDepartures = getTempExitDeparturesForMonth(scenario.temp_exit_hypotheses, m, year);
+      const tempExitHypReturns = getTempExitReturnsForMonth(scenario.temp_exit_hypotheses, m, year);
+      const tempExitsProjected = Math.max(0, lastTempExits - returnCount + tempExitHypDepartures - tempExitHypReturns);
 
       // Le taux d'absentéisme du scénario impacte le MCT, pas le CNS
       // → effectif_net n'est pas réduit par l'absentéisme
