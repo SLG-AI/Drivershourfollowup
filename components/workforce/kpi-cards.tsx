@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3 } from "lucide-react";
+import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3, Repeat } from "lucide-react";
 
 export interface WpDashboardStats {
   effectif_brut: number;
@@ -14,6 +14,7 @@ export interface WpDashboardStats {
   taux_injustifiees: number;
   etp_total: number;
   departs_prevus: number;
+  taux_turnover_annuel: number;
   sorties_temporaires: number;
   gap_vs_cible: number | null;
   target_total: number | null;
@@ -88,6 +89,14 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       icon: TrendingDown,
       iconColor: "text-amber-600",
       iconBg: "bg-amber-50",
+    },
+    {
+      title: "Taux de turnover annuel",
+      value: `${stats.taux_turnover_annuel.toFixed(1)}%`,
+      description: "Départs définitifs / effectif moyen (année)",
+      icon: Repeat,
+      iconColor: "text-orange-600",
+      iconBg: "bg-orange-50",
     },
     {
       title: "Gap vs cible",

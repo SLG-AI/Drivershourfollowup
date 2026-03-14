@@ -296,6 +296,95 @@ function MultiSelectFilter({
   );
 }
 
+function EmployeeSelector({
+  employees,
+  searchParams,
+  onUpdate,
+}: {
+  employees: string[];
+  searchParams: URLSearchParams;
+  onUpdate: (key: string, value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const selected = searchParams.get("employee") || "";
+  const filtered = search
+    ? employees.filter((code) => code.toLowerCase().includes(search.toLowerCase()))
+    : employees;
+
+  const selectEmployee = (code: string) => {
+    onUpdate("employee", code === selected ? "" : code);
+    setOpen(false);
+    setSearch("");
+  };
+
+  const clear = () => {
+    onUpdate("employee", "");
+    setOpen(false);
+    setSearch("");
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="max-w-[180px] justify-between font-normal text-xs h-9"
+        >
+          <span className="truncate">{selected || "Employé"}</span>
+          <ChevronDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[220px] p-2" align="end">
+        <div className="flex items-center gap-2 px-2 pb-2">
+          <Search className="h-3.5 w-3.5 opacity-50" />
+          <Input
+            placeholder="Code salarié..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-7 text-xs"
+          />
+        </div>
+        {selected && (
+          <>
+            <button
+              type="button"
+              onClick={clear}
+              className="w-full text-left rounded-sm px-2 py-1.5 text-xs cursor-pointer hover:bg-accent text-muted-foreground"
+            >
+              Tous les employés
+            </button>
+            <div className="my-1 border-t" />
+          </>
+        )}
+        <div className="max-h-[250px] overflow-y-auto">
+          {filtered.slice(0, 100).map((code) => (
+            <button
+              key={code}
+              type="button"
+              onClick={() => selectEmployee(code)}
+              className={`w-full text-left rounded-sm px-2 py-1 text-xs cursor-pointer hover:bg-accent ${
+                code === selected ? "bg-accent font-medium" : ""
+              }`}
+            >
+              {code}
+            </button>
+          ))}
+          {filtered.length > 100 && (
+            <p className="px-2 py-1 text-xs text-muted-foreground">+{filtered.length - 100} autres...</p>
+          )}
+          {filtered.length === 0 && (
+            <p className="px-2 py-2 text-xs text-muted-foreground">Aucun résultat</p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function WorkforceFilters() {
   const router = useRouter();
   const pathname = usePathname();
@@ -303,6 +392,8 @@ function WorkforceFilters() {
   const [fonctions, setFonctions] = useState<string[]>([]);
   const [centreCouts, setCentreCouts] = useState<string[]>([]);
   const [depots, setDepots] = useState<string[]>([]);
+  const [equipes, setEquipes] = useState<string[]>([]);
+  const [employeeCodes, setEmployeeCodes] = useState<string[]>([]);
 
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -316,14 +407,18 @@ function WorkforceFilters() {
       const supabase = createClient();
       const { data } = await supabase
         .from("wp_employees")
-        .select("description_fonction, centre_cout, description_service");
+        .select("description_fonction, centre_cout, description_service, description_equipe, code_salarie");
       if (data) {
         const fns = [...new Set(data.map((e) => e.description_fonction).filter(Boolean))].sort() as string[];
         const ccs = [...new Set(data.map((e) => e.centre_cout).filter(Boolean))].sort() as string[];
         const deps = [...new Set(data.map((e) => e.description_service).filter(Boolean))].sort() as string[];
+        const eqs = [...new Set(data.map((e) => e.description_equipe).filter(Boolean))].sort() as string[];
+        const codes = [...new Set(data.map((e) => e.code_salarie).filter(Boolean))].sort() as string[];
         setFonctions(fns);
         setCentreCouts(ccs);
         setDepots(deps);
+        setEquipes(eqs);
+        setEmployeeCodes(codes);
       }
     }
     fetchOptions();
@@ -398,6 +493,22 @@ function WorkforceFilters() {
           label="Dépôts"
           paramKey="depots"
           options={depots}
+          searchParams={new URLSearchParams(searchParams.toString())}
+          onUpdate={updateFilter}
+        />
+      )}
+      {equipes.length > 0 && (
+        <MultiSelectFilter
+          label="Équipes"
+          paramKey="equipes"
+          options={equipes}
+          searchParams={new URLSearchParams(searchParams.toString())}
+          onUpdate={updateFilter}
+        />
+      )}
+      {employeeCodes.length > 0 && (
+        <EmployeeSelector
+          employees={employeeCodes}
           searchParams={new URLSearchParams(searchParams.toString())}
           onUpdate={updateFilter}
         />

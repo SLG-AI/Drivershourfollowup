@@ -38,7 +38,7 @@ const SUBCATEGORIES_DEFINITIF: Record<string, { label: string; color: string; mo
 };
 
 const SUBCATEGORIES_TEMPORAIRE: Record<string, { label: string; color: string; motifs: string[] }> = {
-  parental: { label: "Congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"] },
+  parental: { label: "Congé parental", color: "text-violet-600", motifs: ["Conge Parental TP", "Congé parental"] },
   maternite: { label: "Congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"] },
   sans_solde: { label: "Congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"] },
   accompagnement: { label: "Congé d'accompagnement", color: "text-violet-600", motifs: ["Congé d'accompagnement"] },

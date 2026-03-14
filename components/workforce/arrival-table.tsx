@@ -26,10 +26,11 @@ export interface ArrivalItem {
 // Sous-catégories par type
 // ---------------------------------------------------------------------------
 
-const SUBCATEGORIES_RETOUR: Record<string, { label: string; color: string; motifs: string[] }> = {
-  parental: { label: "Retour congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"] },
-  maternite: { label: "Retour congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"] },
-  sans_solde: { label: "Retour congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"] },
+const SUBCATEGORIES_RETOUR: Record<string, { label: string; color: string; motifs: string[]; match?: (motif: string) => boolean }> = {
+  parental: { label: "Retour congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"], match: (m) => m.toLowerCase().includes("parental") },
+  maternite: { label: "Retour congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"], match: (m) => m.toLowerCase().includes("maternité") || m.toLowerCase().includes("maternite") },
+  sans_solde: { label: "Retour congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"], match: (m) => m.toLowerCase().includes("sans solde") },
+  dispense: { label: "Retour de dispense", color: "text-gray-600", motifs: [], match: (m) => m.toLowerCase().includes("dispense") },
 };
 
 // ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ const SUBCATEGORIES_RETOUR: Record<string, { label: string; color: string; motif
 
 function groupBySubcategory(
   items: ArrivalItem[],
-  subcategories: Record<string, { label: string; color: string; motifs: string[] }>
+  subcategories: Record<string, { label: string; color: string; motifs: string[]; match?: (motif: string) => boolean }>
 ) {
   const groups: { key: string; label: string; color: string; items: ArrivalItem[] }[] = [];
   const matched = new Set<number>();
@@ -46,7 +47,7 @@ function groupBySubcategory(
   for (const [key, sub] of Object.entries(subcategories)) {
     const groupItems = items.filter((d, i) => {
       if (matched.has(i)) return false;
-      return sub.motifs.includes(d.motif);
+      return sub.match ? sub.match(d.motif) : sub.motifs.includes(d.motif);
     });
     groupItems.forEach((d) => {
       const idx = items.indexOf(d);

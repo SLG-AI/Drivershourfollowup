@@ -25,7 +25,7 @@ const MONTH_LABELS: Record<number, string> = {
 
 
 interface Props {
-  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string }>;
 }
 
 export default async function WorkforceDashboardPage({ searchParams }: Props) {
@@ -38,6 +38,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const selectedFonctions = params.fonctions === "__none__" ? ["__none__"] : (params.fonctions ? params.fonctions.split(SEP) : []);
   const selectedCC = params.cc === "__none__" ? ["__none__"] : (params.cc ? params.cc.split(SEP) : []);
   const selectedDepots = params.depots === "__none__" ? ["__none__"] : (params.depots ? params.depots.split(SEP) : []);
+  const selectedEquipes = params.equipes === "__none__" ? ["__none__"] : (params.equipes ? params.equipes.split(SEP) : []);
   const selectedEmployee = params.employee || null;
   const selectedScenarioIds = params.scenarios ? params.scenarios.split(",").filter(Boolean) : [];
   const turnoverSrcId = params.turnover_src || null;
@@ -126,6 +127,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     if (selectedFonctions.length > 0 && !selectedFonctions.includes(e.description_fonction || "")) return false;
     if (selectedCC.length > 0 && !selectedCC.includes(e.centre_cout || "")) return false;
     if (selectedDepots.length > 0 && !selectedDepots.includes(e.description_service || "")) return false;
+    if (selectedEquipes.length > 0 && !selectedEquipes.includes(e.description_equipe || "")) return false;
     if (selectedEmployee && e.code_salarie !== selectedEmployee) return false;
     return true;
   });
@@ -150,12 +152,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // comme absents maladie (est_sortie_temporaire = false)
   // ============================================================
 
-  const CONGES_STRUCTURELS = new Set([
-    "Conge Parental TP",
-    "Congé sans solde",
-    "Congé de maternité",
-    "Congé d'accompagnement",
-  ]);
+  function isCongeStructurel(motif: string): boolean {
+    const m = motif.toLowerCase();
+    return m.includes("parental") || m.includes("maternité") || m.includes("maternite")
+      || m.includes("sans solde") || m.includes("accompagnement") || m.includes("dispense");
+  }
 
   // Codes des employés avec heures maladie dans le CNS (tous mois confondus pour l'année)
   const codesAvecMaladieCns = new Set(
@@ -168,7 +169,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   allEmployees.forEach((e) => {
     if (
       e.est_sortie_temporaire &&
-      !CONGES_STRUCTURELS.has(e.description_motif_sortie || "") &&
+      !isCongeStructurel(e.description_motif_sortie || "") &&
       codesAvecMaladieCns.has(e.code_salarie)
     ) {
       e.est_sortie_temporaire = false;
@@ -182,7 +183,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     if (
       !e.est_sortie_temporaire &&
       e.date_sortie &&
-      CONGES_STRUCTURELS.has(e.description_motif_sortie || "")
+      isCongeStructurel(e.description_motif_sortie || "")
     ) {
       e.est_sortie_temporaire = true;
     }
@@ -529,6 +530,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     taux_absenteisme: number;
     taux_mct: number;
   } | null = null;
+  let scenarioTurnoverLossesTotal = 0;
 
   if (scenarioOptions.length > 0) {
     const scenarioIds = scenarioOptions.map((s) => s.id);
@@ -936,6 +938,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           const effectiveTurnoverRate = combinedTurnoverRateByMonth.get(m) ?? combinedTurnoverFallback;
           const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
           const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate * 10) / 10;
+          scenarioTurnoverLossesTotal += turnoverLosses;
 
           const knownDeps = combinedDepCountByMonth.get(m) || 0;
 
@@ -1045,6 +1048,27 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     : 0;
   console.log("[DEBUG] injustifiees:", { allCount: allAbsencesInjustifiees.length, selectedMonthCount: selectedMonthInjustifiees.length, totalInjHrsSelected, totalAdjustedWorkableHrs, tauxInjustifiees, selectedMonth });
 
+  // Taux de turnover annuel = départs définitifs / effectif moyen sous contrat projeté sur l'année
+  const yearStart = `${selectedYear}-01-01`;
+  const departsDefinitifs = allEmployees.filter(
+    (e) => e.date_sortie && e.date_sortie >= yearStart && e.date_sortie <= yearEnd && !e.est_sortie_temporaire
+  );
+  const departsDefEtp = departsDefinitifs.reduce((sum, e) => sum + getEtp(e), 0) + scenarioTurnoverLossesTotal;
+  const combinedProjection = scenarioProjections.find((sp) => sp.scenario_id === "__combined__");
+  let sumBrutAnnuel = 0;
+  for (let m = 1; m <= 12; m++) {
+    const scenarioMonth = combinedProjection?.months.find((cm) => cm.month_index === m);
+    if (scenarioMonth) {
+      sumBrutAnnuel += scenarioMonth.scenario_brut;
+    } else {
+      sumBrutAnnuel += headcountData[m - 1]?.effectif_brut ?? 0;
+    }
+  }
+  const effectifMoyenAnnuel = sumBrutAnnuel / 12;
+  const tauxTurnoverAnnuel = effectifMoyenAnnuel > 0
+    ? (departsDefEtp / effectifMoyenAnnuel) * 100
+    : 0;
+
   const stats: WpDashboardStats = {
     effectif_brut: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     effectif_net: scenarioKpiOverride?.effectif_net ?? Math.round(effectifNetEtp * 10) / 10,
@@ -1056,6 +1080,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     taux_injustifiees: tauxInjustifiees,
     etp_total: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
+    taux_turnover_annuel: Math.round(tauxTurnoverAnnuel * 10) / 10,
     sorties_temporaires: scenarioKpiOverride?.sorties_temporaires ?? Math.round(sortiesTempEtp * 10) / 10,
     gap_vs_cible: scenarioKpiOverride
       ? (targetTotal > 0 ? Math.round((scenarioKpiOverride.effectif_net - targetTotal) * 10) / 10 : null)

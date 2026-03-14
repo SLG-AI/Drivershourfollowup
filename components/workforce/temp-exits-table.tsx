@@ -27,11 +27,13 @@ export interface TempExitItem {
 // Sous-catégories
 // ---------------------------------------------------------------------------
 
-const SUBCATEGORIES: Record<string, { label: string; color: string; motifs: string[] }> = {
-  parental: { label: "Congé parental", color: "text-violet-600", motifs: ["Conge Parental TP"] },
-  maternite: { label: "Congé maternité", color: "text-pink-600", motifs: ["Congé de maternité"] },
-  sans_solde: { label: "Congé sans solde", color: "text-violet-600", motifs: ["Congé sans solde"] },
-  accompagnement: { label: "Congé accompagnement", color: "text-blue-600", motifs: ["Congé d'accompagnement"] },
+const SUBCATEGORIES: Record<string, { label: string; color: string; match: (motif: string) => boolean }> = {
+  parental_tp: { label: "Congé parental temps partiel", color: "text-violet-600", match: (m) => m === "Conge Parental TP" },
+  parental: { label: "Congé parental", color: "text-violet-600", match: (m) => m.toLowerCase().includes("parental") && m !== "Conge Parental TP" },
+  maternite: { label: "Congé maternité", color: "text-pink-600", match: (m) => m.toLowerCase().includes("maternité") || m.toLowerCase().includes("maternite") },
+  sans_solde: { label: "Congé sans solde", color: "text-violet-600", match: (m) => m.toLowerCase().includes("sans solde") },
+  accompagnement: { label: "Congé accompagnement", color: "text-blue-600", match: (m) => m.toLowerCase().includes("accompagnement") },
+  dispense: { label: "Dispense", color: "text-gray-600", match: (m) => m.toLowerCase().includes("dispense") },
 };
 
 // ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ function groupBySubcategory(items: TempExitItem[]) {
   for (const [key, sub] of Object.entries(SUBCATEGORIES)) {
     const groupItems = items.filter((d, i) => {
       if (matched.has(i)) return false;
-      return sub.motifs.includes(d.motif);
+      return sub.match(d.motif);
     });
     groupItems.forEach((d) => {
       const idx = items.indexOf(d);
