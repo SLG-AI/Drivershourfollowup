@@ -1,6 +1,8 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { fetchAll } from "@/lib/supabase/fetch-all";
+import { revalidatePath } from "next/cache";
 import { lastDayOfMonth } from "@/lib/utils/wp-calculations";
 
 interface MonthlyParamInput {
@@ -9,11 +11,18 @@ interface MonthlyParamInput {
   centre_cout?: string | null;
 }
 
+interface MonthlyTurnoverParamInput {
+  mois: number;
+  projected_turnover_rate: number;
+  centre_cout?: string | null;
+}
+
 interface CreateScenarioInput {
   name: string;
   description: string;
   projected_turnover_rate: number;
   monthly_params: MonthlyParamInput[];
+  monthly_turnover_params?: MonthlyTurnoverParamInput[];
 }
 
 export async function createScenario(input: CreateScenarioInput) {
@@ -48,6 +57,22 @@ export async function createScenario(input: CreateScenarioInput) {
       .insert(params);
 
     if (paramError) throw new Error("Erreur paramètres mensuels: " + paramError.message);
+  }
+
+  // Insert monthly turnover params
+  if (input.monthly_turnover_params && input.monthly_turnover_params.length > 0) {
+    const turnoverParams = input.monthly_turnover_params.map((tp) => ({
+      scenario_id: scenario.id,
+      mois: tp.mois,
+      projected_turnover_rate: tp.projected_turnover_rate,
+      centre_cout: tp.centre_cout ?? null,
+    }));
+
+    const { error: tpError } = await supabase
+      .from("wp_scenario_monthly_turnover_params")
+      .insert(turnoverParams);
+
+    if (tpError) throw new Error("Erreur paramètres turnover mensuels: " + tpError.message);
   }
 
   return { id: scenario.id };
@@ -91,6 +116,28 @@ export async function updateScenario(id: string, input: CreateScenarioInput) {
     if (paramError) throw new Error("Erreur paramètres mensuels: " + paramError.message);
   }
 
+  // Delete and re-insert monthly turnover params
+  await supabase
+    .from("wp_scenario_monthly_turnover_params")
+    .delete()
+    .eq("scenario_id", id);
+
+  if (input.monthly_turnover_params && input.monthly_turnover_params.length > 0) {
+    const turnoverParams = input.monthly_turnover_params.map((tp) => ({
+      scenario_id: id,
+      mois: tp.mois,
+      projected_turnover_rate: tp.projected_turnover_rate,
+      centre_cout: tp.centre_cout ?? null,
+    }));
+
+    const { error: tpError } = await supabase
+      .from("wp_scenario_monthly_turnover_params")
+      .insert(turnoverParams);
+
+    if (tpError) throw new Error("Erreur paramètres turnover mensuels: " + tpError.message);
+  }
+
+  revalidatePath(`/workforce/scenarios/${id}`);
   return { success: true };
 }
 
@@ -105,7 +152,90 @@ export async function deleteScenario(id: string) {
     .eq("id", id);
 
   if (error) throw new Error("Erreur suppression scénario: " + error.message);
+  revalidatePath("/workforce/scenarios");
   return { success: true };
+}
+
+export async function duplicateScenario(sourceId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  // Fetch source scenario
+  const { data: source, error: srcErr } = await supabase
+    .from("wp_scenarios")
+    .select("*")
+    .eq("id", sourceId)
+    .single();
+  if (srcErr || !source) throw new Error("Scénario source introuvable");
+
+  // Create new scenario
+  const { data: newScenario, error: createErr } = await supabase
+    .from("wp_scenarios")
+    .insert({
+      name: `${source.name} (copie)`,
+      description: source.description,
+      projected_turnover_rate: source.projected_turnover_rate,
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+  if (createErr) throw new Error("Erreur duplication: " + createErr.message);
+
+  const newId = newScenario.id;
+
+  // Copy monthly params
+  const monthlyParams = await fetchAll(
+    supabase.from("wp_scenario_monthly_params").select("*").eq("scenario_id", sourceId)
+  );
+  if (monthlyParams.length > 0) {
+    await supabase.from("wp_scenario_monthly_params").insert(
+      monthlyParams.map((p) => ({ scenario_id: newId, mois: p.mois, projected_absenteeism_rate: p.projected_absenteeism_rate, centre_cout: p.centre_cout }))
+    );
+  }
+
+  // Copy monthly turnover params
+  const turnoverParams = await fetchAll(
+    supabase.from("wp_scenario_monthly_turnover_params").select("*").eq("scenario_id", sourceId)
+  );
+  if (turnoverParams.length > 0) {
+    await supabase.from("wp_scenario_monthly_turnover_params").insert(
+      turnoverParams.map((p) => ({ scenario_id: newId, mois: p.mois, projected_turnover_rate: p.projected_turnover_rate, centre_cout: p.centre_cout }))
+    );
+  }
+
+  // Copy arrival hypotheses
+  const arrivals = await fetchAll(
+    supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", sourceId)
+  );
+  if (arrivals.length > 0) {
+    await supabase.from("wp_scenario_arrival_hypotheses").insert(
+      arrivals.map(({ id: _id, scenario_id: _sid, created_at: _ca, ...rest }) => ({ scenario_id: newId, ...rest }))
+    );
+  }
+
+  // Copy departure hypotheses
+  const departures = await fetchAll(
+    supabase.from("wp_scenario_departures").select("*").eq("scenario_id", sourceId)
+  );
+  if (departures.length > 0) {
+    await supabase.from("wp_scenario_departures").insert(
+      departures.map(({ id: _id, scenario_id: _sid, created_at: _ca, ...rest }) => ({ scenario_id: newId, ...rest }))
+    );
+  }
+
+  // Copy temp exit hypotheses
+  const tempExits = await fetchAll(
+    supabase.from("wp_scenario_temp_exit_hypotheses").select("*").eq("scenario_id", sourceId)
+  );
+  if (tempExits.length > 0) {
+    await supabase.from("wp_scenario_temp_exit_hypotheses").insert(
+      tempExits.map(({ id: _id, scenario_id: _sid, created_at: _ca, ...rest }) => ({ scenario_id: newId, ...rest }))
+    );
+  }
+
+  revalidatePath("/workforce/scenarios");
+  return { id: newId };
 }
 
 export async function getScenarios() {
@@ -120,9 +250,10 @@ export async function getScenarios() {
 export async function getScenarioWithParams(id: string) {
   const supabase = await createClient();
 
-  const [{ data: scenario }, { data: monthlyParams }, { data: departures }, { data: arrivalHypotheses }] = await Promise.all([
+  const [{ data: scenario }, { data: monthlyParams }, { data: monthlyTurnoverParams }, { data: departures }, { data: arrivalHypotheses }] = await Promise.all([
     supabase.from("wp_scenarios").select("*").eq("id", id).single(),
     supabase.from("wp_scenario_monthly_params").select("*").eq("scenario_id", id).order("mois"),
+    supabase.from("wp_scenario_monthly_turnover_params").select("*").eq("scenario_id", id).order("mois"),
     supabase.from("wp_scenario_departures").select("*").eq("scenario_id", id).order("departure_month"),
     supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", id).order("start_year, start_month"),
   ]);
@@ -130,6 +261,7 @@ export async function getScenarioWithParams(id: string) {
   return {
     scenario,
     monthlyParams: monthlyParams || [],
+    monthlyTurnoverParams: monthlyTurnoverParams || [],
     departures: departures || [],
     arrivalHypotheses: arrivalHypotheses || [],
   };
@@ -165,6 +297,7 @@ export async function addArrivalHypothesis(scenarioId: string, data: {
     .single();
 
   if (error) throw new Error("Erreur ajout hypothèse: " + error.message);
+  revalidatePath(`/workforce/scenarios/${scenarioId}`);
   return result;
 }
 
@@ -193,6 +326,7 @@ export async function updateArrivalHypothesis(id: string, data: {
     .eq("id", id);
 
   if (error) throw new Error("Erreur mise à jour hypothèse: " + error.message);
+  revalidatePath("/workforce/scenarios", "layout");
   return { success: true };
 }
 
@@ -207,6 +341,7 @@ export async function deleteArrivalHypothesis(id: string) {
     .eq("id", id);
 
   if (error) throw new Error("Erreur suppression hypothèse: " + error.message);
+  revalidatePath("/workforce/scenarios", "layout");
   return { success: true };
 }
 
@@ -240,6 +375,7 @@ export async function addTempExitHypothesis(scenarioId: string, data: {
     .single();
 
   if (error) throw new Error("Erreur ajout sortie temporaire: " + error.message);
+  revalidatePath(`/workforce/scenarios/${scenarioId}`);
   return result;
 }
 
@@ -268,6 +404,7 @@ export async function updateTempExitHypothesis(id: string, data: {
     .eq("id", id);
 
   if (error) throw new Error("Erreur mise à jour sortie temporaire: " + error.message);
+  revalidatePath("/workforce/scenarios", "layout");
   return { success: true };
 }
 
@@ -282,6 +419,7 @@ export async function deleteTempExitHypothesis(id: string) {
     .eq("id", id);
 
   if (error) throw new Error("Erreur suppression sortie temporaire: " + error.message);
+  revalidatePath("/workforce/scenarios", "layout");
   return { success: true };
 }
 
@@ -304,92 +442,76 @@ export async function getDistinctEmployeeValues() {
   };
 }
 
-export async function addScenarioDeparture(scenarioId: string, departure: {
+// ============================================================
+// Departure hypotheses CRUD
+// ============================================================
+
+export async function addDepartureHypothesis(scenarioId: string, data: {
   code_salarie: string | null;
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  vehicle_type: string | null;
   departure_type: string;
+  departure_day: number;
   departure_month: number;
   departure_year: number;
-  return_month: number | null;
-  return_year: number | null;
-  vehicle_type: string | null;
-  depot: string | null;
-  is_from_data: boolean;
 }) {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { data: result, error } = await supabase
+    .from("wp_scenario_departures")
+    .insert({ scenario_id: scenarioId, ...data, is_from_data: false })
+    .select()
+    .single();
+
+  if (error) throw new Error("Erreur ajout hypothèse de départ: " + error.message);
+  revalidatePath(`/workforce/scenarios/${scenarioId}`);
+  return result;
+}
+
+export async function updateDepartureHypothesis(id: string, data: {
+  code_salarie: string | null;
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  vehicle_type: string | null;
+  departure_type: string;
+  departure_day: number;
+  departure_month: number;
+  departure_year: number;
+}) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
 
   const { error } = await supabase
     .from("wp_scenario_departures")
-    .insert({ scenario_id: scenarioId, ...departure });
+    .update(data)
+    .eq("id", id);
 
-  if (error) throw new Error("Erreur ajout départ: " + error.message);
+  if (error) throw new Error("Erreur mise à jour hypothèse de départ: " + error.message);
+  revalidatePath("/workforce/scenarios", "layout");
   return { success: true };
 }
 
-export async function autoPopulateDepartures(scenarioId: string, year: number) {
+export async function deleteDepartureHypothesis(id: string) {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
 
-  // Get employees with future exit dates
-  const today = new Date().toISOString().split("T")[0];
-  const { data: employees } = await supabase
-    .from("wp_employees")
-    .select("code_salarie, date_sortie, vehicle_type, description_motif_sortie, description_departement")
-    .not("date_sortie", "is", null)
-    .gte("date_sortie", today);
-
-  if (!employees || employees.length === 0) return { count: 0 };
-
-  // Clear existing auto-detected departures
-  await supabase
+  const { error } = await supabase
     .from("wp_scenario_departures")
     .delete()
-    .eq("scenario_id", scenarioId)
-    .eq("is_from_data", true);
+    .eq("id", id);
 
-  const departures = employees
-    .filter((e) => {
-      const d = new Date(e.date_sortie!);
-      return d.getFullYear() === year;
-    })
-    .map((e) => {
-      const exitDate = new Date(e.date_sortie!);
-      const motif = e.description_motif_sortie || "";
-
-      let departureType = "end_contract";
-      if (motif.toLowerCase().includes("retraite") || motif.toLowerCase().includes("pension")) departureType = "retirement";
-      else if (motif.toLowerCase().includes("parental")) departureType = "temp_exit_parental";
-      else if (motif.toLowerCase().includes("maternit")) departureType = "temp_exit_maternity";
-      else if (motif.toLowerCase().includes("congé sans") || motif.toLowerCase().includes("accompagnement")) departureType = "temp_exit_other";
-      else if (motif.toLowerCase().includes("licenciement") || motif.toLowerCase().includes("demission") || motif.toLowerCase().includes("siliation")) departureType = "turnover";
-
-      // If departure is on the last day of the month, effective departure is next month
-      let depMonth = exitDate.getMonth() + 1;
-      let depYear = exitDate.getFullYear();
-      const ldm = lastDayOfMonth(depYear, depMonth);
-      if (e.date_sortie === ldm) {
-        depMonth += 1;
-        if (depMonth > 12) { depMonth = 1; depYear += 1; }
-      }
-
-      return {
-        scenario_id: scenarioId,
-        code_salarie: e.code_salarie,
-        departure_type: departureType,
-        departure_month: depMonth,
-        departure_year: depYear,
-        return_month: null as number | null,
-        return_year: null as number | null,
-        vehicle_type: e.vehicle_type,
-        depot: e.description_departement,
-        is_from_data: true,
-      };
-    });
-
-  if (departures.length > 0) {
-    const { error } = await supabase
-      .from("wp_scenario_departures")
-      .insert(departures);
-    if (error) throw new Error("Erreur insertion départs: " + error.message);
-  }
-
-  return { count: departures.length };
+  if (error) throw new Error("Erreur suppression hypothèse de départ: " + error.message);
+  revalidatePath("/workforce/scenarios", "layout");
+  return { success: true };
 }

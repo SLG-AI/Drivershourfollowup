@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ComboboxFreeText } from "@/components/ui/combobox-free-text";
-import { Plus, Pencil, Trash2, UserMinus } from "lucide-react";
+import { Plus, Pencil, Trash2, UserMinus, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { addTempExitHypothesis, updateTempExitHypothesis, deleteTempExitHypothesis } from "../actions";
 import type { TempExitHypothesis } from "@/lib/utils/wp-calculations";
@@ -26,6 +26,7 @@ interface Props {
   hypotheses: TempExitHypothesis[];
   comboboxOptions: ComboboxOptions;
   selectedYear: number;
+  onCountChange?: (count: number) => void;
 }
 
 type FormData = {
@@ -78,7 +79,7 @@ function monthLabel(m: number) {
   return MONTHS.find((x) => x.value === m)?.label ?? String(m);
 }
 
-export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, comboboxOptions, selectedYear }: Props) {
+export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, comboboxOptions, selectedYear, onCountChange }: Props) {
   const [hypotheses, setHypotheses] = useState(initialHypotheses);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -112,6 +113,26 @@ export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, c
     setDialogOpen(true);
   }, []);
 
+  const openDuplicate = useCallback((h: TempExitHypothesis) => {
+    setEditingId(null);
+    setForm({
+      nb_personnes: h.nb_personnes,
+      taux_occupation: h.taux_occupation,
+      fonction: h.fonction,
+      centre_cout: h.centre_cout,
+      depot: h.depot,
+      vehicle_type: h.vehicle_type,
+      motif: h.motif,
+      departure_day: h.departure_day,
+      departure_month: h.departure_month,
+      departure_year: h.departure_year,
+      return_day: h.return_day,
+      return_month: h.return_month,
+      return_year: h.return_year,
+    });
+    setDialogOpen(true);
+  }, []);
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -121,7 +142,11 @@ export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, c
         toast.success("Sortie temporaire mise à jour");
       } else {
         const result = await addTempExitHypothesis(scenarioId, form);
-        setHypotheses((prev) => [...prev, result as TempExitHypothesis]);
+        setHypotheses((prev) => {
+          const next = [...prev, result as TempExitHypothesis];
+          onCountChange?.(next.length);
+          return next;
+        });
         toast.success("Sortie temporaire ajoutée");
       }
       setDialogOpen(false);
@@ -136,7 +161,11 @@ export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, c
     setDeletingId(id);
     try {
       await deleteTempExitHypothesis(id);
-      setHypotheses((prev) => prev.filter((h) => h.id !== id));
+      setHypotheses((prev) => {
+        const next = prev.filter((h) => h.id !== id);
+        onCountChange?.(next.length);
+        return next;
+      });
       toast.success("Sortie temporaire supprimée");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Erreur");
@@ -227,7 +256,10 @@ export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, c
                           <TableCell className="text-sm whitespace-nowrap">{returnDate}</TableCell>
                           <TableCell>
                             <div className="flex gap-1">
-                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(h)}>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openDuplicate(h)} title="Dupliquer">
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(h)} title="Modifier">
                                 <Pencil className="h-3 w-3" />
                               </Button>
                               <Button
@@ -236,6 +268,7 @@ export function TemporaryExitsTab({ scenarioId, hypotheses: initialHypotheses, c
                                 className="h-7 w-7 text-destructive"
                                 onClick={() => handleDelete(h.id)}
                                 disabled={deletingId === h.id}
+                                title="Supprimer"
                               >
                                 <Trash2 className="h-3 w-3" />
                               </Button>

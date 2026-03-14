@@ -521,6 +521,14 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   let hypAbsRates: RateByMonthCC[] = [];
   let hypTurnoverSrcName: string | null = null;
   let hypAbsSrcName: string | null = null;
+  // Scenario KPI overrides for selected month
+  let scenarioKpiOverride: {
+    effectif_brut: number;
+    effectif_net: number;
+    sorties_temporaires: number;
+    taux_absenteisme: number;
+    taux_mct: number;
+  } | null = null;
 
   if (scenarioOptions.length > 0) {
     const scenarioIds = scenarioOptions.map((s) => s.id);
@@ -922,7 +930,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
         for (let m = 1; m <= 12; m++) {
           const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
-          if (!isProjection) continue;
+          const isCurrentMonth = selectedYear === currentYear && m === currentMonth;
+          if (!isProjection && !isCurrentMonth) continue;
 
           const effectiveTurnoverRate = combinedTurnoverRateByMonth.get(m) ?? combinedTurnoverFallback;
           const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
@@ -978,13 +987,31 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           const absRate = combinedAbsRateByMonth.get(m) ?? 5;
           const scenarioMctFte = scenarioNet * (absRate / 100);
 
-          combinedMonths.push({
-            month_index: m,
-            scenario_brut: Math.round(runningBrut * 10) / 10,
-            scenario_net: Math.max(0, Math.round(scenarioNet * 10) / 10),
-            scenario_reel: Math.max(0, Math.round(scenarioReel * 10) / 10),
-            scenario_apres_mct: Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10),
-          });
+          const scenarioBrutR = Math.round(runningBrut * 10) / 10;
+          const scenarioNetR = Math.max(0, Math.round(scenarioNet * 10) / 10);
+          const scenarioReelR = Math.max(0, Math.round(scenarioReel * 10) / 10);
+          const scenarioApresMctR = Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10);
+
+          if (isProjection) {
+            combinedMonths.push({
+              month_index: m,
+              scenario_brut: scenarioBrutR,
+              scenario_net: scenarioNetR,
+              scenario_reel: scenarioReelR,
+              scenario_apres_mct: scenarioApresMctR,
+            });
+          }
+
+          // Capture KPI overrides for the selected month
+          if (m === selectedMonth) {
+            scenarioKpiOverride = {
+              effectif_brut: scenarioBrutR,
+              effectif_net: scenarioNetR,
+              sorties_temporaires: Math.round(runningTempExitsEtp * 10) / 10,
+              taux_absenteisme: cnsRate,
+              taux_mct: absRate,
+            };
+          }
         }
 
         scenarioProjections.push({ scenario_id: "__combined__", months: combinedMonths });
@@ -1019,18 +1046,20 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   console.log("[DEBUG] injustifiees:", { allCount: allAbsencesInjustifiees.length, selectedMonthCount: selectedMonthInjustifiees.length, totalInjHrsSelected, totalAdjustedWorkableHrs, tauxInjustifiees, selectedMonth });
 
   const stats: WpDashboardStats = {
-    effectif_brut: Math.round(effectifBrutEtp * 10) / 10,
-    effectif_net: Math.round(effectifNetEtp * 10) / 10,
+    effectif_brut: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
+    effectif_net: scenarioKpiOverride?.effectif_net ?? Math.round(effectifNetEtp * 10) / 10,
     bus_count: Math.round(busEtp * 10) / 10,
     cam_count: Math.round(camEtp * 10) / 10,
     headcount,
-    taux_absenteisme: avgAbsenteeism,
-    taux_mct: tauxMct,
+    taux_absenteisme: scenarioKpiOverride?.taux_absenteisme ?? avgAbsenteeism,
+    taux_mct: scenarioKpiOverride?.taux_mct ?? tauxMct,
     taux_injustifiees: tauxInjustifiees,
-    etp_total: Math.round(effectifBrutEtp * 10) / 10,
+    etp_total: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
-    sorties_temporaires: Math.round(sortiesTempEtp * 10) / 10,
-    gap_vs_cible: gapVsCible,
+    sorties_temporaires: scenarioKpiOverride?.sorties_temporaires ?? Math.round(sortiesTempEtp * 10) / 10,
+    gap_vs_cible: scenarioKpiOverride
+      ? (targetTotal > 0 ? Math.round((scenarioKpiOverride.effectif_net - targetTotal) * 10) / 10 : null)
+      : gapVsCible,
     target_total: targetTotal > 0 ? targetTotal : null,
   };
 

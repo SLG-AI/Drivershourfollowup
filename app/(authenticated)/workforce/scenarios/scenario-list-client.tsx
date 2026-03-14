@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, SlidersHorizontal, Trash2, ArrowRight } from "lucide-react";
-import { createScenario, deleteScenario } from "./actions";
+import { Plus, SlidersHorizontal, Trash2, ArrowRight, Copy } from "lucide-react";
+import { createScenario, deleteScenario, duplicateScenario } from "./actions";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -29,6 +29,7 @@ export function ScenarioListClient({ scenarios }: { scenarios: Scenario[] }) {
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
 
   const handleCreate = async () => {
     if (!name.trim()) {
@@ -76,6 +77,19 @@ export function ScenarioListClient({ scenarios }: { scenarios: Scenario[] }) {
       toast.error(error instanceof Error ? error.message : "Erreur");
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const handleDuplicate = async (id: string) => {
+    setDuplicating(id);
+    try {
+      const result = await duplicateScenario(id);
+      toast.success("Scénario dupliqué");
+      router.push(`/workforce/scenarios/${result.id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erreur");
+    } finally {
+      setDuplicating(null);
     }
   };
 
@@ -143,15 +157,28 @@ export function ScenarioListClient({ scenarios }: { scenarios: Scenario[] }) {
                       <CardDescription className="mt-1">{s.description}</CardDescription>
                     )}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-red-600"
-                    onClick={() => handleDelete(s.id)}
-                    disabled={deleting === s.id}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-primary"
+                      onClick={() => handleDuplicate(s.id)}
+                      disabled={duplicating === s.id}
+                      title="Dupliquer"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-red-600"
+                      onClick={() => handleDelete(s.id)}
+                      disabled={deleting === s.id}
+                      title="Supprimer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>

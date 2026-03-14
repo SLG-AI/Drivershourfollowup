@@ -359,7 +359,7 @@ export function ScenarioHypothesesCard({
             </div>
           </div>
           <div className="rounded-lg border px-4 py-2 text-center">
-            <div className="text-lg font-bold text-amber-700">{totalTempExits}</div>
+            <div className="text-lg font-bold text-violet-700">{totalTempExits}</div>
             <div className="text-xs text-muted-foreground">
               Sorties temp. · {fmtEtp(etpTempExits)} ETP
             </div>
@@ -387,7 +387,7 @@ export function ScenarioHypothesesCard({
           <CollapsibleSection
             label={`Sorties temporaires (${totalTempExits})`}
             count={totalTempExits}
-            color="text-amber-700"
+            color="text-violet-700"
           >
             <TempExitsSection items={tempExits} />
           </CollapsibleSection>
@@ -401,7 +401,7 @@ export function ScenarioHypothesesCard({
 
           <CollapsibleSection
             label={`Taux d'absentéisme${absSrcName ? ` (source : ${absSrcName})` : ""}`}
-            color="text-violet-700"
+            color="text-pink-700"
           >
             <RatesSection rates={absRates} label="absentéisme" />
           </CollapsibleSection>

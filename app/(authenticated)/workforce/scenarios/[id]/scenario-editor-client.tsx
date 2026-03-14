@@ -17,7 +17,7 @@ import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
 import { TemporaryExitsTab } from "./temporary-exits-tab";
 import { DepartureHypothesesTab } from "./departure-hypotheses-tab";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
-import { Save, ArrowLeft, Calendar, ChevronDown, RotateCcw, Repeat } from "lucide-react";
+import { Save, ArrowLeft, Calendar, ChevronDown, RotateCcw, Repeat, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -185,6 +185,7 @@ export function ScenarioEditorClient({
   const [arrivalHypotheses, setArrivalHypotheses] = useState<ArrivalHypothesis[]>(initialArrivalHypotheses);
   // Temp exit hypotheses state
   const [tempExitHypotheses, setTempExitHypotheses] = useState<TempExitHypothesis[]>(initialTempExitHypotheses);
+  const [tempExitCount, setTempExitCount] = useState(initialTempExitHypotheses.length);
   // Departure hypotheses state
   const [departureHypotheses, setDepartureHypotheses] = useState<DepartureHypothesis[]>(initialDepartureHypotheses);
 
@@ -330,17 +331,14 @@ export function ScenarioEditorClient({
     setSaving(true);
     try {
       // Flatten all cost center params into a single array
-      // When uniform absenteeism is unchecked, don't save absenteeism rates (let dashboard use its default)
       const allParams: { mois: number; projected_absenteeism_rate: number; centre_cout?: string | null }[] = [];
-      if (uniformAbsenteeism) {
-        for (const [key, params] of allMonthlyParams) {
-          for (const mp of params) {
-            allParams.push({
-              mois: mp.mois,
-              projected_absenteeism_rate: mp.absenteeism_rate,
-              centre_cout: key === GLOBAL_KEY ? null : key,
-            });
-          }
+      for (const [key, params] of allMonthlyParams) {
+        for (const mp of params) {
+          allParams.push({
+            mois: mp.mois,
+            projected_absenteeism_rate: mp.absenteeism_rate,
+            centre_cout: key === GLOBAL_KEY ? null : key,
+          });
         }
       }
       // Flatten all turnover cost center params
@@ -384,8 +382,17 @@ export function ScenarioEditorClient({
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold">{name}</h1>
+          <div className="group">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="text-2xl font-bold bg-transparent border-none outline-none focus:ring-1 focus:ring-primary rounded px-1 -ml-1 w-auto"
+                style={{ width: `${Math.max(name.length, 1)}ch` }}
+              />
+              <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
             <p className="text-muted-foreground text-sm">{description || "Scénario de projection"}</p>
           </div>
         </div>
@@ -435,7 +442,7 @@ export function ScenarioEditorClient({
           <TabsTrigger value="monthly">Paramètres mensuels non pris en charge CNS</TabsTrigger>
           <TabsTrigger value="turnover">Paramètres turnover mensuel</TabsTrigger>
           <TabsTrigger value="arrivals">Hypothèses d&apos;arrivées</TabsTrigger>
-          <TabsTrigger value="temp_exits">Sorties temporaires ({tempExitHypotheses.length})</TabsTrigger>
+          <TabsTrigger value="temp_exits">Sorties temporaires ({tempExitCount})</TabsTrigger>
           <TabsTrigger value="departures">Départs ({departureHypotheses.length})</TabsTrigger>
           <TabsTrigger value="detail">Détail projection</TabsTrigger>
         </TabsList>
@@ -781,6 +788,7 @@ export function ScenarioEditorClient({
             hypotheses={tempExitHypotheses}
             comboboxOptions={comboboxOptions}
             selectedYear={selectedYear}
+            onCountChange={setTempExitCount}
           />
         </TabsContent>
 
