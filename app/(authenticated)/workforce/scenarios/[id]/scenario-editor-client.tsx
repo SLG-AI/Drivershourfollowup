@@ -46,6 +46,19 @@ interface DbMonthlyTurnoverParam {
   centre_cout: string | null;
 }
 
+interface DbMonthlyLeaveParam {
+  id: string;
+  scenario_id: string;
+  mois: number;
+  projected_leave_rate: number;
+  centre_cout: string | null;
+}
+
+interface MonthlyLeaveParam {
+  mois: number;
+  leave_rate: number;
+}
+
 interface DbScenario {
   id: string;
   name: string;
@@ -57,6 +70,7 @@ interface Props {
   scenario: DbScenario;
   monthlyParams: DbMonthlyParam[];
   monthlyTurnoverParams: DbMonthlyTurnoverParam[];
+  monthlyLeaveParams: DbMonthlyLeaveParam[];
   departureHypotheses: DepartureHypothesis[];
   arrivalHypotheses: ArrivalHypothesis[];
   tempExitHypotheses: TempExitHypothesis[];
@@ -71,6 +85,7 @@ export function ScenarioEditorClient({
   scenario,
   monthlyParams: initialMonthlyParams,
   monthlyTurnoverParams: initialMonthlyTurnoverParams,
+  monthlyLeaveParams: initialMonthlyLeaveParams,
   departureHypotheses: initialDepartureHypotheses,
   arrivalHypotheses: initialArrivalHypotheses,
   tempExitHypotheses: initialTempExitHypotheses,
@@ -163,11 +178,49 @@ export function ScenarioEditorClient({
 
   const [uniformTurnover, setUniformTurnover] = useState(false);
 
+  // Leave params state: Map<costCenterKey, MonthlyLeaveParam[]>
+  const [allMonthlyLeaveParams, setAllMonthlyLeaveParams] = useState<Map<string, MonthlyLeaveParam[]>>(() => {
+    const map = new Map<string, MonthlyLeaveParam[]>();
+    const grouped = new Map<string, DbMonthlyLeaveParam[]>();
+    initialMonthlyLeaveParams.forEach((p) => {
+      const key = p.centre_cout ?? GLOBAL_KEY;
+      const arr = grouped.get(key) || [];
+      arr.push(p);
+      grouped.set(key, arr);
+    });
+    for (const [key, dbParams] of grouped) {
+      const params: MonthlyLeaveParam[] = [];
+      for (let m = 1; m <= 12; m++) {
+        const existing = dbParams.find((p) => p.mois === m);
+        params.push({ mois: m, leave_rate: existing ? Number(existing.projected_leave_rate) : 0 });
+      }
+      map.set(key, params);
+    }
+    if (!map.has(GLOBAL_KEY)) {
+      const params: MonthlyLeaveParam[] = [];
+      for (let m = 1; m <= 12; m++) {
+        params.push({ mois: m, leave_rate: 0 });
+      }
+      map.set(GLOBAL_KEY, params);
+    }
+    return map;
+  });
+
+  const [uniformLeave, setUniformLeave] = useState(initialMonthlyLeaveParams.length > 0 && (() => {
+    const globalParams = initialMonthlyLeaveParams.filter((p) => !p.centre_cout);
+    if (globalParams.length === 0) return false;
+    const firstRate = Number(globalParams[0].projected_leave_rate);
+    return globalParams.every((p) => Number(p.projected_leave_rate) === firstRate);
+  })());
+
   // Selected cost centers in the multi-select (for editing absenteeism)
   const [selectedCostCenters, setSelectedCostCenters] = useState<string[]>([GLOBAL_KEY]);
 
   // Selected cost centers for turnover tab
   const [selectedTurnoverCostCenters, setSelectedTurnoverCostCenters] = useState<string[]>([GLOBAL_KEY]);
+
+  // Selected cost centers for leave tab
+  const [selectedLeaveCostCenters, setSelectedLeaveCostCenters] = useState<string[]>([GLOBAL_KEY]);
 
   // Derive the "effective" monthly params for display (first selected, with global fallback)
   const displayedParams = useMemo((): MonthlyParam[] => {
@@ -298,6 +351,58 @@ export function ScenarioEditorClient({
     });
   }, [selectedTurnoverCostCenters]);
 
+  // Leave displayed params
+  const displayedLeaveParams = useMemo((): MonthlyLeaveParam[] => {
+    const first = selectedLeaveCostCenters[0] || GLOBAL_KEY;
+    const specific = allMonthlyLeaveParams.get(first);
+    if (specific) return specific;
+    return allMonthlyLeaveParams.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+  }, [allMonthlyLeaveParams, selectedLeaveCostCenters]);
+
+  const updateLeaveMonthParam = useCallback((mois: number, value: number) => {
+    setAllMonthlyLeaveParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedLeaveCostCenters) {
+        let params = next.get(cc);
+        if (!params) {
+          params = next.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+        }
+        next.set(cc, params.map((p) => p.mois === mois ? { ...p, leave_rate: value } : p));
+      }
+      return next;
+    });
+  }, [selectedLeaveCostCenters]);
+
+  const setUniformLeaveRate = useCallback((rate: number) => {
+    setAllMonthlyLeaveParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedLeaveCostCenters) {
+        let params = next.get(cc);
+        if (!params) {
+          params = next.get(GLOBAL_KEY)!.map((p) => ({ ...p }));
+        }
+        next.set(cc, params.map((p) => ({ ...p, leave_rate: rate })));
+      }
+      return next;
+    });
+  }, [selectedLeaveCostCenters]);
+
+  const hasSpecificLeaveRates = useMemo(() => {
+    return selectedLeaveCostCenters.some((cc) => cc !== GLOBAL_KEY && allMonthlyLeaveParams.has(cc));
+  }, [selectedLeaveCostCenters, allMonthlyLeaveParams]);
+
+  const resetLeaveToGlobal = useCallback(() => {
+    setAllMonthlyLeaveParams((prev) => {
+      const next = new Map(prev);
+      for (const cc of selectedLeaveCostCenters) {
+        if (cc !== GLOBAL_KEY) {
+          next.delete(cc);
+        }
+      }
+      return next;
+    });
+  }, [selectedLeaveCostCenters]);
+
   // Build scenario params for projection
   const scenarioParams: ScenarioParams = useMemo(() => ({
     turnover_rate: turnoverRate,
@@ -327,7 +432,20 @@ export function ScenarioEditorClient({
     [projection, targetTotal]
   );
 
+  // Leave rate total validation
+  const leaveRateTotal = useMemo(() => {
+    const globalParams = allMonthlyLeaveParams.get(GLOBAL_KEY);
+    if (!globalParams) return 0;
+    return Math.round(globalParams.reduce((sum, p) => sum + p.leave_rate, 0) * 10) / 10;
+  }, [allMonthlyLeaveParams]);
+
+  const leaveRateValid = leaveRateTotal === 100 || leaveRateTotal === 0;
+
   const handleSave = async () => {
+    if (!leaveRateValid) {
+      toast.error(`La somme des taux de congés doit être 100% (actuellement ${leaveRateTotal}%)`);
+      return;
+    }
     setSaving(true);
     try {
       // Flatten all cost center params into a single array
@@ -352,12 +470,24 @@ export function ScenarioEditorClient({
           });
         }
       }
+      // Flatten all leave cost center params
+      const allLeaveParams: { mois: number; projected_leave_rate: number; centre_cout?: string | null }[] = [];
+      for (const [key, params] of allMonthlyLeaveParams) {
+        for (const lp of params) {
+          allLeaveParams.push({
+            mois: lp.mois,
+            projected_leave_rate: lp.leave_rate,
+            centre_cout: key === GLOBAL_KEY ? null : key,
+          });
+        }
+      }
       await updateScenario(scenario.id, {
         name,
         description,
         projected_turnover_rate: turnoverRate,
         monthly_params: allParams,
         monthly_turnover_params: allTurnoverParams,
+        monthly_leave_params: allLeaveParams,
       });
       toast.success("Scénario sauvegardé");
     } catch (error) {
@@ -396,7 +526,7 @@ export function ScenarioEditorClient({
             <p className="text-muted-foreground text-sm">{description || "Scénario de projection"}</p>
           </div>
         </div>
-        <Button onClick={handleSave} disabled={saving}>
+        <Button onClick={handleSave} disabled={saving || !leaveRateValid}>
           <Save className="mr-2 h-4 w-4" />
           {saving ? "Sauvegarde..." : "Sauvegarder"}
         </Button>
@@ -408,6 +538,7 @@ export function ScenarioEditorClient({
           <TabsTrigger value="params">Variables globales</TabsTrigger>
           <TabsTrigger value="monthly">Paramètres mensuels non pris en charge CNS</TabsTrigger>
           <TabsTrigger value="turnover">Paramètres turnover mensuel</TabsTrigger>
+          <TabsTrigger value="leave">Paramètres congés mensuels</TabsTrigger>
           <TabsTrigger value="arrivals">Hypothèses d&apos;arrivées</TabsTrigger>
           <TabsTrigger value="temp_exits">Sorties temporaires ({tempExitCount})</TabsTrigger>
           <TabsTrigger value="departures">Départs ({departureHypotheses.length})</TabsTrigger>
@@ -474,6 +605,37 @@ export function ScenarioEditorClient({
                     />
                     <span className="text-sm font-medium w-16 text-right">
                       {(monthlyParams[0]?.absenteeism_rate ?? 0).toFixed(1)}%
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Taux de congés uniforme</Label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={uniformLeave}
+                      onChange={(e) => setUniformLeave(e.target.checked)}
+                      className="accent-primary"
+                    />
+                    Appliquer le même taux à tous les mois
+                  </label>
+                </div>
+                {uniformLeave && (
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range"
+                      min="0"
+                      max="30"
+                      step="0.5"
+                      value={displayedLeaveParams[0]?.leave_rate ?? 0}
+                      onChange={(e) => setUniformLeaveRate(parseFloat(e.target.value))}
+                      className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                    <span className="text-sm font-medium w-16 text-right">
+                      {(displayedLeaveParams[0]?.leave_rate ?? 0).toFixed(1)}%
                     </span>
                   </div>
                 )}
@@ -733,6 +895,128 @@ export function ScenarioEditorClient({
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Leave params */}
+        <TabsContent value="leave">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Calendar className="h-4 w-4" />
+                  Paramètres congés mensuels — {selectedYear}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-8 text-xs">
+                        {selectedLeaveCostCenters.length === 1 && selectedLeaveCostCenters[0] === GLOBAL_KEY
+                          ? "Global"
+                          : selectedLeaveCostCenters.length === 1
+                            ? selectedLeaveCostCenters[0]
+                            : `${selectedLeaveCostCenters.length} sélectionnés`}
+                        <ChevronDown className="ml-2 h-3 w-3" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 p-2" align="end">
+                      <div className="space-y-1 max-h-64 overflow-auto">
+                        <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer">
+                          <Checkbox
+                            checked={selectedLeaveCostCenters.includes(GLOBAL_KEY)}
+                            onCheckedChange={(checked) => {
+                              if (checked) setSelectedLeaveCostCenters([GLOBAL_KEY]);
+                            }}
+                          />
+                          <span className="text-sm font-medium">Global (défaut)</span>
+                        </label>
+                        <div className="border-t my-1" />
+                        {comboboxOptions.centres_cout.map((cc) => (
+                          <label key={cc} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer">
+                            <Checkbox
+                              checked={selectedLeaveCostCenters.includes(cc)}
+                              onCheckedChange={(checked) => {
+                                setSelectedLeaveCostCenters((prev) => {
+                                  const withoutGlobal = prev.filter((c) => c !== GLOBAL_KEY);
+                                  if (checked) return [...withoutGlobal, cc];
+                                  const result = withoutGlobal.filter((c) => c !== cc);
+                                  return result.length > 0 ? result : [GLOBAL_KEY];
+                                });
+                              }}
+                            />
+                            <span className="text-sm">{cc}</span>
+                            {allMonthlyLeaveParams.has(cc) && (
+                              <Badge variant="secondary" className="text-[10px] ml-auto">Spécifique</Badge>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  {hasSpecificLeaveRates && (
+                    <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={resetLeaveToGlobal}>
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                      Réinitialiser vers global
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Mois</TableHead>
+                      <TableHead className="text-xs">Congés (%)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayedLeaveParams.map((lp) => (
+                      <TableRow key={lp.mois}>
+                        <TableCell className="font-medium text-sm">{FRENCH_MONTHS_SHORT[lp.mois]}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="range"
+                              min="0"
+                              max="30"
+                              step="0.5"
+                              value={lp.leave_rate}
+                              onChange={(e) => updateLeaveMonthParam(lp.mois, parseFloat(e.target.value))}
+                              disabled={uniformLeave}
+                              className="w-24 h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                            />
+                            <Input
+                              type="number"
+                              value={lp.leave_rate}
+                              onChange={(e) => updateLeaveMonthParam(lp.mois, parseFloat(e.target.value) || 0)}
+                              disabled={uniformLeave}
+                              className="w-20 h-7 text-xs"
+                              step="0.5"
+                              min="0"
+                              max="100"
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className={`mt-4 flex items-center justify-between rounded-lg border px-4 py-2 ${leaveRateValid ? "border-border" : "border-red-400 bg-red-50"}`}>
+                <span className="text-sm font-medium">
+                  Total : {leaveRateTotal.toFixed(1)}%
+                </span>
+                <span className={`text-sm ${leaveRateValid ? "text-muted-foreground" : "text-red-600 font-medium"}`}>
+                  {leaveRateTotal === 100
+                    ? "Répartition complète"
+                    : leaveRateTotal === 0
+                      ? "Aucun congé configuré"
+                      : `Reste ${(100 - leaveRateTotal).toFixed(1)}% à attribuer`}
+                </span>
               </div>
             </CardContent>
           </Card>

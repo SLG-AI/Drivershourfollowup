@@ -36,6 +36,7 @@ export interface HeadcountDataPoint {
   scenario_net?: number;
   scenario_reel?: number;
   scenario_apres_mct?: number;
+  scenario_apres_conges?: number;
 }
 
 export interface ScenarioOption {
@@ -52,6 +53,7 @@ export interface ScenarioProjectionData {
     scenario_net: number;
     scenario_reel: number;
     scenario_apres_mct: number;
+    scenario_apres_conges?: number;
   }[];
 }
 
@@ -74,6 +76,7 @@ const ALL_SERIES: SeriesDef[] = [
   { key: "scenario_net", label: "Scénario — net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
   { key: "scenario_reel", label: "Scénario — réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
   { key: "scenario_apres_mct", label: "Scénario — après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true },
+  { key: "scenario_apres_conges", label: "Effectif disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true },
 ];
 
 interface Props {
@@ -84,6 +87,7 @@ interface Props {
   initialSelectedScenarios?: string[];
   initialTurnoverSrc?: string | null;
   initialAbsSrc?: string | null;
+  initialLeaveSrc?: string | null;
   combinedProjection?: ScenarioProjectionData | null;
 }
 
@@ -95,6 +99,7 @@ export function HeadcountEvolutionChart({
   initialSelectedScenarios = [],
   initialTurnoverSrc = null,
   initialAbsSrc = null,
+  initialLeaveSrc = null,
   combinedProjection = null,
 }: Props) {
   const router = useRouter();
@@ -103,6 +108,7 @@ export function HeadcountEvolutionChart({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(initialSelectedScenarios));
   const [turnoverSrc, setTurnoverSrc] = useState<string | null>(initialTurnoverSrc);
   const [absSrc, setAbsSrc] = useState<string | null>(initialAbsSrc);
+  const [leaveSrc, setLeaveSrc] = useState<string | null>(initialLeaveSrc);
   const [urlDirty, setUrlDirty] = useState(false);
 
   // Sync selection to URL query params via useEffect (avoids setState during render)
@@ -130,8 +136,14 @@ export function HeadcountEvolutionChart({
       params.delete("abs_src");
     }
 
+    if (leaveSrc && selectedIds.has(leaveSrc)) {
+      params.set("leave_src", leaveSrc);
+    } else {
+      params.delete("leave_src");
+    }
+
     router.replace(`?${params.toString()}`, { scroll: false });
-  }, [urlDirty, selectedIds, turnoverSrc, absSrc, router, searchParams]);
+  }, [urlDirty, selectedIds, turnoverSrc, absSrc, leaveSrc, router, searchParams]);
 
   const toggleScenario = (id: string) => {
     setSelectedIds((prev) => {
@@ -144,6 +156,9 @@ export function HeadcountEvolutionChart({
         if (absSrc === id) {
           setAbsSrc(next.size > 0 ? Array.from(next)[0] : null);
         }
+        if (leaveSrc === id) {
+          setLeaveSrc(next.size > 0 ? Array.from(next)[0] : null);
+        }
       } else {
         next.add(id);
         if (!turnoverSrc || !next.has(turnoverSrc)) {
@@ -151,6 +166,9 @@ export function HeadcountEvolutionChart({
         }
         if (!absSrc || !next.has(absSrc)) {
           setAbsSrc(id);
+        }
+        if (!leaveSrc || !next.has(leaveSrc)) {
+          setLeaveSrc(id);
         }
       }
       return next;
@@ -165,6 +183,11 @@ export function HeadcountEvolutionChart({
 
   const setAbsSource = (id: string) => {
     setAbsSrc(id);
+    setUrlDirty(true);
+  };
+
+  const setLeaveSource = (id: string) => {
+    setLeaveSrc(id);
     setUrlDirty(true);
   };
 
@@ -218,6 +241,7 @@ export function HeadcountEvolutionChart({
       scenario_net: monthData.scenario_net,
       scenario_reel: monthData.scenario_reel,
       scenario_apres_mct: monthData.scenario_apres_mct,
+      scenario_apres_conges: monthData.scenario_apres_conges,
     };
   });
 
@@ -247,6 +271,7 @@ export function HeadcountEvolutionChart({
     scenario_net: showScenario && chartData.some((d) => d.scenario_net != null),
     scenario_reel: showScenario && chartData.some((d) => d.scenario_reel != null),
     scenario_apres_mct: showScenario && chartData.some((d) => d.scenario_apres_mct != null),
+    scenario_apres_conges: showScenario && chartData.some((d) => d.scenario_apres_conges != null),
   };
 
   const availableSeries = ALL_SERIES.filter((s) => hasData[s.key]);
@@ -357,6 +382,16 @@ export function HeadcountEvolutionChart({
                               />
                               <span className="text-xs text-muted-foreground">Absentéisme</span>
                             </label>
+                            <label className="flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="leave_src"
+                                checked={leaveSrc === sc.id}
+                                onChange={() => setLeaveSource(sc.id)}
+                                className="h-3 w-3 accent-primary"
+                              />
+                              <span className="text-xs text-muted-foreground">Congés</span>
+                            </label>
                           </div>
                         )}
                       </div>
@@ -367,6 +402,7 @@ export function HeadcountEvolutionChart({
                   <div className="p-2 border-t text-xs text-muted-foreground space-y-0.5">
                     <div>Turnover : <span className="font-medium text-foreground">{getScenarioName(turnoverSrc)}</span></div>
                     <div>Absentéisme : <span className="font-medium text-foreground">{getScenarioName(absSrc)}</span></div>
+                    <div>Congés : <span className="font-medium text-foreground">{getScenarioName(leaveSrc)}</span></div>
                   </div>
                 )}
               </PopoverContent>
@@ -427,7 +463,7 @@ export function HeadcountEvolutionChart({
                 const order: Record<string, number> = {
                   effectif_brut: 0, effectif_net: 1, effectif_reel: 2,
                   effectif_apres_mct: 3, effectif_apres_injustifiees: 4, target: 5,
-                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8, scenario_apres_mct: 9,
+                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8, scenario_apres_mct: 9, scenario_apres_conges: 10,
                 };
                 return order[String(item.dataKey)] ?? 99;
               }}
@@ -446,6 +482,7 @@ export function HeadcountEvolutionChart({
                   scenario_net: "scenario_brut",
                   scenario_reel: "scenario_net",
                   scenario_apres_mct: "scenario_reel",
+                  scenario_apres_conges: "scenario_apres_mct",
                 };
 
                 const parentKey = deltaParent[key];

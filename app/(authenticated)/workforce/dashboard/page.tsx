@@ -24,7 +24,7 @@ const MONTH_LABELS: Record<number, string> = {
 
 
 interface Props {
-  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
 }
 
 export default async function WorkforceDashboardPage({ searchParams }: Props) {
@@ -42,6 +42,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const selectedScenarioIds = params.scenarios ? params.scenarios.split(",").filter(Boolean) : [];
   const turnoverSrcId = params.turnover_src || null;
   const absSrcId = params.abs_src || null;
+  const leaveSrcId = params.leave_src || null;
 
   // Reference date: last day of selected month
   const refDate = lastDayOfMonth(selectedYear, selectedMonth);
@@ -519,8 +520,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   let hypTempExits: TempExitHypothesisItem[] = [];
   let hypTurnoverRates: RateByMonthCC[] = [];
   let hypAbsRates: RateByMonthCC[] = [];
+  let hypLeaveRates: RateByMonthCC[] = [];
   let hypTurnoverSrcName: string | null = null;
   let hypAbsSrcName: string | null = null;
+  let hypLeaveSrcName: string | null = null;
   // Scenario KPI overrides for selected month
   let scenarioKpiOverride: {
     effectif_brut: number;
@@ -534,9 +537,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   if (scenarioOptions.length > 0) {
     const scenarioIds = scenarioOptions.map((s) => s.id);
 
-    const [scenarioParamsAll, scenarioTurnoverParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = await Promise.all([
+    const [scenarioParamsAll, scenarioTurnoverParamsAll, scenarioLeaveParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = await Promise.all([
       fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_monthly_turnover_params").select("*").in("scenario_id", scenarioIds)),
+      fetchAll(supabase.from("wp_scenario_monthly_leave_params").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_departures").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_arrival_hypotheses").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_temp_exit_hypotheses").select("*").in("scenario_id", scenarioIds)),
@@ -869,6 +873,38 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           }
         }
 
+        // Select leave rates from source scenario
+        const leaveSrcScId = leaveSrcId && selectedScenarioIds.includes(leaveSrcId)
+          ? leaveSrcId : selectedScenarioIds[0];
+        const leaveSrcParams = scenarioLeaveParamsAll.filter((p) => p.scenario_id === leaveSrcScId);
+        const combinedGlobalLeaveRateByMonth = new Map<number, number>();
+        const combinedCcLeaveRateByMonthCc = new Map<string, number>();
+        leaveSrcParams.forEach((p) => {
+          const mois = Number(p.mois);
+          const rate = Number(p.projected_leave_rate);
+          if (!p.centre_cout) {
+            combinedGlobalLeaveRateByMonth.set(mois, rate);
+          } else {
+            combinedCcLeaveRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
+          }
+        });
+        const combinedLeaveRateByMonth = new Map<number, number>();
+        for (let m = 1; m <= 12; m++) {
+          const monthEnd = lastDayOfMonth(selectedYear, m);
+          const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
+          const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
+          if (totalEtp > 0 && combinedCcLeaveRateByMonthCc.size > 0) {
+            const weightedRate = activeAtM.reduce((sum, e) => {
+              const ccKey = `${m}:${e.centre_cout}`;
+              const rate = combinedCcLeaveRateByMonthCc.get(ccKey) ?? combinedGlobalLeaveRateByMonth.get(m) ?? 0;
+              return sum + getEtp(e) * rate;
+            }, 0);
+            combinedLeaveRateByMonth.set(m, weightedRate / totalEtp);
+          } else {
+            combinedLeaveRateByMonth.set(m, combinedGlobalLeaveRateByMonth.get(m) ?? 0);
+          }
+        }
+
         // Compile hypotheses for the card
         hypArrivals = combinedArrivals.map((a) => ({
           nb_personnes: a.nb_personnes,
@@ -918,8 +954,14 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           centre_cout: (p.centre_cout as string) || null,
           rate: Number(p.projected_absenteeism_rate),
         }));
+        hypLeaveRates = leaveSrcParams.map((p) => ({
+          mois: Number(p.mois),
+          centre_cout: (p.centre_cout as string) || null,
+          rate: Number(p.projected_leave_rate),
+        }));
         hypTurnoverSrcName = scenarioOptions.find((s) => s.id === turnoverSrcScId)?.name ?? null;
         hypAbsSrcName = scenarioOptions.find((s) => s.id === absSrcScId)?.name ?? null;
+        hypLeaveSrcName = scenarioOptions.find((s) => s.id === leaveSrcScId)?.name ?? null;
 
         // Run the same projection loop with combined data
         const lastRealIdx = headcountData.findIndex((d) => d.is_projection) - 1;
@@ -994,7 +1036,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           const scenarioReelR = Math.max(0, Math.round(scenarioReel * 10) / 10);
           const scenarioApresMctR = Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10);
 
-          if (isProjection) {
+          if (isProjection || isCurrentMonth) {
             combinedMonths.push({
               month_index: m,
               scenario_brut: scenarioBrutR,
@@ -1017,6 +1059,37 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         }
 
         scenarioProjections.push({ scenario_id: "__combined__", months: combinedMonths });
+
+        // Compute leave (congés) pool and distribute by monthly rate
+        // 1. Collect effectif_net for all 12 months (real or projected)
+        let sumNetAnnual = 0;
+        for (let m = 1; m <= 12; m++) {
+          const projMonth = combinedMonths.find((cm) => cm.month_index === m);
+          if (projMonth) {
+            sumNetAnnual += projMonth.scenario_net;
+          } else {
+            sumNetAnnual += headcountData[m - 1]?.effectif_net ?? 0;
+          }
+        }
+        const avgNetAnnual = sumNetAnnual / 12;
+        // 2. Total leave pool in FTE-months: avgNet × 320h / 173h
+        const totalLeavePoolFte = avgNetAnnual * 320 / 173;
+        // 3. Distribute by monthly rate and inject into headcountData + combinedMonths
+        for (let m = 1; m <= 12; m++) {
+          const leaveRate = combinedLeaveRateByMonth.get(m) ?? 0;
+          const leaveFteMonth = totalLeavePoolFte * (leaveRate / 100);
+          const projMonth = combinedMonths.find((cm) => cm.month_index === m);
+          if (projMonth) {
+            projMonth.scenario_apres_conges = Math.max(0, Math.round((projMonth.scenario_apres_mct - leaveFteMonth) * 10) / 10);
+          }
+          const hd = headcountData[m - 1];
+          if (hd) {
+            const base = hd.effectif_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
+            if (base != null) {
+              hd.scenario_apres_conges = Math.max(0, Math.round((base - leaveFteMonth) * 10) / 10);
+            }
+          }
+        }
       }
     }
   }
@@ -1177,6 +1250,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         initialSelectedScenarios={selectedScenarioIds}
         initialTurnoverSrc={turnoverSrcId}
         initialAbsSrc={absSrcId}
+        initialLeaveSrc={leaveSrcId}
         combinedProjection={scenarioProjections.find((sp) => sp.scenario_id === "__combined__") ?? null}
       />
 
@@ -1214,8 +1288,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           tempExits={hypTempExits}
           turnoverRates={hypTurnoverRates}
           absRates={hypAbsRates}
+          leaveRates={hypLeaveRates}
           turnoverSrcName={hypTurnoverSrcName}
           absSrcName={hypAbsSrcName}
+          leaveSrcName={hypLeaveSrcName}
         />
       )}
 

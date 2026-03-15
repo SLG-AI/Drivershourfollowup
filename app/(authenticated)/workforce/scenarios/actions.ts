@@ -17,12 +17,19 @@ interface MonthlyTurnoverParamInput {
   centre_cout?: string | null;
 }
 
+interface MonthlyLeaveParamInput {
+  mois: number;
+  projected_leave_rate: number;
+  centre_cout?: string | null;
+}
+
 interface CreateScenarioInput {
   name: string;
   description: string;
   projected_turnover_rate: number;
   monthly_params: MonthlyParamInput[];
   monthly_turnover_params?: MonthlyTurnoverParamInput[];
+  monthly_leave_params?: MonthlyLeaveParamInput[];
 }
 
 export async function createScenario(input: CreateScenarioInput) {
@@ -73,6 +80,22 @@ export async function createScenario(input: CreateScenarioInput) {
       .insert(turnoverParams);
 
     if (tpError) throw new Error("Erreur paramètres turnover mensuels: " + tpError.message);
+  }
+
+  // Insert monthly leave params
+  if (input.monthly_leave_params && input.monthly_leave_params.length > 0) {
+    const leaveParams = input.monthly_leave_params.map((lp) => ({
+      scenario_id: scenario.id,
+      mois: lp.mois,
+      projected_leave_rate: lp.projected_leave_rate,
+      centre_cout: lp.centre_cout ?? null,
+    }));
+
+    const { error: lpError } = await supabase
+      .from("wp_scenario_monthly_leave_params")
+      .insert(leaveParams);
+
+    if (lpError) throw new Error("Erreur paramètres congés mensuels: " + lpError.message);
   }
 
   return { id: scenario.id };
@@ -135,6 +158,27 @@ export async function updateScenario(id: string, input: CreateScenarioInput) {
       .insert(turnoverParams);
 
     if (tpError) throw new Error("Erreur paramètres turnover mensuels: " + tpError.message);
+  }
+
+  // Delete and re-insert monthly leave params
+  await supabase
+    .from("wp_scenario_monthly_leave_params")
+    .delete()
+    .eq("scenario_id", id);
+
+  if (input.monthly_leave_params && input.monthly_leave_params.length > 0) {
+    const leaveParams = input.monthly_leave_params.map((lp) => ({
+      scenario_id: id,
+      mois: lp.mois,
+      projected_leave_rate: lp.projected_leave_rate,
+      centre_cout: lp.centre_cout ?? null,
+    }));
+
+    const { error: lpError } = await supabase
+      .from("wp_scenario_monthly_leave_params")
+      .insert(leaveParams);
+
+    if (lpError) throw new Error("Erreur paramètres congés mensuels: " + lpError.message);
   }
 
   revalidatePath("/", "layout");
@@ -231,6 +275,16 @@ export async function duplicateScenario(sourceId: string) {
   if (tempExits.length > 0) {
     await supabase.from("wp_scenario_temp_exit_hypotheses").insert(
       tempExits.map(({ id: _id, scenario_id: _sid, created_at: _ca, ...rest }) => ({ scenario_id: newId, ...rest }))
+    );
+  }
+
+  // Copy leave params
+  const leaveParams = await fetchAll(
+    supabase.from("wp_scenario_monthly_leave_params").select("*").eq("scenario_id", sourceId)
+  );
+  if (leaveParams.length > 0) {
+    await supabase.from("wp_scenario_monthly_leave_params").insert(
+      leaveParams.map((p) => ({ scenario_id: newId, mois: p.mois, projected_leave_rate: p.projected_leave_rate, centre_cout: p.centre_cout }))
     );
   }
 

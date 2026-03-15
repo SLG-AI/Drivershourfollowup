@@ -19,6 +19,8 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
   const [
     { data: scenario },
     { data: monthlyParams },
+    { data: monthlyTurnoverParams },
+    { data: monthlyLeaveParams },
     { data: departures },
     { data: arrivalHypotheses },
     { data: tempExitHypotheses },
@@ -29,10 +31,12 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
   ] = await Promise.all([
     supabase.from("wp_scenarios").select("*").eq("id", id).single(),
     supabase.from("wp_scenario_monthly_params").select("*").eq("scenario_id", id).order("mois"),
+    supabase.from("wp_scenario_monthly_turnover_params").select("*").eq("scenario_id", id).order("mois"),
+    supabase.from("wp_scenario_monthly_leave_params").select("*").eq("scenario_id", id).order("mois"),
     supabase.from("wp_scenario_departures").select("*").eq("scenario_id", id).order("departure_month"),
     supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", id).order("start_year, start_month"),
     supabase.from("wp_scenario_temp_exit_hypotheses").select("*").eq("scenario_id", id).order("departure_year, departure_month"),
-    fetchAll(supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe")),
+    fetchAll(supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe, description_fonction, centre_cout, description_service")),
     fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, hrs_maternite, hrs_accident, heures_theoriques")),
     fetchAll(supabase.from("wp_target_needs").select("target_headcount")),
     getDistinctEmployeeValues(),
@@ -47,7 +51,24 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
       <ScenarioEditorClient
         scenario={scenario}
         monthlyParams={monthlyParams || []}
-        departures={departures || []}
+        monthlyTurnoverParams={monthlyTurnoverParams || []}
+        monthlyLeaveParams={monthlyLeaveParams || []}
+        departureHypotheses={(departures || []).map((d: Record<string, unknown>) => ({
+          id: d.id as string,
+          scenario_id: d.scenario_id as string,
+          code_salarie: (d.code_salarie as string) || null,
+          nb_personnes: Number(d.nb_personnes) || 1,
+          taux_occupation: Number(d.taux_occupation) || 100,
+          fonction: (d.fonction as string) || null,
+          centre_cout: (d.centre_cout as string) || null,
+          depot: (d.depot as string) || null,
+          vehicle_type: (d.vehicle_type as "BUS" | "CAM") || null,
+          departure_type: (d.departure_type as string) || "turnover",
+          departure_day: Number(d.departure_day) || 1,
+          departure_month: Number(d.departure_month),
+          departure_year: Number(d.departure_year),
+          is_from_data: Boolean(d.is_from_data),
+        }))}
         arrivalHypotheses={(arrivalHypotheses || []).map((h: Record<string, unknown>) => ({
           id: h.id as string,
           scenario_id: h.scenario_id as string,
@@ -93,6 +114,9 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
           description_motif_sortie: e.description_motif_sortie || "",
           description_departement: e.description_departement || "",
           description_equipe: e.description_equipe || "",
+          description_fonction: e.description_fonction || null,
+          centre_cout: e.centre_cout || null,
+          description_service: e.description_service || null,
         }))}
         absences={(absences || []).map((a) => ({
           code_salarie: a.code_salarie,

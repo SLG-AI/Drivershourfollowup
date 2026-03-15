@@ -67,8 +67,10 @@ interface Props {
   tempExits: TempExitHypothesisItem[];
   turnoverRates: RateByMonthCC[];
   absRates: RateByMonthCC[];
+  leaveRates: RateByMonthCC[];
   turnoverSrcName: string | null;
   absSrcName: string | null;
+  leaveSrcName: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,8 +327,10 @@ export function ScenarioHypothesesCard({
   tempExits,
   turnoverRates,
   absRates,
+  leaveRates,
   turnoverSrcName,
   absSrcName,
+  leaveSrcName,
 }: Props) {
   const totalArrivals = arrivals.reduce((s, a) => s + a.nb_personnes, 0);
   const totalDepartures = departures.reduce((s, d) => s + d.nb_personnes, 0);
@@ -404,6 +408,13 @@ export function ScenarioHypothesesCard({
             color="text-pink-700"
           >
             <RatesSection rates={absRates} label="absentéisme" />
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            label={`Taux de congés${leaveSrcName ? ` (source : ${leaveSrcName})` : ""}`}
+            color="text-orange-700"
+          >
+            <RatesSection rates={leaveRates} label="congés" />
           </CollapsibleSection>
         </div>
       </CardContent>
