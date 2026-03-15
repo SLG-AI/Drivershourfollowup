@@ -114,6 +114,9 @@ export interface Employee {
   description_motif_sortie: string;
   description_departement: string;
   description_equipe: string;
+  description_fonction?: string | null;
+  centre_cout?: string | null;
+  description_service?: string | null;
 }
 
 export interface AbsenceRecord {
@@ -163,17 +166,41 @@ export interface TempExitHypothesis {
   return_year: number | null;
 }
 
+export interface DepartureHypothesis {
+  id: string;
+  scenario_id: string;
+  code_salarie: string | null;
+  nb_personnes: number;
+  taux_occupation: number;
+  fonction: string | null;
+  centre_cout: string | null;
+  depot: string | null;
+  vehicle_type: "BUS" | "CAM" | null;
+  departure_type: string;
+  departure_day: number;
+  departure_month: number;
+  departure_year: number;
+  is_from_data: boolean;
+}
+
 export interface ScenarioParams {
   turnover_rate: number; // annual %
   monthly_params: MonthlyParam[];
+  monthly_turnover_params?: MonthlyTurnoverParam[];
   known_departures: KnownDeparture[];
   arrival_hypotheses: ArrivalHypothesis[];
   temp_exit_hypotheses: TempExitHypothesis[];
+  departure_hypotheses: DepartureHypothesis[];
 }
 
 export interface MonthlyParam {
   mois: number;
   absenteeism_rate: number; // %
+}
+
+export interface MonthlyTurnoverParam {
+  mois: number;
+  turnover_rate: number; // annual %
 }
 
 export interface KnownDeparture {
@@ -252,6 +279,25 @@ export function getTempExitReturnsForMonth(
 }
 
 // ============================================================
+// Departure hypothesis helpers
+// ============================================================
+
+/** ETP of departure hypotheses for a given month (non-temp-exit types only) */
+export function getDepartureHypothesesForMonth(
+  hypotheses: DepartureHypothesis[],
+  month: number,
+  year: number
+): { etp: number; codes: Set<string> } {
+  const matching = hypotheses.filter(
+    (h) => h.departure_month === month && h.departure_year === year && !h.is_from_data
+  );
+  const etp = matching.reduce((sum, h) => sum + h.nb_personnes * (h.taux_occupation / 100), 0);
+  const codes = new Set<string>();
+  matching.forEach((h) => { if (h.code_salarie) codes.add(h.code_salarie); });
+  return { etp, codes };
+}
+
+// ============================================================
 // Projection engine
 // ============================================================
 
@@ -271,6 +317,12 @@ export function projectHeadcount(
   // Build monthly param lookup
   const monthParamMap = new Map<number, MonthlyParam>();
   scenario.monthly_params.forEach((mp) => monthParamMap.set(mp.mois, mp));
+
+  // Build monthly turnover param lookup
+  const monthTurnoverMap = new Map<number, MonthlyTurnoverParam>();
+  if (scenario.monthly_turnover_params) {
+    scenario.monthly_turnover_params.forEach((tp) => monthTurnoverMap.set(tp.mois, tp));
+  }
 
   // Build known departures by month
   const departuresByMonth = new Map<number, KnownDeparture[]>();
@@ -370,8 +422,9 @@ export function projectHeadcount(
       const knownDeps = departuresByMonth.get(m) || [];
       const knownDepartureCount = knownDeps.filter((d) => !d.departure_type.startsWith("temp_exit")).length;
 
-      // Turnover: monthly rate from annual rate
-      const monthlyTurnoverRate = scenario.turnover_rate / 100 / 12;
+      // Turnover: monthly rate from annual rate (use per-month param if available)
+      const annualTurnoverRate = monthTurnoverMap.get(m)?.turnover_rate ?? scenario.turnover_rate;
+      const monthlyTurnoverRate = annualTurnoverRate / 100 / 12;
       const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate);
 
       // Arrivals from hypotheses
@@ -400,7 +453,28 @@ export function projectHeadcount(
         return depMonth === m && depYear === year;
       }).length;
 
-      const totalDepartures = Math.max(knownDepartureCount, dataExits) + turnoverLosses + cddDepartures;
+      // Departure hypotheses for this month
+      const depHyp = getDepartureHypothesesForMonth(scenario.departure_hypotheses, m, year);
+      // Avoid double-counting: if a departure hypothesis has a code_salarie matching a dataExit, don't count it twice
+      let adjustedDataExits = dataExits;
+      if (depHyp.codes.size > 0) {
+        const dataExitCodes = employees.filter((e) => {
+          if (!e.date_sortie || e.est_sortie_temporaire) return false;
+          const d = new Date(e.date_sortie);
+          let depMonth = d.getMonth() + 1;
+          let depYear = d.getFullYear();
+          const ldm2 = lastDayOfMonth(depYear, depMonth);
+          if (e.date_sortie === ldm2) {
+            depMonth += 1;
+            if (depMonth > 12) { depMonth = 1; depYear += 1; }
+          }
+          return depMonth === m && depYear === year;
+        });
+        const overlapping = dataExitCodes.filter((e) => depHyp.codes.has(e.code_salarie)).length;
+        adjustedDataExits = Math.max(0, dataExits - overlapping);
+      }
+
+      const totalDepartures = Math.max(knownDepartureCount, adjustedDataExits) + turnoverLosses + cddDepartures + depHyp.etp;
 
       runningBrut = runningBrut - totalDepartures + arrivals + returnCount;
       runningBrut = Math.max(0, runningBrut);

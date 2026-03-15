@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 interface TargetInput {
   vehicle_type: string;
   depot: string;
+  centre_cout: string;
   work_time: string;
   target_headcount: number;
   target_etp: number | null;
@@ -26,8 +27,9 @@ export async function upsertTargets(targets: TargetInput[]) {
   const rows = targets
     .filter((t) => t.target_headcount > 0)
     .map((t) => ({
-      vehicle_type: t.vehicle_type,
+      vehicle_type: t.vehicle_type || "",
       depot: t.depot || "",
+      centre_cout: t.centre_cout || "",
       work_time: t.work_time,
       target_headcount: t.target_headcount,
       target_etp: t.target_etp,

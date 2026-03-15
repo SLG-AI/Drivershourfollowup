@@ -72,11 +72,11 @@ const ALL_SERIES: SeriesDef[] = [
   { key: "effectif_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true },
   { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées", color: "hsl(45, 93%, 47%)" },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
-  { key: "scenario_brut", label: "Scénario — sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
-  { key: "scenario_net", label: "Scénario — net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
-  { key: "scenario_reel", label: "Scénario — réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
-  { key: "scenario_apres_mct", label: "Scénario — après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true },
-  { key: "scenario_apres_conges", label: "Effectif disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true },
+  { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
+  { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
+  { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
+  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true },
+  { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true },
 ];
 
 interface Props {

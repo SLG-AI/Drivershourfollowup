@@ -15,6 +15,7 @@ import { toast } from "sonner";
 interface TargetRow {
   vehicle_type: string;
   depot: string;
+  centre_cout: string;
   work_time: string;
   target_headcount: number;
   target_etp: number | null;
@@ -23,6 +24,7 @@ interface TargetRow {
 interface CurrentCount {
   vehicle_type: string;
   depot: string;
+  centre_cout: string;
   work_time: string;
   headcount: number;
   etp: number;
@@ -31,6 +33,7 @@ interface CurrentCount {
 interface Props {
   initialTargets: TargetRow[];
   depots: string[];
+  centres_cout: string[];
   currentCounts: CurrentCount[];
 }
 
@@ -39,22 +42,22 @@ const WORK_TIME_LABELS: Record<string, string> = {
   part_time: "Temps partiel",
 };
 
-export function TargetsClient({ initialTargets, depots, currentCounts }: Props) {
+export function TargetsClient({ initialTargets, depots, centres_cout, currentCounts }: Props) {
   const router = useRouter();
   const [targets, setTargets] = useState<TargetRow[]>(
     initialTargets.length > 0
       ? initialTargets
       : [
-          { vehicle_type: "BUS", depot: "", work_time: "full_time", target_headcount: 0, target_etp: null },
-          { vehicle_type: "BUS", depot: "", work_time: "part_time", target_headcount: 0, target_etp: null },
-          { vehicle_type: "CAM", depot: "", work_time: "full_time", target_headcount: 0, target_etp: null },
-          { vehicle_type: "CAM", depot: "", work_time: "part_time", target_headcount: 0, target_etp: null },
+          { vehicle_type: "", depot: "", centre_cout: "", work_time: "100", target_headcount: 0, target_etp: null },
+          { vehicle_type: "", depot: "", centre_cout: "", work_time: "100", target_headcount: 0, target_etp: null },
+          { vehicle_type: "", depot: "", centre_cout: "", work_time: "100", target_headcount: 0, target_etp: null },
+          { vehicle_type: "", depot: "", centre_cout: "", work_time: "100", target_headcount: 0, target_etp: null },
         ]
   );
   const [saving, setSaving] = useState(false);
 
   const addRow = () => {
-    setTargets([...targets, { vehicle_type: "BUS", depot: "", work_time: "full_time", target_headcount: 0, target_etp: null }]);
+    setTargets([...targets, { vehicle_type: "", depot: "", centre_cout: "", work_time: "100", target_headcount: 0, target_etp: null }]);
   };
 
   const removeRow = (index: number) => {
@@ -79,15 +82,14 @@ export function TargetsClient({ initialTargets, depots, currentCounts }: Props) 
   };
 
   // Compute gap for each target row
-  const getCurrentCount = (vt: string, depot: string, wt: string) => {
-    return currentCounts
+  const getCurrentEtp = (cc: string, depot: string) => {
+    return Math.round(currentCounts
       .filter((c) => {
-        if (c.vehicle_type !== vt) return false;
+        if (cc && c.centre_cout !== cc) return false;
         if (depot && c.depot !== depot) return false;
-        if (!depot) return true; // global target: sum all depots
-        return c.work_time === wt;
+        return true;
       })
-      .reduce((sum, c) => sum + c.headcount, 0);
+      .reduce((sum, c) => sum + c.etp, 0) * 10) / 10;
   };
 
   // Summary
@@ -97,10 +99,10 @@ export function TargetsClient({ initialTargets, depots, currentCounts }: Props) 
     const counted = new Set<string>();
     let total = 0;
     targets.forEach((t) => {
-      const key = `${t.vehicle_type}|${t.depot}|${t.work_time}`;
+      const key = `${t.centre_cout}|${t.depot}`;
       if (!counted.has(key)) {
         counted.add(key);
-        total += getCurrentCount(t.vehicle_type, t.depot, t.work_time);
+        total += getCurrentEtp(t.centre_cout, t.depot);
       }
     });
     return total;
@@ -181,9 +183,9 @@ export function TargetsClient({ initialTargets, depots, currentCounts }: Props) 
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="text-xs">Type véhicule</TableHead>
+                <TableHead className="text-xs">Cost center</TableHead>
                 <TableHead className="text-xs">Dépôt</TableHead>
-                <TableHead className="text-xs">Temps de travail</TableHead>
+                <TableHead className="text-xs">Taux occupation (%)</TableHead>
                 <TableHead className="text-xs">Cible effectif</TableHead>
                 <TableHead className="text-xs">Actuel</TableHead>
                 <TableHead className="text-xs">Gap</TableHead>
@@ -192,21 +194,23 @@ export function TargetsClient({ initialTargets, depots, currentCounts }: Props) 
             </TableHeader>
             <TableBody>
               {targets.map((t, index) => {
-                const current = getCurrentCount(t.vehicle_type, t.depot, t.work_time);
+                const current = getCurrentEtp(t.centre_cout, t.depot);
                 const gap = current - t.target_headcount;
                 return (
                   <TableRow key={index}>
                     <TableCell>
                       <Select
-                        value={t.vehicle_type}
-                        onValueChange={(v) => updateRow(index, "vehicle_type", v)}
+                        value={t.centre_cout || "__all__"}
+                        onValueChange={(v) => updateRow(index, "centre_cout", v === "__all__" ? "" : v)}
                       >
-                        <SelectTrigger className="w-[100px] h-8 text-sm">
+                        <SelectTrigger className="w-[160px] h-8 text-sm">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="BUS">BUS</SelectItem>
-                          <SelectItem value="CAM">CAM</SelectItem>
+                        <SelectContent className="max-h-[300px] overflow-y-auto">
+                          <SelectItem value="__all__">Tous</SelectItem>
+                          {centres_cout.map((cc) => (
+                            <SelectItem key={cc} value={cc}>{cc}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </TableCell>
@@ -218,7 +222,7 @@ export function TargetsClient({ initialTargets, depots, currentCounts }: Props) 
                         <SelectTrigger className="w-[200px] h-8 text-sm">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="max-h-[300px] overflow-y-auto">
                           <SelectItem value="__all__">Tous les dépôts</SelectItem>
                           {depots.map((d) => (
                             <SelectItem key={d} value={d}>
@@ -229,18 +233,20 @@ export function TargetsClient({ initialTargets, depots, currentCounts }: Props) 
                       </Select>
                     </TableCell>
                     <TableCell>
-                      <Select
-                        value={t.work_time}
-                        onValueChange={(v) => updateRow(index, "work_time", v)}
-                      >
-                        <SelectTrigger className="w-[140px] h-8 text-sm">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="full_time">Temps plein</SelectItem>
-                          <SelectItem value="part_time">Temps partiel</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number"
+                          value={t.work_time === "full_time" ? 100 : t.work_time === "part_time" ? 50 : parseInt(t.work_time) || 100}
+                          onChange={(e) => {
+                            const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
+                            updateRow(index, "work_time", String(val));
+                          }}
+                          className="w-20 h-8 text-sm"
+                          min="0"
+                          max="100"
+                        />
+                        <span className="text-xs text-muted-foreground">%</span>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Input
