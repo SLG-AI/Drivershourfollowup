@@ -1033,10 +1033,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const totalMctHrsSelected = selectedMonthMct.reduce(
     (sum, a) => sum + Number(a.duree_hrs || 0), 0
   );
-  // Taux MCT = uniquement basé sur les données réelles (pas de projection scénario ici)
+  // Taux MCT: si pas de données pour le mois sélectionné, utiliser le dernier taux MCT connu
   const tauxMct = (selectedMonthMct.length > 0 && totalAdjustedWorkableHrs > 0)
     ? (totalMctHrsSelected / totalAdjustedWorkableHrs) * 100
-    : 0;
+    : (lastKnownMctRate ?? 0);
 
   // Taux absences injustifiées = total heures injustifiées / total heures travaillables ajustées
   const totalInjHrsSelected = selectedMonthInjustifiees.reduce(
