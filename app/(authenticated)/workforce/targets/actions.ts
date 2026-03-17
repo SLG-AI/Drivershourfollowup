@@ -256,17 +256,15 @@ export async function computeProjectionByDepot(input: {
     return (e.date_fin_sortie_temporaire as string) >= date;
   }
 
+  // Import helpers
+  const { getArrivalsForMonth, getCddDeparturesForMonth, getTempExitDeparturesForMonth, getTempExitReturnsForMonth } = await import("@/lib/utils/wp-calculations");
+  type ArrivalHyp = { id: string; scenario_id: string; nb_personnes: number; taux_occupation: number; fonction: string | null; centre_cout: string | null; depot: string | null; type_contrat: "CDI" | "CDD"; vehicle_type: "BUS" | "CAM" | null; start_day: number; start_month: number; start_year: number; end_day: number | null; end_month: number | null; end_year: number | null };
+  type TempExitHyp = { id: string; scenario_id: string; nb_personnes: number; taux_occupation: number; fonction: string | null; centre_cout: string | null; depot: string | null; vehicle_type: "BUS" | "CAM" | null; motif: string; departure_day: number; departure_month: number; departure_year: number; return_day: number | null; return_month: number | null; return_year: number | null };
+
   // Source scenario rates
   const turnoverSrcScId = turnoverSrcId && scenarioIds.includes(turnoverSrcId) ? turnoverSrcId : scenarioIds[0];
   const absSrcScId = absSrcId && scenarioIds.includes(absSrcId) ? absSrcId : scenarioIds[0];
   const leaveSrcScId = leaveSrcId && scenarioIds.includes(leaveSrcId) ? leaveSrcId : scenarioIds[0];
-
-  // Absenteeism rates by month (global)
-  const absSrcParams = scenarioParams.filter((p) => p.scenario_id === absSrcScId);
-  const absGlobalByMonth = new Map<number, number>();
-  absSrcParams.forEach((p) => {
-    if (!p.centre_cout) absGlobalByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate));
-  });
 
   // Turnover rates
   const turnoverDetail = scenarioDetails.find((s) => s.id === turnoverSrcScId);
@@ -277,25 +275,64 @@ export async function computeProjectionByDepot(input: {
     if (!p.centre_cout) turnoverGlobalByMonth.set(Number(p.mois), Number(p.projected_turnover_rate));
   });
 
-  // Leave rates by month
+  // Absenteeism rates (for MCT)
+  const absSrcParams = scenarioParams.filter((p) => p.scenario_id === absSrcScId);
+  const absGlobalByMonth = new Map<number, number>();
+  absSrcParams.forEach((p) => {
+    if (!p.centre_cout) absGlobalByMonth.set(Number(p.mois), Number(p.projected_absenteeism_rate));
+  });
+
+  // Leave rates
   const leaveSrcParams = scenarioLeaveParams.filter((p) => p.scenario_id === leaveSrcScId);
   const leaveGlobalByMonth = new Map<number, number>();
   leaveSrcParams.forEach((p) => {
     if (!p.centre_cout) leaveGlobalByMonth.set(Number(p.mois), Number(p.projected_leave_rate));
   });
 
-  // Get all depots
-  const allDepots = new Set<string>();
-  dedupEmployees.forEach((e) => {
-    const depot = (e.description_service as string) || "Non assigné";
-    allDepots.add(depot);
-  });
+  // Combine all scenario hypotheses
+  const combinedArrivals: ArrivalHyp[] = [];
+  const combinedTempExits: TempExitHyp[] = [];
+  const combinedDepCountByMonth = new Map<number, number>();
+  const combinedReturnCountByMonth = new Map<number, number>();
 
-  // Last known CNS and MCT rates
+  for (const scId of scenarioIds) {
+    const scArrivals = scenarioArrivals.filter((a) => a.scenario_id === scId) as unknown as ArrivalHyp[];
+    combinedArrivals.push(...scArrivals);
+
+    const scDepartures = scenarioDepartures.filter((d) => d.scenario_id === scId);
+    scDepartures
+      .filter((d) => Number(d.departure_year) === year && !String(d.departure_type || "").startsWith("temp_exit"))
+      .forEach((d) => {
+        const m = Number(d.departure_month);
+        const nb = Number(d.nb_personnes) || 1;
+        const taux = Number(d.taux_occupation) || 100;
+        const etp = nb * taux / 100;
+        combinedDepCountByMonth.set(m, (combinedDepCountByMonth.get(m) || 0) + etp);
+      });
+
+    scDepartures
+      .filter((d) => Number(d.return_year) === year && d.return_month)
+      .forEach((d) => {
+        const m = Number(d.return_month);
+        combinedReturnCountByMonth.set(m, (combinedReturnCountByMonth.get(m) || 0) + 1);
+      });
+
+    const scTempExits = scenarioTempExits.filter((t) => t.scenario_id === scId).map((t) => ({
+      id: t.id as string, scenario_id: t.scenario_id as string,
+      nb_personnes: Number(t.nb_personnes), taux_occupation: Number(t.taux_occupation),
+      fonction: (t.fonction as string) || null, centre_cout: (t.centre_cout as string) || null,
+      depot: (t.depot as string) || null, vehicle_type: (t.vehicle_type as "BUS" | "CAM") || null,
+      motif: (t.motif as string) || "Congé parental",
+      departure_day: Number(t.departure_day) || 1, departure_month: Number(t.departure_month), departure_year: Number(t.departure_year),
+      return_day: t.return_day ? Number(t.return_day) : null, return_month: t.return_month ? Number(t.return_month) : null, return_year: t.return_year ? Number(t.return_year) : null,
+    })) as TempExitHyp[];
+    combinedTempExits.push(...scTempExits);
+  }
+
+  // Last known CNS and MCT rates (from real data)
   let lastKnownCnsRate = 0;
   let lastKnownMctRate = 0;
 
-  // Compute rates from real data
   for (let m = 1; m <= 12; m++) {
     const isReal = year < currentYear || (year === currentYear && m <= currentMonth);
     if (!isReal) break;
@@ -318,74 +355,133 @@ export async function computeProjectionByDepot(input: {
     const monthMct = absencesMct.filter((a) => Number(a.mois) === m && Number(a.annee) === year);
     if (monthMct.length > 0) {
       const totalMctHrs = monthMct.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
-      const workableHrs = 173; // approximation
+      const workableHrs = 173;
       const ftePerdus = totalMctHrs / workableHrs;
       const reelEtp = netEtp - (netEtp * lastKnownCnsRate / 100);
       if (reelEtp > 0) lastKnownMctRate = (ftePerdus / reelEtp) * 100;
     }
   }
 
-  // Debug: log totals
-  const jan31 = lastDayOfMonth(year, 1);
-  const allActiveJan = getActiveAt(jan31);
-  const totalEtpJan = allActiveJan.reduce((sum, e) => sum + getEtp(e), 0);
+  // ============================================================
+  // Step 1: Run AGGREGATE projection (same as dashboard)
+  // ============================================================
+
+  const lastRealMonth = year < currentYear ? 12 : Math.min(currentMonth, 12);
+  const lastMonthEnd = lastDayOfMonth(year, lastRealMonth);
+  const activeAtLastReal = getActiveAt(lastMonthEnd);
+  let runningBrut = activeAtLastReal.reduce((sum, e) => sum + getEtp(e), 0);
+  let cumulTempExitHyp = 0;
+
+  // Store aggregate "après congés" per month
+  const aggregateByMonth = new Map<number, number>();
+  const monthlyNetForPool: number[] = [];
+
+  for (let m = 1; m <= 12; m++) {
+    const monthEnd = lastDayOfMonth(year, m);
+    const isProjection = year > currentYear || (year === currentYear && m > currentMonth);
+
+    let brutEtp: number;
+    let tempExitsEtp: number;
+
+    if (!isProjection) {
+      const activeAtMonth = getActiveAt(monthEnd);
+      brutEtp = activeAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
+      tempExitsEtp = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd)).reduce((sum, e) => sum + getEtp(e), 0);
+    } else {
+      const effectiveTurnoverRate = turnoverGlobalByMonth.get(m) ?? turnoverFallback;
+      const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
+      const turnoverLosses = runningBrut * monthlyTurnoverRate;
+
+      const knownDeps = combinedDepCountByMonth.get(m) || 0;
+      const dataExits = dedupEmployees.filter((e) => {
+        if (!e.date_sortie || e.est_sortie_temporaire) return false;
+        const d = new Date(e.date_sortie as string);
+        let depMonth = d.getMonth() + 1;
+        let depYear = d.getFullYear();
+        const ldm = lastDayOfMonth(depYear, depMonth);
+        if ((e.date_sortie as string) === ldm) { depMonth += 1; if (depMonth > 12) { depMonth = 1; depYear += 1; } }
+        return depMonth === m && depYear === year;
+      }).reduce((sum, e) => sum + getEtp(e), 0);
+
+      const dataArrivals = dedupEmployees.filter((e) => {
+        if (!e.date_entree) return false;
+        const d = new Date(e.date_entree as string);
+        return d.getMonth() + 1 === m && d.getFullYear() === year;
+      }).reduce((sum, e) => sum + getEtp(e), 0);
+
+      const scArrivals = getArrivalsForMonth(combinedArrivals, m, year);
+      const cddDepartures = getCddDeparturesForMonth(combinedArrivals, m, year);
+      const returns = combinedReturnCountByMonth.get(m) || 0;
+
+      const totalDepartures = Math.max(knownDeps, dataExits) + turnoverLosses + cddDepartures;
+      const totalArrivalsM = scArrivals + dataArrivals;
+      runningBrut = Math.max(0, runningBrut - totalDepartures + totalArrivalsM + returns);
+      brutEtp = runningBrut;
+
+      const dataTempExitsEtp = getActiveAt(monthEnd)
+        .filter((e) => isTempExitAt(e, monthEnd))
+        .reduce((sum, e) => sum + getEtp(e), 0);
+      const tempExitHypDep = getTempExitDeparturesForMonth(combinedTempExits, m, year);
+      const tempExitHypRet = getTempExitReturnsForMonth(combinedTempExits, m, year);
+      cumulTempExitHyp = Math.max(0, cumulTempExitHyp + tempExitHypDep - tempExitHypRet);
+      tempExitsEtp = dataTempExitsEtp + cumulTempExitHyp;
+    }
+
+    const netEtp = Math.max(0, brutEtp - tempExitsEtp);
+    monthlyNetForPool.push(netEtp);
+
+    const cnsRate = lastKnownCnsRate;
+    const reelEtp = netEtp - (netEtp * cnsRate / 100);
+    const mctRate = absGlobalByMonth.get(m) ?? lastKnownMctRate;
+    const afterMctEtp = reelEtp - (netEtp * mctRate / 100);
+
+    aggregateByMonth.set(m, Math.max(0, afterMctEtp));
+  }
+
+  // Apply leave pool on aggregate
+  const avgNet = monthlyNetForPool.reduce((s, v) => s + v, 0) / 12;
+  const leavePool = avgNet * 320 / 173;
+  for (let m = 1; m <= 12; m++) {
+    const leaveRate = leaveGlobalByMonth.get(m) ?? 0;
+    const leaveFte = leavePool * (leaveRate / 100);
+    aggregateByMonth.set(m, Math.max(0, (aggregateByMonth.get(m) ?? 0) - leaveFte));
+  }
+
+  // ============================================================
+  // Step 2: Distribute aggregate to depots proportionally
+  // ============================================================
+
+  const allDepots = new Set<string>();
+  dedupEmployees.forEach((e) => {
+    allDepots.add((e.description_service as string) || "Non assigné");
+  });
 
   const results: { depot: string; mois: number; etp: number }[] = [];
 
-  for (const depot of allDepots) {
-    const depotEmployees = dedupEmployees.filter((e) => ((e.description_service as string) || "Non assigné") === depot);
+  for (let m = 1; m <= 12; m++) {
+    const monthEnd = lastDayOfMonth(year, m);
+    const activeAtMonth = getActiveAt(monthEnd);
 
-    // Compute avg net for leave pool
-    let sumNetForPool = 0;
-
-    for (let m = 1; m <= 12; m++) {
-      const monthEnd = lastDayOfMonth(year, m);
-      const isProjection = year > currentYear || (year === currentYear && m > currentMonth);
-
-      const activeAtMonth = depotEmployees.filter((e) => {
-        if (!e.date_entree || (e.date_entree as string) > monthEnd) return false;
-        if (!e.date_sortie) return true;
-        if ((e.date_sortie as string) >= monthEnd) return true;
-        if (e.est_sortie_temporaire && e.date_fin_sortie_temporaire && (e.date_fin_sortie_temporaire as string) >= monthEnd) return true;
-        return false;
-      });
-
-      const brutEtp = activeAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
-      const tempExitEtp = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd)).reduce((sum, e) => sum + getEtp(e), 0);
-      let netEtp = brutEtp - tempExitEtp;
-
-      // For projected months, apply turnover
-      if (isProjection) {
-        const turnoverRate = turnoverGlobalByMonth.get(m) ?? turnoverFallback;
-        const monthlyLoss = netEtp * (turnoverRate / 100 / 12);
-        netEtp = Math.max(0, netEtp - monthlyLoss);
-      }
-
-      sumNetForPool += netEtp;
-
-      // Apply CNS rate
-      const cnsRate = lastKnownCnsRate;
-      const reelEtp = netEtp - (netEtp * cnsRate / 100);
-
-      // Apply MCT rate
-      const mctRate = absGlobalByMonth.get(m) ?? lastKnownMctRate;
-      const afterMctEtp = reelEtp - (netEtp * mctRate / 100);
-
-      // Store net for leave pool computation (will apply leave after)
-      results.push({ depot, mois: m, etp: Math.max(0, Math.round(afterMctEtp * 10) / 10) });
+    // Compute each depot's share of workforce at this month
+    const depotEtp = new Map<string, number>();
+    let totalEtp = 0;
+    for (const depot of allDepots) {
+      const etp = activeAtMonth
+        .filter((e) => ((e.description_service as string) || "Non assigné") === depot)
+        .reduce((sum, e) => sum + getEtp(e), 0);
+      depotEtp.set(depot, etp);
+      totalEtp += etp;
     }
 
-    // Apply leave pool distribution
-    const avgNet = sumNetForPool / 12;
-    const leavePool = avgNet * 320 / 173;
+    const aggregateValue = aggregateByMonth.get(m) ?? 0;
 
-    for (let m = 1; m <= 12; m++) {
-      const leaveRate = leaveGlobalByMonth.get(m) ?? 0;
-      const leaveFte = leavePool * (leaveRate / 100);
-      const entry = results.find((r) => r.depot === depot && r.mois === m);
-      if (entry) {
-        entry.etp = Math.max(0, Math.round((entry.etp - leaveFte) * 10) / 10);
-      }
+    for (const depot of allDepots) {
+      const share = totalEtp > 0 ? (depotEtp.get(depot) ?? 0) / totalEtp : 0;
+      results.push({
+        depot,
+        mois: m,
+        etp: Math.max(0, Math.round(aggregateValue * share * 10) / 10),
+      });
     }
   }
 
