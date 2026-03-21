@@ -1072,8 +1072,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           }
         }
         const avgNetAnnual = sumNetAnnual / 12;
-        // 2. Total leave pool in FTE-months: avgNet × 320h / 173h
-        const totalLeavePoolFte = avgNetAnnual * 320 / 173;
+        // 2. Total leave pool in FTE-months: avgNet × 240h / 173h
+        const totalLeavePoolFte = avgNetAnnual * 240 / 173;
         // 3. Distribute by monthly rate and inject into headcountData + combinedMonths
         for (let m = 1; m <= 12; m++) {
           const leaveRate = combinedLeaveRateByMonth.get(m) ?? 0;
