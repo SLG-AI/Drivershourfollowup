@@ -76,4 +76,33 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     "", `**${ok.length}** en place · **${todo.length}** à mettre en place · **${confirm.length}** à confirmer.`].join("\n");
   try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + "\n"); } catch {}
 }
+// Rapport HTML autonome (généré en CI en fin de dev → artifact téléchargeable ;
+// en local seulement avec --report, pour ne pas encombrer l'arbre de travail).
+if (process.env.GITHUB_ACTIONS || process.argv.includes("--report")) {
+  try {
+    const date = new Date().toISOString().slice(0, 10);
+    const esc = (s) => String(s).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+    const sec = (title, arr, sym, col) => arr.length
+      ? `<h2 style="color:${col}">${sym} ${title} <span class="n">${arr.length}</span></h2><table>${arr.map((x) => `<tr><td class="l">${esc(x.label)}</td><td class="m">${esc(x.msg)}</td></tr>`).join("")}</table>` : "";
+    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rapport RGPD — ${esc(cfg.appName || path.basename(repo))}</title>
+<style>:root{--ink:#182231;--mut:#5a6675;--line:#e2e7ef;--ok:#1f7a54;--todo:#a56a10;--confirm:#227a8c}
+body{font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--ink);max-width:820px;margin:32px auto;padding:0 18px;background:#f7f9fb}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px 26px}
+h1{font-size:25px;margin:0 0 4px}.sub{color:var(--mut);margin:0 0 6px}.meta{color:#8592a2;font-size:13px;font-family:ui-monospace,Menlo,monospace}
+.note{background:#fbf1de;border:1px solid #efd9ab;color:#6f4d10;border-radius:8px;padding:10px 14px;font-size:13px;margin:16px 0}
+h2{font-size:16px;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}.n{font-size:12px;color:#8592a2;font-weight:400}
+table{width:100%;border-collapse:collapse}td{padding:7px 4px;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px}
+td.l{font-weight:600;width:38%}td.m{color:var(--mut)}.sum{margin-top:18px;font-weight:600}
+footer{color:#8592a2;font-size:12px;margin-top:20px;text-align:center}</style></head>
+<body><div class="card"><h1>Rapport RGPD — ${esc(cfg.appName || path.basename(repo))}</h1>
+<p class="sub">Scan de préparation — informatif</p><p class="meta">${date} · généré automatiquement (rgpd-scan)</p>
+<div class="note"><b>Portée.</b> Scan technique + faits déclarés. Pas un avis juridique ni une certification. Les points « à confirmer » relèvent du DPO.</div>
+${sec("En place", ok, "✓", "var(--ok)")}${sec("À mettre en place", todo, "○", "var(--todo)")}${sec("À confirmer / déclarer", confirm, "?", "var(--confirm)")}
+<p class="sum">${ok.length} en place · ${todo.length} à mettre en place · ${confirm.length} à confirmer</p>
+<footer>Document DPO complet : outil rgpd-audit · ${esc(cfg.appName || path.basename(repo))} · ${date}</footer></div></body></html>`;
+    fs.writeFileSync(path.join(repo, "rgpd-report.html"), html);
+    console.log("  Rapport écrit : rgpd-report.html");
+  } catch {}
+}
+
 process.exit(0); // ne bloque jamais
