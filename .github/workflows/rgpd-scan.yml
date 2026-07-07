@@ -1,0 +1,19 @@
+name: Scan RGPD (informatif)
+# Informe le développeur de ce qui reste à mettre en place pour le RGPD.
+# NE BLOQUE JAMAIS le build : le résumé apparaît dans l'onglet Actions de la PR.
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  rgpd-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Scan RGPD
+        run: node rgpd-scan.cjs   # exit 0 garanti — informatif
