@@ -83,7 +83,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
-    fetchAll(supabase.from("wp_absences_injustifiees").select("*").eq("annee", selectedYear)).then(r => { console.log("[DEBUG] absences_injustifiees for year", selectedYear, "count:", r.length, "sample:", r.slice(0, 2)); return r; }),
+    fetchAll(supabase.from("wp_absences_injustifiees").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_target_needs").select("*")),
     fetchAll(supabase.from("wp_scenarios").select("id, is_default").order("is_default", { ascending: false }).order("updated_at", { ascending: false })),
     fetchAll(supabase.from("wp_scenarios").select("id, name").order("created_at", { ascending: false })),
@@ -194,21 +194,16 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Active = date_entree <= date (or null = unknown start, count them)
   //          AND (date_sortie IS NULL OR date_sortie >= date)
   // ============================================================
-  const DEBUG_CODES = new Set(["SLA 1526", "SLA 2015", "SLA R0019"]);
   function getActiveEmployeesAt(date: string) {
     return allEmployees.filter((e) => {
-      const isDebug = DEBUG_CODES.has(e.code_salarie);
       // If date_entree exists and is after the reference date, not yet hired
       if (e.date_entree && e.date_entree > date) return false;
       // If date_sortie exists and is before the reference date, already left
       // UNLESS the employee has an active temporary exit (e.g. maternity) that extends beyond
       if (e.date_sortie && e.date_sortie < date) {
-        if (isDebug) console.log(`[DEBUG] ${e.code_salarie}: date_sortie=${e.date_sortie} < ${date}, est_sortie_temporaire=${e.est_sortie_temporaire}, date_fin_sortie_temporaire=${e.date_fin_sortie_temporaire}`);
         if (e.est_sortie_temporaire) {
-          if (isDebug) console.log(`[DEBUG] ${e.code_salarie}: RECOVERED ✓`);
           return true; // Temporary exit — keep in system (will return)
         }
-        if (isDebug) console.log(`[DEBUG] ${e.code_salarie}: EXCLUDED ✗`);
         return false;
       }
       return true;
@@ -1118,8 +1113,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const tauxInjustifiees = totalAdjustedWorkableHrs > 0
     ? (totalInjHrsSelected / totalAdjustedWorkableHrs) * 100
     : 0;
-  console.log("[DEBUG] injustifiees:", { allCount: allAbsencesInjustifiees.length, selectedMonthCount: selectedMonthInjustifiees.length, totalInjHrsSelected, totalAdjustedWorkableHrs, tauxInjustifiees, selectedMonth });
-
   // Taux de turnover annuel = départs définitifs / effectif moyen sous contrat projeté sur l'année
   const yearStart = `${selectedYear}-01-01`;
   const departsDefinitifs = allEmployees.filter(

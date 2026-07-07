@@ -396,17 +396,13 @@ export async function deleteArrivalHypothesis(id: string) {
     .eq("id", id)
     .single();
 
-  console.log("[DELETE arrival] user:", user.id, "target id:", id, "found:", !!before, "scenario_id:", before?.scenario_id);
-
   if (!before) throw new Error("Hypothèse introuvable ou accès refusé");
 
-  const { error, count } = await supabase
+  const { error } = await supabase
     .from("wp_scenario_arrival_hypotheses")
     .delete()
     .eq("id", id)
     .select();
-
-  console.log("[DELETE arrival] error:", error, "count:", count);
 
   if (error) throw new Error("Erreur suppression hypothèse: " + error.message);
 
@@ -416,8 +412,6 @@ export async function deleteArrivalHypothesis(id: string) {
     .select("id")
     .eq("id", id)
     .single();
-
-  console.log("[DELETE arrival] still exists after delete:", !!after);
 
   if (after) throw new Error("La suppression a échoué silencieusement - la ligne existe toujours");
 
