@@ -1,0 +1,9 @@
+{
+  "_comment": "Déclarez ici les faits que le code ne peut pas prouver (compte/juridique). null/false/[] = NON confirmé → 'à confirmer'. Ne remplissez que ce qui est réellement en place.",
+  "appName": "Drivershourfollowup",
+  "jurisdiction": "Luxembourg",
+  "pseudonymised": false,
+  "dataResidency": { "compute": null, "storage": null, "storageRegion": null, "storageEu": false, "sources": [] },
+  "account": { "backups": null, "networkRestrictions": false, "mfaEnforced": false, "connectionLogging": false },
+  "legal": { "dpaSigned": [], "legalBasis": null, "dpiaReference": null, "ropaReference": null, "privacyNoticeUrl": null, "rightsProcess": null, "retentionPolicy": null, "dpo": null, "breachProcedure": null }
+}
