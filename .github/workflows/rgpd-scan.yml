@@ -16,4 +16,10 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
       - name: Scan RGPD
-        run: node rgpd-scan.cjs   # exit 0 garanti — informatif
+        run: node rgpd-scan.cjs   # exit 0 garanti — informatif ; écrit rgpd-report.html en CI
+      - name: Rapport RGPD (téléchargeable — fin de dev sur main)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-rgpd
+          path: rgpd-report.html
+          if-no-files-found: warn
