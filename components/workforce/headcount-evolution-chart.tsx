@@ -30,6 +30,7 @@ export interface HeadcountDataPoint {
   effectif_apres_mct?: number;
   projected_apres_mct?: number;
   effectif_apres_injustifiees?: number;
+  projected_apres_injustifiees?: number;
   is_projection: boolean;
   target?: number;
   scenario_brut?: number;
@@ -204,10 +205,14 @@ export function HeadcountEvolutionChart({
   const lastMctRealMonth = data.reduce((last, d, i) => d.effectif_apres_mct != null ? i + 1 : last, 0);
 
   const chartData = data.map((d, idx) => {
-    // Merge projected_apres_mct into effectif_apres_mct for a single continuous line
-    const merged = d.projected_apres_mct != null && d.effectif_apres_mct == null
-      ? { ...d, effectif_apres_mct: d.projected_apres_mct }
-      : d;
+    // Merge projected_* into effectif_* for a single continuous line
+    let merged = d;
+    if (d.projected_apres_mct != null && d.effectif_apres_mct == null) {
+      merged = { ...merged, effectif_apres_mct: d.projected_apres_mct };
+    }
+    if (d.projected_apres_injustifiees != null && d.effectif_apres_injustifiees == null) {
+      merged = { ...merged, effectif_apres_injustifiees: d.projected_apres_injustifiees };
+    }
     if (!showScenario || !selectedProjection) return merged;
     const monthIndex = idx + 1;
 

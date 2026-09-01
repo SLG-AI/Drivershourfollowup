@@ -12,6 +12,10 @@ export interface WpDashboardStats {
   taux_absenteisme: number;
   taux_mct: number;
   taux_injustifiees: number;
+  /** Mois d'origine du taux lorsqu'il est repris faute de données sur le mois affiché (null = mesuré). */
+  taux_absenteisme_estime?: string | null;
+  taux_mct_estime?: string | null;
+  taux_injustifiees_estime?: string | null;
   etp_total: number;
   departs_prevus: number;
   taux_turnover_annuel: number;
@@ -54,6 +58,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux de couverture CNS",
       value: `${stats.taux_absenteisme.toFixed(1)}%`,
       description: "(effectif net - effectif réel) / effectif net",
+      note: stats.taux_absenteisme_estime ? `Estimé — repris de ${stats.taux_absenteisme_estime}` : null,
       icon: Activity,
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
       iconBg: stats.taux_absenteisme > 8 ? "bg-red-50" : stats.taux_absenteisme > 5 ? "bg-amber-50" : "bg-emerald-50",
@@ -62,6 +67,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux de maladies non prises en charge",
       value: `${stats.taux_mct.toFixed(1)}%`,
       description: "heures MCT / heures travaillables ajustées",
+      note: stats.taux_mct_estime ? `Estimé — repris de ${stats.taux_mct_estime}` : null,
       icon: Thermometer,
       iconColor: "text-pink-600",
       iconBg: "bg-pink-50",
@@ -70,6 +76,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux absences injustifiées",
       value: `${stats.taux_injustifiees.toFixed(1)}%`,
       description: "heures injustifiées / heures travaillables ajustées",
+      note: stats.taux_injustifiees_estime ? `Estimé — repris de ${stats.taux_injustifiees_estime}` : null,
       icon: AlertTriangle,
       iconColor: "text-yellow-600",
       iconBg: "bg-yellow-50",
@@ -78,6 +85,9 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux d'absentéisme global",
       value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
       description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
+      note: (stats.taux_absenteisme_estime || stats.taux_mct_estime || stats.taux_injustifiees_estime)
+        ? "Inclut au moins un taux estimé"
+        : null,
       icon: BarChart3,
       iconColor: (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 15 ? "text-red-600" : (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 10 ? "text-amber-600" : "text-emerald-600",
       iconBg: (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 15 ? "bg-red-50" : (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 10 ? "bg-amber-50" : "bg-emerald-50",
@@ -120,6 +130,9 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
                 <p className="mt-1 text-xs text-muted-foreground">
                   {card.description}
                 </p>
+                {card.note ? (
+                  <p className="mt-1 text-xs font-medium text-amber-600">{card.note}</p>
+                ) : null}
               </div>
               <div className={`rounded-lg p-2 ${card.iconBg}`}>
                 <card.icon className={`h-5 w-5 ${card.iconColor}`} />

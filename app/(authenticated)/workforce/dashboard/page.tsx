@@ -426,6 +426,12 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const headcountData: HeadcountDataPoint[] = [];
   let lastKnownCnsRate: number | null = null;
   let lastKnownMctRate: number | null = null;
+  let lastKnownInjRate: number | null = null;
+  // Mois d'origine des taux repris, pour signaler une valeur estimée dans les KPI
+  let lastKnownCnsMonth: number | null = null;
+  let lastKnownMctMonth: number | null = null;
+  let lastKnownInjMonth: number | null = null;
+  let cnsEstimatedFromMonth: number | null = null;
 
   for (let m = 1; m <= 12; m++) {
     const monthEnd = lastDayOfMonth(selectedYear, m);
@@ -465,6 +471,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       // Mémoriser le dernier taux CNS connu
       if (netEtpAtMonth > 0) {
         lastKnownCnsRate = (absentEtp / netEtpAtMonth) * 100;
+        lastKnownCnsMonth = m;
       }
     } else {
       // Pas de données réelles CNS → appliquer le dernier taux CNS connu
@@ -476,6 +483,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     // Capturer le taux d'absentéisme pour le mois sélectionné
     if (m === selectedMonth && netEtpAtMonth > 0) {
       avgAbsenteeism = (absentEtp / netEtpAtMonth) * 100;
+      // Sans données réelles, la valeur ci-dessus est le dernier taux CNS connu
+      cnsEstimatedFromMonth = hasAbsenceData ? null : lastKnownCnsMonth;
     }
 
     // Effectif après MCT = effectif réel - FTE perdus par maladies court terme non CNS
@@ -487,25 +496,40 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       const workableHrs = getWorkableHoursInMonth(selectedYear, m);
       const ftePerdus = workableHrs > 0 ? totalMctHrs / workableHrs : 0;
       effectifApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
-      // Mémoriser le dernier taux MCT connu
-      if (effectifReel > 0) {
-        lastKnownMctRate = (ftePerdus / effectifReel) * 100;
+      // Mémoriser le dernier taux MCT connu.
+      // Même dénominateur que le calcul du mois réel (heures MCT / heures
+      // travaillables ajustées), soit ftePerdus / effectif net — et non
+      // l'effectif après CNS, qui gonflerait le taux repris.
+      if (netEtpAtMonth > 0) {
+        lastKnownMctRate = (ftePerdus / netEtpAtMonth) * 100;
+        lastKnownMctMonth = m;
       }
     } else if (lastKnownMctRate !== null) {
       // Projeter avec le dernier taux MCT connu (affiché en pointillé)
-      const ftePerdus = effectifReel * (lastKnownMctRate / 100);
+      const ftePerdus = netEtpAtMonth * (lastKnownMctRate / 100);
       projectedApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
     }
 
     // Effectif après absences injustifiées = effectif après MCT - FTE perdus par absences injustifiées
     const monthInj = allAbsencesInjustifiees.filter((a) => Number(a.mois) === m);
     let effectifApresInjustifiees: number | undefined;
+    let projectedApresInjustifiees: number | undefined;
     if (monthInj.length > 0) {
       const totalInjHrs = monthInj.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
       const workableHrs = getWorkableHoursInMonth(selectedYear, m);
       const ftePerdusInj = workableHrs > 0 ? totalInjHrs / workableHrs : 0;
       const base = effectifApresMct ?? effectifReel;
       effectifApresInjustifiees = Math.max(0, Math.round((base - ftePerdusInj) * 10) / 10);
+      // Mémoriser le dernier taux connu, même dénominateur que le mois réel
+      if (netEtpAtMonth > 0) {
+        lastKnownInjRate = (ftePerdusInj / netEtpAtMonth) * 100;
+        lastKnownInjMonth = m;
+      }
+    } else if (lastKnownInjRate !== null) {
+      // Projeter avec le dernier taux connu (affiché en pointillé)
+      const ftePerdusInj = netEtpAtMonth * (lastKnownInjRate / 100);
+      const base = effectifApresMct ?? projectedApresMct ?? effectifReel;
+      projectedApresInjustifiees = Math.max(0, Math.round((base - ftePerdusInj) * 10) / 10);
     }
 
     headcountData.push({
@@ -516,6 +540,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       effectif_apres_mct: effectifApresMct,
       projected_apres_mct: projectedApresMct,
       effectif_apres_injustifiees: effectifApresInjustifiees,
+      projected_apres_injustifiees: projectedApresInjustifiees,
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
     });
@@ -525,6 +550,12 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const lastMctRealIdx = headcountData.reduce((last, d, i) => d.effectif_apres_mct != null ? i : last, -1);
   if (lastMctRealIdx >= 0 && headcountData.some((d) => d.projected_apres_mct != null)) {
     headcountData[lastMctRealIdx].projected_apres_mct = headcountData[lastMctRealIdx].effectif_apres_mct;
+  }
+
+  // Même jonction pour la projection des absences injustifiées
+  const lastInjRealIdx = headcountData.reduce((last, d, i) => d.effectif_apres_injustifiees != null ? i : last, -1);
+  if (lastInjRealIdx >= 0 && headcountData.some((d) => d.projected_apres_injustifiees != null)) {
+    headcountData[lastInjRealIdx].projected_apres_injustifiees = headcountData[lastInjRealIdx].effectif_apres_injustifiees;
   }
 
   // ============================================================
@@ -1135,9 +1166,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const totalInjHrsSelected = selectedMonthInjustifiees.reduce(
     (sum, a) => sum + Number(a.duree_hrs || 0), 0
   );
-  const tauxInjustifiees = totalAdjustedWorkableHrs > 0
+  // Sans données pour le mois affiché, reprendre le dernier taux connu (comme CNS et MCT)
+  const tauxInjustifiees = (selectedMonthInjustifiees.length > 0 && totalAdjustedWorkableHrs > 0)
     ? (totalInjHrsSelected / totalAdjustedWorkableHrs) * 100
-    : 0;
+    : (lastKnownInjRate ?? 0);
   // Taux de turnover annuel = départs définitifs / effectif moyen sous contrat projeté sur l'année
   const yearStart = `${selectedYear}-01-01`;
   const departsDefinitifs = allEmployees.filter(
@@ -1159,6 +1191,16 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     ? (departsDefEtp / effectifMoyenAnnuel) * 100
     : 0;
 
+  // Signaler les taux qui ne sont pas mesurés sur le mois affiché mais repris
+  // du dernier mois connu. Un scénario sélectionné prime sur le taux repris :
+  // dans ce cas la valeur n'est plus une estimation et n'est pas marquée.
+  const moisEstime = (m: number | null) => (m != null ? `${MONTH_LABELS[m]} ${selectedYear}` : null);
+  const tauxAbsenteismeEstime = moisEstime(cnsEstimatedFromMonth);
+  const tauxMctEstime =
+    scenarioKpiOverride != null || selectedMonthMct.length > 0 ? null : moisEstime(lastKnownMctMonth);
+  const tauxInjustifieesEstime =
+    selectedMonthInjustifiees.length > 0 ? null : moisEstime(lastKnownInjMonth);
+
   const stats: WpDashboardStats = {
     effectif_brut: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     effectif_net: scenarioKpiOverride?.effectif_net ?? Math.round(effectifNetEtp * 10) / 10,
@@ -1168,6 +1210,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     taux_absenteisme: scenarioKpiOverride?.taux_absenteisme ?? avgAbsenteeism,
     taux_mct: scenarioKpiOverride?.taux_mct ?? tauxMct,
     taux_injustifiees: tauxInjustifiees,
+    taux_absenteisme_estime: tauxAbsenteismeEstime,
+    taux_mct_estime: tauxMctEstime,
+    taux_injustifiees_estime: tauxInjustifieesEstime,
     etp_total: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
     taux_turnover_annuel: Math.round(tauxTurnoverAnnuel * 10) / 10,
