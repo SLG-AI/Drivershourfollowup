@@ -996,8 +996,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
         for (let m = 1; m <= 12; m++) {
           const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
-          const isCurrentMonth = selectedYear === currentYear && m === currentMonth;
-          if (!isProjection && !isCurrentMonth) continue;
+          if (!isProjection) continue;
 
           const effectiveTurnoverRate = combinedTurnoverRateByMonth.get(m) ?? combinedTurnoverFallback;
           const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
@@ -1059,15 +1058,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           const scenarioReelR = Math.max(0, Math.round(scenarioReel * 10) / 10);
           const scenarioApresMctR = Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10);
 
-          if (isProjection || isCurrentMonth) {
-            combinedMonths.push({
-              month_index: m,
-              scenario_brut: scenarioBrutR,
-              scenario_net: scenarioNetR,
-              scenario_reel: scenarioReelR,
-              scenario_apres_mct: scenarioApresMctR,
-            });
-          }
+          combinedMonths.push({
+            month_index: m,
+            scenario_brut: scenarioBrutR,
+            scenario_net: scenarioNetR,
+            scenario_reel: scenarioReelR,
+            scenario_apres_mct: scenarioApresMctR,
+          });
 
           // Capture KPI overrides for the selected month
           if (m === selectedMonth) {
