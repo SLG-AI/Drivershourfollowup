@@ -40,7 +40,9 @@ function findHeaderRow(rows: unknown[][], keywords: string[]): { index: number; 
   for (let i = 0; i < Math.min(10, rows.length); i++) {
     const row = rows[i];
     if (!row) continue;
-    const strings = row.map((c) => String(c || ""));
+    // sheet_to_json rend des tableaux À TROUS pour les cellules vides ; `map`
+    // les conserve et laisserait des `undefined` dans les en-têtes.
+    const strings = Array.from(row, (c) => String(c || ""));
     const normalized = strings.map(normalizeText);
     if (keywords.some((kw) => normalized.some((h) => h.includes(kw)))) {
       return { index: i, headers: strings };
@@ -50,7 +52,7 @@ function findHeaderRow(rows: unknown[][], keywords: string[]): { index: number; 
 }
 
 function findCol(headers: string[], ...keywords: string[]): number {
-  const normalized = headers.map(normalizeText);
+  const normalized = Array.from(headers, (h) => normalizeText(h || ""));
   for (let i = 0; i < normalized.length; i++) {
     if (keywords.every((kw) => normalized[i].includes(kw))) return i;
   }
@@ -315,6 +317,8 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
 
   const currentYear = new Date().getFullYear();
   const data: SalaryStatsRow[] = [];
+  let lignesTotal = 0;
+  let lignesSansMois = 0;
 
   for (let i = header.index + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
@@ -323,7 +327,20 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
     const codeSalarie = String(row[colCode] || "").trim();
     if (!codeSalarie) continue;
 
-    const mois = colMois >= 0 ? parseNumeric(row[colMois]) : (detectedMonth || 1);
+    // Les exports StatRapides se terminent par une ligne « Total » : ce n'est
+    // pas un salarié et son mois de référence est vide. Insérée telle quelle,
+    // elle violait la contrainte mois BETWEEN 1 AND 12 (et aurait sinon créé
+    // un faux employé).
+    if (normalizeText(codeSalarie).startsWith("total")) {
+      lignesTotal++;
+      continue;
+    }
+
+    // Un mois hors 1..12 est remis à 0 : l'import lui appliquera le mois
+    // choisi à l'écran plutôt que de planter (ou de retomber sur janvier).
+    const moisLu = colMois >= 0 ? parseNumeric(row[colMois]) : (detectedMonth || 0);
+    const mois = moisLu >= 1 && moisLu <= 12 ? moisLu : 0;
+    if (mois === 0) lignesSansMois++;
     const annee = detectedYear || currentYear;
 
     data.push({
@@ -346,6 +363,13 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
       brut_base: colBrutBase >= 0 ? parseNumeric(row[colBrutBase]) : 0,
       cout_total_secu: colTotalSecu >= 0 ? parseNumeric(row[colTotalSecu]) : 0,
     });
+  }
+
+  if (lignesTotal > 0) {
+    warnings.push(`${lignesTotal} ligne${lignesTotal > 1 ? "s" : ""} de total ignorée${lignesTotal > 1 ? "s" : ""}.`);
+  }
+  if (lignesSansMois > 0) {
+    warnings.push(`${lignesSansMois} ligne${lignesSansMois > 1 ? "s" : ""} sans mois de référence valide : le mois choisi à l'écran leur sera appliqué.`);
   }
 
   if (data.length === 0) {

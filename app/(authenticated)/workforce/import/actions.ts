@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import type { WpFileType } from "@/lib/utils/wp-excel-parser";
+import { preparerStatsSalariales } from "@/lib/utils/wp-salary-import";
 
 interface WpImportInput {
   fileType: WpFileType;
@@ -38,13 +39,14 @@ export async function importWpData(input: WpImportInput) {
 
   try {
     const importId = importRecord.id;
+    let rowCount = input.data.length;
 
     switch (input.fileType) {
       case "roster_rh":
         await importRosterRH(supabase, input.data, importId, input.mois, input.annee);
         break;
       case "salary_stats":
-        await importSalaryStats(supabase, input.data, importId);
+        rowCount = await importSalaryStats(supabase, input.data, importId, input.mois, input.annee);
         break;
       case "absences_cns":
         await importAbsencesCNS(supabase, input.data, importId, input.annee || new Date().getFullYear());
@@ -60,10 +62,10 @@ export async function importWpData(input: WpImportInput) {
     // Update import status
     await supabase
       .from("wp_imports")
-      .update({ status: "completed", row_count: input.data.length })
+      .update({ status: "completed", row_count: rowCount })
       .eq("id", importId);
 
-    return { success: true, rowCount: input.data.length };
+    return { success: true, rowCount };
   } catch (error) {
     await supabase
       .from("wp_imports")
@@ -106,29 +108,30 @@ async function importRosterRH(supabase: any, data: Record<string, unknown>[], im
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function importSalaryStats(supabase: any, data: Record<string, unknown>[], importId: string) {
-  if (data.length === 0) return;
+async function importSalaryStats(supabase: any, data: Record<string, unknown>[], importId: string, mois?: number, annee?: number): Promise<number> {
+  if (data.length === 0) return 0;
+
+  // Le mois/année choisis à l'écran servent de repli aux lignes sans période
+  // valide ; celles qui en restent dépourvues sont écartées plutôt que de
+  // faire échouer tout l'import sur la contrainte mois BETWEEN 1 AND 12.
+  const { lignes, periode } = preparerStatsSalariales(data, importId, mois, annee);
+  if (lignes.length === 0 || !periode) return 0;
 
   // Delete existing data for the same month/year
-  const mois = data[0].mois as number;
-  const annee = data[0].annee as number;
-  if (mois && annee) {
-    await supabase
-      .from("wp_salary_stats")
-      .delete()
-      .eq("mois", mois)
-      .eq("annee", annee);
-  }
+  await supabase
+    .from("wp_salary_stats")
+    .delete()
+    .eq("mois", periode.mois)
+    .eq("annee", periode.annee);
 
-  for (let i = 0; i < data.length; i += 200) {
-    const batch = data.slice(i, i + 200).map((row) => ({
-      ...row,
-      import_id: importId,
-    }));
+  for (let i = 0; i < lignes.length; i += 200) {
+    const batch = lignes.slice(i, i + 200);
 
     const { error } = await supabase.from("wp_salary_stats").insert(batch);
     if (error) throw new Error(`Erreur insertion stats salariales (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
+
+  return lignes.length;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
