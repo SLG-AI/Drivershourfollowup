@@ -3,7 +3,7 @@ import { fetchAll } from "@/lib/supabase/fetch-all";
 import { resolveRosterPeriod } from "@/lib/utils/roster-period";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, lastDayOfMonth, isTempExitAt, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
+import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, lastDayOfMonth, isTempExitAt, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -153,7 +153,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allSalaryStats = salaryStats.filter((s: any) => employeeCodes.has(s.code_salarie));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const allAbsencesMct = absencesMct.filter((a: any) => employeeCodes.size === 0 || employeeCodes.has(a.code_salarie));
+  // Week-ends écartés : le dénominateur (heures travaillables) ne compte que lundi-vendredi.
+  const allAbsencesMct = horsWeekEnd(absencesMct).filter((a: any) => employeeCodes.size === 0 || employeeCodes.has(a.code_salarie));
   // No employee filter for absences injustifiées — include all employees even if not in roster
   const allAbsencesInjustifiees = absencesInjustifiees;
   const allTargets = targets;
@@ -1201,6 +1202,17 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const tauxInjustifieesEstime =
     selectedMonthInjustifiees.length > 0 ? null : moisEstime(lastKnownInjMonth);
 
+  // Heures derrière chaque taux, affichées seulement quand le taux est MESURÉ
+  // sur le mois (ni repris d'un autre mois, ni remplacé par un scénario) :
+  // sinon les heures ne correspondraient pas au pourcentage affiché à côté.
+  const heuresCnsMesurees = absenteeismItems.reduce(
+    (sum, a) => sum + a.hrs_maladie + a.hrs_accident + a.hrs_maternite + a.hrs_raisons_familiales + a.hrs_conge_accompagnement + a.hrs_accueil,
+    0,
+  );
+  const heuresCns = scenarioKpiOverride == null && selectedMonthAbsences.length > 0 ? Math.round(heuresCnsMesurees) : null;
+  const heuresMct = scenarioKpiOverride == null && selectedMonthMct.length > 0 ? Math.round(totalMctHrsSelected) : null;
+  const heuresInjustifiees = selectedMonthInjustifiees.length > 0 ? Math.round(totalInjHrsSelected) : null;
+
   const stats: WpDashboardStats = {
     effectif_brut: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     effectif_net: scenarioKpiOverride?.effectif_net ?? Math.round(effectifNetEtp * 10) / 10,
@@ -1213,6 +1225,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     taux_absenteisme_estime: tauxAbsenteismeEstime,
     taux_mct_estime: tauxMctEstime,
     taux_injustifiees_estime: tauxInjustifieesEstime,
+    heures_cns: heuresCns,
+    heures_mct: heuresMct,
+    heures_injustifiees: heuresInjustifiees,
     etp_total: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
     taux_turnover_annuel: Math.round(tauxTurnoverAnnuel * 10) / 10,

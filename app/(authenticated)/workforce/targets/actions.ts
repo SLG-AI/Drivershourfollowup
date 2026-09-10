@@ -195,7 +195,7 @@ export async function computeProjectionByDepot(input: {
       ? supabase.from("wp_employees").select("*").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
       : supabase.from("wp_employees").select("*").limit(0)),
     fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie")),
-    fetchAll(supabase.from("wp_absences_mct").select("code_salarie, mois, annee, duree_hrs")),
+    fetchAll(supabase.from("wp_absences_mct").select("code_salarie, mois, annee, duree_hrs, date_absence")),
     fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
     fetchAll(supabase.from("wp_scenario_monthly_turnover_params").select("*").in("scenario_id", scenarioIds)),
     fetchAll(supabase.from("wp_scenario_monthly_leave_params").select("*").in("scenario_id", scenarioIds)),
@@ -263,7 +263,10 @@ export async function computeProjectionByDepot(input: {
   }
 
   // Import helpers
-  const { getArrivalsForMonth, getCddDeparturesForMonth, getTempExitDeparturesForMonth, getTempExitReturnsForMonth } = await import("@/lib/utils/wp-calculations");
+  const { getArrivalsForMonth, getCddDeparturesForMonth, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, horsWeekEnd } = await import("@/lib/utils/wp-calculations");
+  // Même règle que le tableau de bord : heures MCT du week-end écartées,
+  // puisque les heures travaillables ne comptent que lundi-vendredi.
+  const absencesMctOuvrees = horsWeekEnd(absencesMct);
   type ArrivalHyp = { id: string; scenario_id: string; nb_personnes: number; taux_occupation: number; fonction: string | null; centre_cout: string | null; depot: string | null; type_contrat: "CDI" | "CDD"; vehicle_type: "BUS" | "CAM" | null; start_day: number; start_month: number; start_year: number; end_day: number | null; end_month: number | null; end_year: number | null };
   type TempExitHyp = { id: string; scenario_id: string; nb_personnes: number; taux_occupation: number; fonction: string | null; centre_cout: string | null; depot: string | null; vehicle_type: "BUS" | "CAM" | null; motif: string; departure_day: number; departure_month: number; departure_year: number; return_day: number | null; return_month: number | null; return_year: number | null };
 
@@ -358,7 +361,7 @@ export async function computeProjectionByDepot(input: {
       lastKnownCnsRate = (absentEtp / netEtp) * 100;
     }
 
-    const monthMct = absencesMct.filter((a) => Number(a.mois) === m && Number(a.annee) === year);
+    const monthMct = absencesMctOuvrees.filter((a) => Number(a.mois) === m && Number(a.annee) === year);
     if (monthMct.length > 0) {
       const totalMctHrs = monthMct.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
       const workableHrs = 173;

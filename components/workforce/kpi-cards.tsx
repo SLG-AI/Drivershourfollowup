@@ -16,6 +16,10 @@ export interface WpDashboardStats {
   taux_absenteisme_estime?: string | null;
   taux_mct_estime?: string | null;
   taux_injustifiees_estime?: string | null;
+  /** Heures d'absence derrière chaque taux ; null quand le taux n'est pas mesuré sur le mois affiché. */
+  heures_cns?: number | null;
+  heures_mct?: number | null;
+  heures_injustifiees?: number | null;
   etp_total: number;
   departs_prevus: number;
   taux_turnover_annuel: number;
@@ -24,7 +28,16 @@ export interface WpDashboardStats {
   target_total: number | null;
 }
 
+function formatHeures(h: number | null | undefined): string | null {
+  return h == null ? null : `${Math.round(h).toLocaleString("fr-FR")} h`;
+}
+
 export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
+  const heuresTotal =
+    stats.heures_cns != null && stats.heures_mct != null && stats.heures_injustifiees != null
+      ? stats.heures_cns + stats.heures_mct + stats.heures_injustifiees
+      : null;
+
   const gapColor = stats.gap_vs_cible === null
     ? "text-muted-foreground"
     : stats.gap_vs_cible >= 0
@@ -58,6 +71,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux de couverture CNS",
       value: `${stats.taux_absenteisme.toFixed(1)}%`,
       description: "(effectif net - effectif réel) / effectif net",
+      hours: formatHeures(stats.heures_cns),
       note: stats.taux_absenteisme_estime ? `Estimé — repris de ${stats.taux_absenteisme_estime}` : null,
       icon: Activity,
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
@@ -66,7 +80,8 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     {
       title: "Taux de maladies non prises en charge",
       value: `${stats.taux_mct.toFixed(1)}%`,
-      description: "heures MCT / heures travaillables ajustées",
+      description: "heures MCT hors week-end / heures travaillables ajustées",
+      hours: formatHeures(stats.heures_mct),
       note: stats.taux_mct_estime ? `Estimé — repris de ${stats.taux_mct_estime}` : null,
       icon: Thermometer,
       iconColor: "text-pink-600",
@@ -76,6 +91,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux absences injustifiées",
       value: `${stats.taux_injustifiees.toFixed(1)}%`,
       description: "heures injustifiées / heures travaillables ajustées",
+      hours: formatHeures(stats.heures_injustifiees),
       note: stats.taux_injustifiees_estime ? `Estimé — repris de ${stats.taux_injustifiees_estime}` : null,
       icon: AlertTriangle,
       iconColor: "text-yellow-600",
@@ -85,6 +101,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Taux d'absentéisme global",
       value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
       description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
+      hours: formatHeures(heuresTotal),
       note: (stats.taux_absenteisme_estime || stats.taux_mct_estime || stats.taux_injustifiees_estime)
         ? "Inclut au moins un taux estimé"
         : null,
@@ -126,7 +143,12 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">{card.title}</p>
-                <p className="mt-1 text-2xl font-bold">{card.value}</p>
+                <p className="mt-1 text-2xl font-bold">
+                  {card.value}
+                  {"hours" in card && card.hours ? (
+                    <span className="ml-2 text-sm font-medium text-muted-foreground">{card.hours}</span>
+                  ) : null}
+                </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {card.description}
                 </p>

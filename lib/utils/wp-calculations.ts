@@ -69,6 +69,26 @@ export function getWorkableHoursInMonth(year: number, month: number): number {
   return getWorkingDaysInMonth(year, month) * 8;
 }
 
+/** Samedi ou dimanche ? Date au format YYYY-MM-DD, lue en UTC comme partout dans ce module. */
+export function estJourDeWeekEnd(dateISO: string | null | undefined): boolean {
+  if (!dateISO) return false;
+  const d = new Date(`${String(dateISO).slice(0, 10)}T00:00:00Z`);
+  if (isNaN(d.getTime())) return false;
+  const jour = d.getUTCDay();
+  return jour === 0 || jour === 6;
+}
+
+/**
+ * Écarte les absences datées d'un week-end.
+ *
+ * Les heures MCT sont rapportées aux heures travaillables, comptées du lundi au
+ * vendredi seulement ; garder les heures du samedi et du dimanche au numérateur
+ * gonflait le taux (jusqu'à 4,6 % des heures MCT sur un mois observé).
+ */
+export function horsWeekEnd<T extends { date_absence?: string | null }>(rows: T[]): T[] {
+  return rows.filter((r) => !estJourDeWeekEnd(r.date_absence));
+}
+
 // ============================================================
 // Date helpers
 // ============================================================
