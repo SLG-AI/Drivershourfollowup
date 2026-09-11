@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock } from "lucide-react";
+import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock, ArrowLeftRight } from "lucide-react";
 import { toast } from "sonner";
 
 const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: typeof Users; example: string }[] = [
@@ -49,6 +49,13 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
     description: "Absences injustifiées (complètes et incomplètes).",
     icon: AlertTriangle,
     example: "Absences injustifiées.csv",
+  },
+  {
+    id: "mouvements",
+    label: "Mouvements (IN/OUT)",
+    description: "Entrées, sorties et sorties temporaires constatées, avec date et motif réels. Date les départs en cours de mois absents du roster.",
+    icon: ArrowLeftRight,
+    example: "StatRapidesIN_OUT.xlsx",
   },
 ];
 

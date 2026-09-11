@@ -26,6 +26,20 @@ export interface WpDashboardStats {
   sorties_temporaires: number;
   gap_vs_cible: number | null;
   target_total: number | null;
+  /**
+   * Effectif MOYEN du mois en ETP (pondéré par les jours), par palier :
+   * sous contrat, après suspensions, après CNS, après MCT, après injustifiées.
+   * Absents quand un scénario remplace les KPI.
+   */
+  effectif_brut_moyen?: number;
+  effectif_net_moyen?: number;
+  effectif_apres_cns_moyen?: number;
+  effectif_apres_mct_moyen?: number;
+  effectif_apres_injustifiees_moyen?: number;
+}
+
+function formatMoyenne(label: string, etp: number | undefined): string | null {
+  return etp == null ? null : `${label} : ${etp.toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ETP`;
 }
 
 function formatHeures(h: number | null | undefined): string | null {
@@ -55,6 +69,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Effectif sous contrat (ETP)",
       value: stats.effectif_brut,
       description: `${stats.bus_count} BUS / ${stats.cam_count} CAM — ${stats.headcount} pers.`,
+      average: formatMoyenne("Moyenne du mois", stats.effectif_brut_moyen),
       icon: Users,
       iconColor: "text-blue-600",
       iconBg: "bg-blue-50",
@@ -63,6 +78,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       title: "Effectif après suspension de contrat (ETP)",
       value: stats.effectif_net,
       description: `${stats.sorties_temporaires} ETP en suspension(s) de contrat`,
+      average: formatMoyenne("Moyenne du mois", stats.effectif_net_moyen),
       icon: UserMinus,
       iconColor: "text-indigo-600",
       iconBg: "bg-indigo-50",
@@ -72,6 +88,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       value: `${stats.taux_absenteisme.toFixed(1)}%`,
       description: "(effectif net - effectif réel) / effectif net",
       hours: formatHeures(stats.heures_cns),
+      average: formatMoyenne("Effectif moyen après CNS", stats.effectif_apres_cns_moyen),
       note: stats.taux_absenteisme_estime ? `Estimé — repris de ${stats.taux_absenteisme_estime}` : null,
       icon: Activity,
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
@@ -82,6 +99,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       value: `${stats.taux_mct.toFixed(1)}%`,
       description: "heures MCT hors week-end / heures travaillables ajustées",
       hours: formatHeures(stats.heures_mct),
+      average: formatMoyenne("Effectif moyen après CNS et MCT", stats.effectif_apres_mct_moyen),
       note: stats.taux_mct_estime ? `Estimé — repris de ${stats.taux_mct_estime}` : null,
       icon: Thermometer,
       iconColor: "text-pink-600",
@@ -92,6 +110,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       value: `${stats.taux_injustifiees.toFixed(1)}%`,
       description: "heures injustifiées / heures travaillables ajustées",
       hours: formatHeures(stats.heures_injustifiees),
+      average: formatMoyenne("Effectif moyen après toutes absences", stats.effectif_apres_injustifiees_moyen),
       note: stats.taux_injustifiees_estime ? `Estimé — repris de ${stats.taux_injustifiees_estime}` : null,
       icon: AlertTriangle,
       iconColor: "text-yellow-600",
@@ -102,6 +121,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
       description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
       hours: formatHeures(heuresTotal),
+      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_injustifiees_moyen),
       note: (stats.taux_absenteisme_estime || stats.taux_mct_estime || stats.taux_injustifiees_estime)
         ? "Inclut au moins un taux estimé"
         : null,
@@ -152,6 +172,9 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
                 <p className="mt-1 text-xs text-muted-foreground">
                   {card.description}
                 </p>
+                {"average" in card && card.average ? (
+                  <p className="mt-1 text-xs font-medium text-violet-700">{card.average}</p>
+                ) : null}
                 {card.note ? (
                   <p className="mt-1 text-xs font-medium text-amber-600">{card.note}</p>
                 ) : null}

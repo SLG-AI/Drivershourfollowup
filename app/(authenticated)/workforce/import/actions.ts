@@ -57,6 +57,9 @@ export async function importWpData(input: WpImportInput) {
       case "absences_injustifiees":
         await importAbsencesInjustifiees(supabase, input.data, importId);
         break;
+      case "mouvements":
+        await importMouvements(supabase, input.data, importId);
+        break;
     }
 
     // Update import status
@@ -214,6 +217,31 @@ async function importAbsencesInjustifiees(supabase: any, data: Record<string, un
 
     const { error } = await supabase.from("wp_absences_injustifiees").insert(batch);
     if (error) throw new Error(`Erreur insertion absences injustifiées (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
+  }
+}
+
+// Mouvements SIRH : chaque ligne porte sa période (mois de la date du
+// mouvement) ; l'import remplace les périodes présentes dans le fichier, et
+// elles seules, pour pouvoir charger un export mensuel comme un export annuel.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function importMouvements(supabase: any, data: Record<string, unknown>[], importId: string) {
+  if (data.length === 0) return;
+
+  const periodes = new Map<string, { mois: number; annee: number }>();
+  data.forEach((r) => {
+    const mois = Number(r.mois);
+    const annee = Number(r.annee);
+    periodes.set(`${annee}-${mois}`, { mois, annee });
+  });
+  for (const p of periodes.values()) {
+    const { error } = await supabase.from("wp_mouvements").delete().eq("mois", p.mois).eq("annee", p.annee);
+    if (error) throw new Error(`Erreur remplacement des mouvements ${p.mois}/${p.annee}: ${error.message}`);
+  }
+
+  for (let i = 0; i < data.length; i += 200) {
+    const batch = data.slice(i, i + 200).map((row) => ({ ...row, import_id: importId }));
+    const { error } = await supabase.from("wp_mouvements").insert(batch);
+    if (error) throw new Error(`Erreur insertion mouvements (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
 }
 

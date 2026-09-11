@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PauseCircle, ChevronRight, ChevronDown } from "lucide-react";
+import { suspensionPartielle } from "@/lib/utils/wp-suspension";
 
 export interface TempExitItem {
   code_salarie: string;
@@ -21,7 +22,10 @@ export interface TempExitItem {
   date_debut: string;
   date_fin: string | null;
   motif: string;
+  /** ETP retiré par la suspension (fraction suspendue appliquée). */
   etp: number;
+  /** ETP du salarié, pour afficher la fraction quand la suspension est partielle. */
+  etp_salarie?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -29,8 +33,11 @@ export interface TempExitItem {
 // ---------------------------------------------------------------------------
 
 const SUBCATEGORIES: Record<string, { label: string; color: string; match: (motif: string) => boolean }> = {
-  parental_tp: { label: "Congé parental temps partiel", color: "text-violet-600", match: (m) => m === "Conge Parental TP" },
-  parental: { label: "Congé parental", color: "text-violet-600", match: (m) => m.toLowerCase().includes("parental") && m !== "Conge Parental TP" },
+  // « TP » = temps plein dans le SIRH (suspension complète, 1 ETP). Un vrai
+  // temps partiel arriverait sous un autre code et tomberait dans « Congé parental (autre) ».
+  parental_tp: { label: "Congé parental temps plein", color: "text-violet-600", match: (m) => m === "Conge Parental TP" },
+  parental_partiel: { label: "Congé parental temps partiel", color: "text-violet-600", match: (m) => suspensionPartielle(m) !== null && m.toLowerCase().includes("parental") },
+  parental: { label: "Congé parental (autre)", color: "text-violet-600", match: (m) => m.toLowerCase().includes("parental") && m !== "Conge Parental TP" },
   maternite: { label: "Congé maternité", color: "text-pink-600", match: (m) => m.toLowerCase().includes("maternité") || m.toLowerCase().includes("maternite") },
   sans_solde: { label: "Congé sans solde", color: "text-violet-600", match: (m) => m.toLowerCase().includes("sans solde") },
   accompagnement: { label: "Congé accompagnement", color: "text-blue-600", match: (m) => m.toLowerCase().includes("accompagnement") },
@@ -104,7 +111,14 @@ function EmployeeRows({ items }: { items: TempExitItem[] }) {
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
           <TableCell className="text-sm">{formatDate(d.date_debut)}</TableCell>
           <TableCell className="text-sm">{formatDate(d.date_fin)}</TableCell>
-          <TableCell className="text-sm text-right">{d.etp}</TableCell>
+          <TableCell className="text-sm text-right">
+            {d.etp}
+            {d.etp_salarie != null && d.etp_salarie > d.etp && (
+              <span className="ml-1 text-xs text-muted-foreground">
+                {d.etp === 0 ? `(travaille à ${Math.round(d.etp_salarie * 100)} %)` : `/ ${d.etp_salarie}`}
+              </span>
+            )}
+          </TableCell>
         </TableRow>
       ))}
     </>

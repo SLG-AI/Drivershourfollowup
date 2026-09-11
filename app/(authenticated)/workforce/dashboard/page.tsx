@@ -1,6 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
-import { resolveRosterPeriod } from "@/lib/utils/roster-period";
+import { listRosterPeriods, resolveRosterPeriod } from "@/lib/utils/roster-period";
+import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
+import { MovementsPanel } from "@/components/workforce/movements-panel";
+import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
+import { estCongeParentalTempsPartielParTaux, fractionSuspendueEmploye, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
 import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, lastDayOfMonth, isTempExitAt, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
@@ -84,8 +88,19 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const { periode: rosterPeriode, exacte: rosterPeriodeExacte } =
     await resolveRosterPeriod(supabase, selectedMonth, selectedYear);
 
+  // Mouvements du mois : comparaison avec la photographie du mois PRÉCÉDENT.
+  // Elle n'a de sens que si les deux photographies existent réellement : avec
+  // un repli sur un roster antérieur, on comparerait deux fois la même photo.
+  const moisPrecedent = selectedMonth === 1
+    ? { mois: 12, annee: selectedYear - 1 }
+    : { mois: selectedMonth - 1, annee: selectedYear };
+  const periodesRoster = await listRosterPeriods(supabase);
+  const moisPrecedentDisponible =
+    rosterPeriodeExacte &&
+    periodesRoster.some((p) => p.mois === moisPrecedent.mois && p.annee === moisPrecedent.annee);
+
   // Fetch all data in parallel (paginated to avoid 1000-row limit)
-  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, targets, defaultScenarios, allScenariosRaw] = await Promise.all([
+  const [employees, employeesMoisPrecedent, absences, salaryStats, absencesMct, absencesInjustifiees, targets, defaultScenarios, allScenariosRaw, mouvementsSirh] = await Promise.all([
     fetchAll(
       supabase
         .from("wp_employees")
@@ -93,6 +108,15 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         .eq("mois", rosterPeriode?.mois ?? -1)
         .eq("annee", rosterPeriode?.annee ?? -1)
     ),
+    moisPrecedentDisponible
+      ? fetchAll(
+          supabase
+            .from("wp_employees")
+            .select("*")
+            .eq("mois", moisPrecedent.mois)
+            .eq("annee", moisPrecedent.annee)
+        )
+      : Promise.resolve([] as Record<string, unknown>[]),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
@@ -100,6 +124,14 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     fetchAll(supabase.from("wp_target_needs").select("*")),
     fetchAll(supabase.from("wp_scenarios").select("id, is_default").order("is_default", { ascending: false }).order("updated_at", { ascending: false })),
     fetchAll(supabase.from("wp_scenarios").select("id, name").order("created_at", { ascending: false })),
+    // Sorties constatées par le SIRH (export IN/OUT) sur le mois affiché et le précédent
+    fetchAll(
+      supabase
+        .from("wp_mouvements")
+        .select("code_salarie, type, date_sortie, motif_sortie, mois, annee")
+        .in("annee", Array.from(new Set([selectedYear, moisPrecedent.annee])))
+        .in("type", ["sortie", "sortie_temporaire"])
+    ),
   ]);
 
   // Fetch scenario monthly params: prefer default, fallback to most recent
@@ -136,14 +168,18 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
   // Apply fonction, cost center, depot and employee filters
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const allEmployees = employees.filter((e: any) => {
+  const passeLesFiltres = (e: any) => {
     if (selectedFonctions.length > 0 && !selectedFonctions.includes(e.description_fonction || "")) return false;
     if (selectedCC.length > 0 && !selectedCC.includes(e.centre_cout || "")) return false;
     if (selectedDepots.length > 0 && !selectedDepots.includes(e.description_service || "")) return false;
     if (selectedEquipes.length > 0 && !selectedEquipes.includes(e.description_equipe || "")) return false;
     if (selectedEmployee && e.code_salarie !== selectedEmployee) return false;
     return true;
-  });
+  };
+  const allEmployees = employees.filter(passeLesFiltres);
+  // Même filtre sur la photo précédente, sinon un salarié hors périmètre
+  // passerait pour un nouvel engagé ou un sorti.
+  const employeesPrecedents = employeesMoisPrecedent.filter(passeLesFiltres);
 
   // Filter absences/salary stats to matching employees
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -166,12 +202,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // comme absents maladie (est_sortie_temporaire = false)
   // ============================================================
 
-  function isCongeStructurel(motif: string): boolean {
-    const m = motif.toLowerCase();
-    return m.includes("parental") || m.includes("maternité") || m.includes("maternite")
-      || m.includes("sans solde") || m.includes("accompagnement") || m.includes("dispense");
-  }
-
   // Codes des employés avec heures maladie dans le CNS (tous mois confondus pour l'année)
   const codesAvecMaladieCns = new Set(
     allAbsences
@@ -179,29 +209,37 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       .map((a) => a.code_salarie)
   );
 
-  // Reclassifier dans allEmployees
-  allEmployees.forEach((e) => {
-    if (
-      e.est_sortie_temporaire &&
-      !isCongeStructurel(e.description_motif_sortie || "") &&
-      codesAvecMaladieCns.has(e.code_salarie)
-    ) {
-      e.est_sortie_temporaire = false;
-      e._reclassified_maladie = true;
-    }
-  });
+  // Reclassifier dans allEmployees, et à l'identique dans la photo précédente
+  // (logique partagée dans wp-movements.ts)
+  reclassifierSortiesTemporaires(allEmployees, codesAvecMaladieCns);
+  reclassifierSortiesTemporaires(employeesPrecedents, codesAvecMaladieCns);
 
-  // Reclassification inverse : employés avec un motif de congé structurel
-  // mais pas encore flaggés comme sortie temporaire (départs futurs)
-  allEmployees.forEach((e) => {
-    if (
-      !e.est_sortie_temporaire &&
-      e.date_sortie &&
-      isCongeStructurel(e.description_motif_sortie || "")
-    ) {
-      e.est_sortie_temporaire = true;
-    }
-  });
+  // Mouvements entre le mois précédent et le mois affiché. Les statistiques
+  // salariales datent les sorties réelles (un CDD arrêté avant terme disparaît
+  // du roster alors que la photo précédente ne connaît que la date prévue).
+  // Source 1 : l'export IN/OUT du SIRH (date ET motif réels) ; source 2, à
+  // défaut : la date de sortie des statistiques salariales.
+  const estSurLaPeriode = (mois: unknown, annee: unknown) =>
+    (Number(mois) === selectedMonth && Number(annee) === selectedYear) ||
+    (Number(mois) === moisPrecedent.mois && Number(annee) === moisPrecedent.annee);
+  const sortiesConstatees = new Map<string, { date: string; motif?: string }>();
+  mouvementsSirh
+    .filter((mv) => mv.type === "sortie" && mv.date_sortie && estSurLaPeriode(mv.mois, mv.annee))
+    .forEach((mv) => {
+      const d = String(mv.date_sortie).slice(0, 10);
+      const prev = sortiesConstatees.get(mv.code_salarie);
+      if (!prev || d > prev.date) sortiesConstatees.set(mv.code_salarie, { date: d, motif: mv.motif_sortie || undefined });
+    });
+  salaryStats
+    .filter((st) => st.date_sortie && estSurLaPeriode(st.mois, st.annee) && !sortiesConstatees.has(st.code_salarie))
+    .forEach((st) => {
+      const d = String(st.date_sortie).slice(0, 10);
+      const prev = sortiesConstatees.get(st.code_salarie);
+      if (!prev || d > prev.date) sortiesConstatees.set(st.code_salarie, { date: d });
+    });
+  const mouvements = moisPrecedentDisponible
+    ? computeRosterMovements(employeesPrecedents, allEmployees, selectedMonth, selectedYear, sortiesConstatees)
+    : null;
 
   // ============================================================
   // Helper: employees active at a given date
@@ -241,9 +279,19 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const busEtp = activeEmployees.filter((e) => e.vehicle_type === "BUS").reduce((sum, e) => sum + getEtp(e), 0);
   const camEtp = activeEmployees.filter((e) => e.vehicle_type === "CAM").reduce((sum, e) => sum + getEtp(e), 0);
 
+  // ETP retiré par une suspension de contrat : l'ETP entier, sauf suspension
+  // partielle (congé parental à temps partiel = moitié). L'ETP DISPONIBLE est
+  // le complément : c'est lui qui porte les absences et les heures travaillables.
+  function getEtpSuspendu(e: Record<string, unknown>): number {
+    return getEtp(e) * fractionSuspendueEmploye(e as Parameters<typeof fractionSuspendueEmploye>[0]);
+  }
+  function getEtpDisponible(e: Record<string, unknown>, date: string): number {
+    return isTempExitAt(e as Parameters<typeof isTempExitAt>[0], date) ? getEtp(e) - getEtpSuspendu(e) : getEtp(e);
+  }
+
   // Sorties temporaires in ETP
   const sortiesTemp = activeEmployees.filter((e) => isTempExitAt(e, refDate));
-  const sortiesTempEtp = sortiesTemp.reduce((sum, e) => sum + getEtp(e), 0);
+  const sortiesTempEtp = sortiesTemp.reduce((sum, e) => sum + getEtpSuspendu(e), 0);
   const sortiesTemporairesCount = sortiesTemp.length;
 
   // Liste détaillée de l'effectif sous contrat (mêmes salariés que le KPI)
@@ -272,8 +320,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       description_equipe: e.description_equipe || "",
       date_debut: e.date_debut_sortie_temporaire || "",
       date_fin: e.date_fin_sortie_temporaire || null,
-      motif: e.description_motif_sortie || "Non spécifié",
-      etp: Math.round(getEtp(e) * 10) / 10,
+      // Congé parental à temps partiel encodé par le taux : motif vide dans
+      // l'export, on le nomme pour le tableau (ETP retiré = 0, le taux suffit).
+      motif: estCongeParentalTempsPartielParTaux(e)
+        ? LABEL_PARENTAL_TEMPS_PARTIEL
+        : e.description_motif_sortie || "Non spécifié",
+      etp: Math.round(getEtpSuspendu(e) * 10) / 10,
+      etp_salarie: Math.round(getEtp(e) * 10) / 10,
     }));
 
   // Effectif net in ETP = brut ETP - sorties temporaires ETP
@@ -284,7 +337,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // ============================================================
 
   const selectedMonthAbsences = allAbsences.filter((a) => Number(a.mois) === selectedMonth);
-  const nonTempActiveAtRef = activeEmployees.filter((e) => !isTempExitAt(e, refDate));
+  // Salariés qui travaillent (au moins en partie) à la date de référence
+  const nonTempActiveAtRef = activeEmployees.filter((e) => getEtpDisponible(e, refDate) > 0);
   const nonTempCodes = new Set(nonTempActiveAtRef.map((e) => e.code_salarie));
   const empEtpMap = new Map<string, number>();
   const empVehicleMap = new Map<string, string>();
@@ -442,7 +496,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
     const brutEtpAtMonth = activeAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
     const tempExitsAtMonth = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd));
-    const tempExitsEtp = tempExitsAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
+    const tempExitsEtp = tempExitsAtMonth.reduce((sum, e) => sum + getEtpSuspendu(e), 0);
     const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
 
     // Effectif réel après maladie
@@ -456,16 +510,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
     let effectifReel: number;
     if (hasAbsenceData) {
-      const tempExitCodes = new Set(tempExitsAtMonth.map((e) => e.code_salarie));
-      const nonTempSet = new Set(
-        activeAtMonth.filter((e) => !tempExitCodes.has(e.code_salarie)).map((e) => e.code_salarie)
-      );
-      const empTauxMap = new Map<string, number>();
-      activeAtMonth.forEach((e) => empTauxMap.set(e.code_salarie, getEtp(e)));
+      // L'absence porte sur l'ETP DISPONIBLE : entier pour qui travaille, nul
+      // pour une suspension complète, la part restante pour une partielle.
+      const empEtpDisponible = new Map<string, number>();
+      activeAtMonth.forEach((e) => empEtpDisponible.set(e.code_salarie, getEtpDisponible(e, monthEnd)));
 
       absentEtp = monthAbs.reduce((sum, a) => {
-        if (!nonTempSet.has(a.code_salarie)) return sum;
-        const etp = empTauxMap.get(a.code_salarie) ?? 0;
+        const etp = empEtpDisponible.get(a.code_salarie) ?? 0;
         return sum + (Number(a.pct_absenteisme || 0) / 100) * etp;
       }, 0);
       effectifReel = netEtpAtMonth - absentEtp;
@@ -1151,9 +1202,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // ============================================================
 
   const workableHrsSelectedMonth = getWorkableHoursInMonth(selectedYear, selectedMonth);
-  // Base ajustée = heures travaillables * taux_occupation pour chaque employé actif non temp
+  // Base ajustée = heures travaillables * ETP disponible (suspensions partielles comprises)
   const totalAdjustedWorkableHrs = nonTempActiveAtRef.reduce(
-    (sum, e) => sum + workableHrsSelectedMonth * getEtp(e), 0
+    (sum, e) => sum + workableHrsSelectedMonth * getEtpDisponible(e, refDate), 0
   );
   const totalMctHrsSelected = selectedMonthMct.reduce(
     (sum, a) => sum + Number(a.duree_hrs || 0), 0
@@ -1213,7 +1264,37 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const heuresMct = scenarioKpiOverride == null && selectedMonthMct.length > 0 ? Math.round(totalMctHrsSelected) : null;
   const heuresInjustifiees = selectedMonthInjustifiees.length > 0 ? Math.round(totalInjHrsSelected) : null;
 
+  // ============================================================
+  // Effectif MOYEN du mois en ETP (pondéré par les jours), à côté de la
+  // valeur en fin de mois. Les sortis du mois absents de la photographie
+  // sont repris des mouvements, pour que leurs jours de présence comptent.
+  // Les taux d'absence sont déjà des moyennes du mois : on les applique à
+  // l'effectif net moyen, comme la courbe les applique à l'effectif net.
+  // Sans objet quand un scénario remplace les KPI.
+  // ============================================================
+  const sortisHorsPhoto = (mouvements?.sortiesDefinitives ?? [])
+    .filter((i) => i.date && !employeeCodes.has(i.code_salarie))
+    .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
+  const effectifMoyen = computeEffectifMoyen(allEmployees, sortisHorsPhoto, selectedMonth, selectedYear);
+  const arrondi1 = (n: number) => Math.round(n * 10) / 10;
+  const moyennes = scenarioKpiOverride == null
+    ? (() => {
+        const net = effectifMoyen.net;
+        const apresCns = net - net * (avgAbsenteeism / 100);
+        const apresMct = apresCns - net * (tauxMct / 100);
+        const apresInj = apresMct - net * (tauxInjustifiees / 100);
+        return {
+          effectif_brut_moyen: arrondi1(effectifMoyen.brut),
+          effectif_net_moyen: arrondi1(net),
+          effectif_apres_cns_moyen: arrondi1(apresCns),
+          effectif_apres_mct_moyen: arrondi1(apresMct),
+          effectif_apres_injustifiees_moyen: arrondi1(apresInj),
+        };
+      })()
+    : {};
+
   const stats: WpDashboardStats = {
+    ...moyennes,
     effectif_brut: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     effectif_net: scenarioKpiOverride?.effectif_net ?? Math.round(effectifNetEtp * 10) / 10,
     bus_count: Math.round(busEtp * 10) / 10,
@@ -1378,6 +1459,14 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         totalHrs={injTotalHrs}
         etpPerdusTotal={injEtpTotal}
       />
+
+      {mouvements && (
+        <MovementsPanel
+          movements={mouvements}
+          moisPrecedentLabel={`${MONTH_LABELS[moisPrecedent.mois]} ${moisPrecedent.annee}`}
+          moisLabel={`${MONTH_LABELS[selectedMonth]} ${selectedYear}`}
+        />
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <DepartureTable departures={departureItems} />

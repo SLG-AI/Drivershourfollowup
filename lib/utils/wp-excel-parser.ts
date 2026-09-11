@@ -1,3 +1,4 @@
+import { estMotifParentalInconnu } from "./wp-suspension";
 import * as XLSX from "xlsx";
 
 // ============================================================
@@ -67,7 +68,7 @@ function findCol(headers: string[], ...keywords: string[]): number {
 // Types
 // ============================================================
 
-export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns" | "absences_mct" | "absences_injustifiees";
+export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns" | "absences_mct" | "absences_injustifiees" | "mouvements";
 
 export interface WpParseResult {
   fileType: WpFileType;
@@ -219,6 +220,18 @@ export function parseRosterRH(buffer: ArrayBuffer): WpParseResult {
     const otherCount = data.filter((d) => d.vehicle_type === "AUTRE").length;
     if (otherCount > 0) {
       warnings.push(`${otherCount} employé(s) avec type non identifié (classés comme AUTRE).`);
+    }
+    // Un congé parental inconnu (ni temps plein, ni temps partiel reconnu)
+    // serait compté comme une suspension complète : à signaler avant l'import.
+    const motifsParentauxInconnus = Array.from(
+      new Set(data.map((d) => d.description_motif_sortie).filter((m) => estMotifParentalInconnu(m)))
+    );
+    if (motifsParentauxInconnus.length > 0) {
+      const n = data.filter((d) => estMotifParentalInconnu(d.description_motif_sortie)).length;
+      warnings.push(
+        `${n} salarié(s) avec un motif de congé parental non reconnu (${motifsParentauxInconnus.join(", ")}) : ` +
+          `traités comme une suspension complète (1 ETP). Si c'est un temps partiel, ajouter le code dans wp-suspension.ts.`
+      );
     }
     warnings.push(`${busCount} BUS, ${camCount} CAM détectés.`);
   }
@@ -897,6 +910,183 @@ export function parseAbsencesInjustifiees(buffer: ArrayBuffer): WpParseResult {
 }
 
 // ============================================================
+// 6. Mouvements parser (StatRapides IN/OUT : entrées, sorties, sorties temp)
+// ============================================================
+
+export type MouvementType = "entree" | "sortie" | "sortie_temporaire";
+
+export interface MouvementRow {
+  code_salarie: string;
+  nom_salarie: string;
+  equipe: string;
+  type: MouvementType;
+  date_entree: string | null;
+  date_sortie: string | null;
+  motif_sortie: string;
+  mois: number;
+  annee: number;
+}
+
+/** Date depuis une cellule Excel : numéro de série, ou texte jj.mm.aaaa / jj/mm/aaaa / aaaa-mm-jj / m/j/aa (format US du tableur). */
+function parseDateCell(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return dateToISO(excelDateToDate(value));
+  if (value instanceof Date) return dateToISO(value);
+  const str = String(value).trim();
+  let m = str.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (m) return `20${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  return null;
+}
+
+/**
+ * Export « Statistiques rapides » IN/OUT. Deux variantes rencontrées :
+ *  - mensuelle : bandeau (Année, De/à mois de référence), en-têtes, lignes,
+ *    puis une ligne « Total » ;
+ *  - annuelle : en-têtes en première ligne, pas de bandeau ni de total.
+ * Le type d'une ligne vient des colonnes Nb entrées / Nb sorties / Nb sorties
+ * temp, à défaut de la date renseignée. Sa période est le mois de sa date.
+ */
+export function parseMouvements(buffer: ArrayBuffer): WpParseResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: "array" });
+  } catch {
+    return { fileType: "mouvements", data: [], rowCount: 0, errors: ["Impossible de lire le fichier Excel."], warnings };
+  }
+
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
+
+  // Bandeau éventuel : Année, De Mois de référence X, à mois de référence Y
+  let detectedYear: number | undefined;
+  let moisDe: number | undefined;
+  let moisA: number | undefined;
+  for (const metaRow of rows.slice(0, 3)) {
+    if (!metaRow) continue;
+    for (let i = 0; i < metaRow.length; i++) {
+      const val = normalizeText(String(metaRow[i] || ""));
+      if (val === "annee" || val.startsWith("annee")) {
+        const y = parseNumeric(metaRow[i + 1]);
+        if (y > 2000) detectedYear = y;
+      }
+      if (val.includes("mois") && val.includes("reference")) {
+        const m = parseNumeric(metaRow[i + 1]);
+        if (m >= 1 && m <= 12) {
+          if (moisDe === undefined) moisDe = m;
+          else moisA = m;
+        }
+      }
+    }
+  }
+  const detectedMonth = moisDe !== undefined && (moisA === undefined || moisA === moisDe) ? moisDe : undefined;
+
+  const header = findHeaderRow(rows, ["nb entree", "nb sortie"]);
+  if (!header) {
+    return { fileType: "mouvements", data: [], rowCount: 0, errors: ["En-têtes non détectés (colonnes « Nb entrées » / « Nb sorties » attendues)."], warnings, detectedMonth, detectedYear };
+  }
+  const h = header.headers;
+  const colCode = findCol(h, "code");
+  const colNom = findCol(h, "nom");
+  const colEquipe = findCol(h, "equipe");
+  const colEntree = findCol(h, "date", "entree");
+  const colSortie = findCol(h, "date", "sortie");
+  const colMotif = findCol(h, "motif");
+  const colNbEntrees = findCol(h, "nb", "entree");
+  const colNbSorties = h.findIndex((c) => { const n = normalizeText(c); return n.includes("nb") && n.includes("sortie") && !n.includes("temp"); });
+  const colNbSortiesTemp = findCol(h, "nb", "sortie", "temp");
+
+  if (colCode === -1) {
+    return { fileType: "mouvements", data: [], rowCount: 0, errors: ["Colonne « Code » non trouvée."], warnings, detectedMonth, detectedYear };
+  }
+
+  const data: MouvementRow[] = [];
+  let lignesTotal = 0;
+  let lignesSansType = 0;
+  let lignesSansPeriode = 0;
+
+  for (let i = header.index + 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[];
+    if (!row || row.length === 0) continue;
+    const cells = Array.from(row, (c) => String(c ?? ""));
+    if (cells.slice(0, 3).some((c) => normalizeText(c).startsWith("total"))) {
+      lignesTotal++;
+      continue;
+    }
+    const code = cells[colCode]?.trim();
+    if (!code) continue;
+
+    const dateEntree = parseDateCell(row[colEntree]);
+    const dateSortie = parseDateCell(row[colSortie]);
+    const nbEntrees = colNbEntrees >= 0 ? parseNumeric(row[colNbEntrees]) : 0;
+    const nbSorties = colNbSorties >= 0 ? parseNumeric(row[colNbSorties]) : 0;
+    const nbSortiesTemp = colNbSortiesTemp >= 0 ? parseNumeric(row[colNbSortiesTemp]) : 0;
+
+    let type: MouvementType | null = null;
+    if (nbSortiesTemp > 0) type = "sortie_temporaire";
+    else if (nbSorties > 0) type = "sortie";
+    else if (nbEntrees > 0) type = "entree";
+    else if (dateSortie) type = "sortie";
+    else if (dateEntree) type = "entree";
+    if (!type) {
+      lignesSansType++;
+      continue;
+    }
+
+    const dateRef = type === "entree" ? dateEntree : dateSortie;
+    let mois = dateRef ? Number(dateRef.slice(5, 7)) : detectedMonth ?? 0;
+    let annee = dateRef ? Number(dateRef.slice(0, 4)) : detectedYear ?? 0;
+    if (!(mois >= 1 && mois <= 12) || annee < 2000) {
+      lignesSansPeriode++;
+      continue;
+    }
+
+    data.push({
+      code_salarie: code,
+      nom_salarie: colNom >= 0 ? cells[colNom].trim() : "",
+      equipe: colEquipe >= 0 ? cells[colEquipe].trim() : "",
+      type,
+      date_entree: dateEntree,
+      date_sortie: dateSortie,
+      motif_sortie: colMotif >= 0 ? cells[colMotif].trim() : "",
+      mois,
+      annee,
+    });
+  }
+
+  if (data.length === 0) {
+    errors.push("Aucun mouvement trouvé dans le fichier.");
+  } else {
+    const n = (t: MouvementType) => data.filter((d) => d.type === t).length;
+    warnings.push(`${n("entree")} entrée(s), ${n("sortie")} sortie(s), ${n("sortie_temporaire")} sortie(s) temporaire(s) détectées.`);
+    const periodes = Array.from(new Set(data.map((d) => `${d.annee}-${String(d.mois).padStart(2, "0")}`))).sort();
+    warnings.push(`Période(s) couverte(s) : ${periodes.join(", ")} — l'import remplace ces périodes.`);
+  }
+  if (lignesTotal > 0) warnings.push(`${lignesTotal} ligne${lignesTotal > 1 ? "s" : ""} de total ignorée${lignesTotal > 1 ? "s" : ""}.`);
+  if (lignesSansType > 0) warnings.push(`${lignesSansType} ligne(s) sans type de mouvement ni date : écartée(s).`);
+  if (lignesSansPeriode > 0) warnings.push(`${lignesSansPeriode} ligne(s) sans date ni mois de référence : écartée(s).`);
+
+  const periodeUnique = new Set(data.map((d) => `${d.annee}-${d.mois}`));
+  const single = periodeUnique.size === 1 ? data[0] : undefined;
+
+  return {
+    fileType: "mouvements",
+    data: data as unknown as Record<string, unknown>[],
+    rowCount: data.length,
+    errors,
+    warnings,
+    detectedMonth: single ? single.mois : detectedMonth,
+    detectedYear: single ? single.annee : detectedYear,
+  };
+}
+
+// ============================================================
 // Auto-detect file type
 // ============================================================
 
@@ -919,6 +1109,11 @@ export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
     .map((c) => normalizeText(String(c || "")))
     .join(" ");
 
+  // Avant les statistiques salariales : l'export IN/OUT porte le même bandeau
+  // « Statistiques rapides ».
+  if (allText.includes("nb entree") || allText.includes("nb sortie")) {
+    return "mouvements";
+  }
   if (allText.includes("statistiques rapides") || allText.includes("hrs base decsal") || allText.includes("etat du salaire")) {
     return "salary_stats";
   }
@@ -950,5 +1145,7 @@ export function parseWpFile(buffer: ArrayBuffer, fileType: WpFileType): WpParseR
       return parseAbsencesMCT(buffer);
     case "absences_injustifiees":
       return parseAbsencesInjustifiees(buffer);
+    case "mouvements":
+      return parseMouvements(buffer);
   }
 }
