@@ -21,6 +21,8 @@ export interface TempExitItem {
   description_equipe: string;
   date_debut: string;
   date_fin: string | null;
+  /** Congé pas encore commencé : début = date de sortie, fin non communiquée par le SIRH. */
+  a_venir?: boolean;
   motif: string;
   /** ETP retiré par la suspension (fraction suspendue appliquée). */
   etp: number;
@@ -109,8 +111,19 @@ function EmployeeRows({ items }: { items: TempExitItem[] }) {
             <Badge variant="outline" className="text-xs">{d.vehicle_type}</Badge>
           </TableCell>
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
-          <TableCell className="text-sm">{formatDate(d.date_debut)}</TableCell>
-          <TableCell className="text-sm">{formatDate(d.date_fin)}</TableCell>
+          <TableCell className="text-sm">
+            <span className="inline-flex items-center gap-2">
+              {formatDate(d.date_debut)}
+              {d.a_venir && (
+                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700">À venir</span>
+              )}
+            </span>
+          </TableCell>
+          <TableCell className="text-sm">
+            {d.a_venir && !d.date_fin
+              ? <span className="text-muted-foreground">Non communiquée</span>
+              : formatDate(d.date_fin)}
+          </TableCell>
           <TableCell className="text-sm text-right">
             {d.etp}
             {d.etp_salarie != null && d.etp_salarie > d.etp && (
@@ -169,6 +182,7 @@ function SubcategorySection({
 export function TempExitsTable({ items }: { items: TempExitItem[] }) {
   const totalEtp = Math.round(items.reduce((sum, d) => sum + d.etp, 0) * 10) / 10;
   const groups = groupBySubcategory(items);
+  const nbAVenir = items.filter((d) => d.a_venir).length;
 
   return (
     <Card>
@@ -184,7 +198,8 @@ export function TempExitsTable({ items }: { items: TempExitItem[] }) {
             Aucune sortie temporaire en cours.
           </p>
         ) : (
-          <div className="max-h-[500px] overflow-auto">
+          <>
+            <div className="max-h-[500px] overflow-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -202,7 +217,14 @@ export function TempExitsTable({ items }: { items: TempExitItem[] }) {
                 ))}
               </TableBody>
             </Table>
-          </div>
+            </div>
+            {nbAVenir > 0 && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                {nbAVenir} congé{nbAVenir > 1 ? "s" : ""} pas encore commencé{nbAVenir > 1 ? "s" : ""} : le SIRH n&apos;en communique
+                que la date de début. La fin prévue n&apos;est connue qu&apos;une fois le congé ouvert.
+              </p>
+            )}
+          </>
         )}
       </CardContent>
     </Card>

@@ -20,6 +20,7 @@ import {
   PieChart,
   Pie,
   Legend,
+  LabelList,
 } from "recharts";
 
 const BUCKET_RANGES: Record<string, { min: number; max: number }> = {
@@ -58,6 +59,10 @@ interface PeriodComparison {
   driversPositive: number;
   totalMissingEnd: number;
   driversNegative: number;
+  /** Σ heures de travail théoriques des conducteurs sur la période (colonne « 10 % » × 10 × mois) */
+  totalTheoretical: number;
+  /** Conducteurs écartés pour une valeur « 10 % » aberrante */
+  driversBufferAnomalie: number;
 }
 
 interface AnalyticsClientProps {
@@ -90,6 +95,7 @@ export default function AnalyticsClient({
   );
   const [hoursMode, setHoursMode] = useState<"sum" | "avg">("sum");
   const [comparisonMode, setComparisonMode] = useState<"sum" | "avg">("sum");
+  const [totalMode, setTotalMode] = useState<"sum" | "avg">("sum");
 
   // Bucket drill-down state
   const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
@@ -219,9 +225,12 @@ export default function AnalyticsClient({
                       "Heures payées": Number((p.totalOvertimePay / divisor).toFixed(2)),
                       "Heures positives fin": Number((p.totalPositiveEnd / divisor).toFixed(2)),
                       "Heures manquantes fin": Number((p.totalMissingEnd / divisor).toFixed(2)),
+                      // Total de la pile payées + positives : en fin de période les
+                      // positives sont payées, c'est ce total qui suit l'évolution.
+                      "Payées + positives": Number(((p.totalOvertimePay + p.totalPositiveEnd) / divisor).toFixed(2)),
                     };
                   })}
-                  margin={{ top: 5, right: 20, bottom: 5, left: 0 }}
+                  margin={{ top: 18, right: 20, bottom: 5, left: 0 }}
                 >
                   <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                   <XAxis dataKey="name" fontSize={12} />
@@ -234,17 +243,135 @@ export default function AnalyticsClient({
                     }}
                   />
                   <Legend />
+                  {/* Payées et positives empilées : le haut de la pile = total payé + à payer */}
                   {visibleMetrics.has("Heures payées") && (
-                    <Bar dataKey="Heures payées" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                    <Bar
+                      dataKey="Heures payées"
+                      stackId="solde"
+                      fill="#ef4444"
+                      stroke="hsl(var(--background))"
+                      strokeWidth={1}
+                      radius={visibleMetrics.has("Heures positives fin") ? 0 : [4, 4, 0, 0]}
+                    >
+                      {!visibleMetrics.has("Heures positives fin") && (
+                        <LabelList dataKey="Heures payées" position="top" offset={6} fontSize={12} className="fill-foreground" formatter={(v) => `${Number(v).toFixed(1)}h`} />
+                      )}
+                    </Bar>
                   )}
                   {visibleMetrics.has("Heures positives fin") && (
-                    <Bar dataKey="Heures positives fin" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Heures positives fin" stackId="solde" fill="#22c55e" stroke="hsl(var(--background))" strokeWidth={1} radius={[4, 4, 0, 0]}>
+                      <LabelList
+                        dataKey={visibleMetrics.has("Heures payées") ? "Payées + positives" : "Heures positives fin"}
+                        position="top"
+                        offset={6}
+                        fontSize={12}
+                        className="fill-foreground"
+                        formatter={(v) => `${Number(v).toFixed(1)}h`}
+                      />
+                    </Bar>
                   )}
                   {visibleMetrics.has("Heures manquantes fin") && (
                     <Bar dataKey="Heures manquantes fin" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                   )}
                 </BarChart>
               </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Heures totales par période : théoriques + payées + positives */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <CardTitle className="text-xl">Heures totales par période</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Heures de travail théoriques (colonne « 10 % » du fichier × 10, par conducteur et par mois) + heures payées + heures positives en fin de période
+                  </p>
+                </div>
+                <div className="flex rounded-md border overflow-hidden">
+                  <Button size="sm" variant={totalMode === "sum" ? "default" : "ghost"} className="text-xs h-7 px-3 rounded-none" onClick={() => setTotalMode("sum")}>
+                    Somme
+                  </Button>
+                  <Button size="sm" variant={totalMode === "avg" ? "default" : "ghost"} className="text-xs h-7 px-3 rounded-none" onClick={() => setTotalMode("avg")}>
+                    Moy/conducteur
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const rows = periodComparison.map((p) => {
+                  const divisor = totalMode === "avg" && p.totalDrivers > 0 ? p.totalDrivers : 1;
+                  const theoriques = p.totalTheoretical / divisor;
+                  const payees = p.totalOvertimePay / divisor;
+                  const positives = p.totalPositiveEnd / divisor;
+                  const total = theoriques + payees + positives;
+                  return {
+                    name: p.periodLabel,
+                    conducteurs: p.totalDrivers,
+                    anomalies: p.driversBufferAnomalie,
+                    "Heures théoriques": Number(theoriques.toFixed(1)),
+                    "Heures payées": Number(payees.toFixed(1)),
+                    "Heures positives fin": Number(positives.toFixed(1)),
+                    Total: Number(total.toFixed(1)),
+                    excedentPct: p.totalTheoretical > 0 ? ((p.totalOvertimePay + p.totalPositiveEnd) / p.totalTheoretical) * 100 : 0,
+                  };
+                });
+                const anomalies = periodComparison.reduce((n, p) => n + p.driversBufferAnomalie, 0);
+                const fmtH = (n: number) => `${n.toLocaleString("fr-FR", { maximumFractionDigits: totalMode === "avg" ? 1 : 0 })}h`;
+                return (
+                  <>
+                    <ResponsiveContainer width="100%" height={350}>
+                      <BarChart data={rows} margin={{ top: 18, right: 20, bottom: 5, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                        <XAxis dataKey="name" fontSize={12} />
+                        <YAxis fontSize={12} />
+                        <Tooltip
+                          formatter={(value, name) => [fmtH(Number(value)), String(name)]}
+                          contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
+                        />
+                        <Legend />
+                        <Bar dataKey="Heures théoriques" stackId="total" fill="#9ca3af" stroke="hsl(var(--background))" strokeWidth={1} />
+                        <Bar dataKey="Heures payées" stackId="total" fill="#ef4444" stroke="hsl(var(--background))" strokeWidth={1} />
+                        <Bar dataKey="Heures positives fin" stackId="total" fill="#22c55e" stroke="hsl(var(--background))" strokeWidth={1} radius={[4, 4, 0, 0]}>
+                          <LabelList dataKey="Total" position="top" offset={6} fontSize={12} className="fill-foreground" formatter={(v) => fmtH(Number(v))} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                    <Table className="mt-4">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Période</TableHead>
+                          <TableHead className="text-right">Conducteurs</TableHead>
+                          <TableHead className="text-right">Théoriques</TableHead>
+                          <TableHead className="text-right">Payées</TableHead>
+                          <TableHead className="text-right">Positives fin</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead className="text-right">Excédent / théoriques</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rows.map((r) => (
+                          <TableRow key={r.name}>
+                            <TableCell className="font-medium">{r.name}</TableCell>
+                            <TableCell className="text-right">{r.conducteurs}</TableCell>
+                            <TableCell className="text-right">{fmtH(r["Heures théoriques"])}</TableCell>
+                            <TableCell className="text-right text-red-600">{fmtH(r["Heures payées"])}</TableCell>
+                            <TableCell className="text-right text-green-600">{fmtH(r["Heures positives fin"])}</TableCell>
+                            <TableCell className="text-right font-semibold">{fmtH(r.Total)}</TableCell>
+                            <TableCell className="text-right">{r.excedentPct.toFixed(1)} %</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {anomalies > 0 && (
+                      <p className="mt-3 text-xs text-amber-600">
+                        {anomalies} conducteur{anomalies > 1 ? "s" : ""}-période{anomalies > 1 ? "s" : ""} écarté{anomalies > 1 ? "s" : ""} des heures théoriques : valeur « 10 % » supérieure à 100 h dans le fichier importé.
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
             </CardContent>
           </Card>
 

@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HeadcountEvolutionChart, type HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
-import { projectHeadcount, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type MonthlyTurnoverParam, type ArrivalHypothesis, type TempExitHypothesis, type DepartureHypothesis } from "@/lib/utils/wp-calculations";
+import { projectHeadcount, type EffectifReelMois, type Employee, type AbsenceRecord, type ScenarioParams, type MonthlyParam, type MonthlyTurnoverParam, type ArrivalHypothesis, type TempExitHypothesis, type DepartureHypothesis } from "@/lib/utils/wp-calculations";
 import { updateScenario } from "../actions";
 import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
 import { TemporaryExitsTab } from "./temporary-exits-tab";
@@ -79,6 +79,8 @@ interface Props {
   absences: AbsenceRecord[];
   selectedYear: number;
   targetTotal?: number;
+  /** Effectifs des mois écoulés, chacun lu dans sa photo de roster */
+  effectifsReels?: EffectifReelMois[];
 }
 
 export function ScenarioEditorClient({
@@ -94,6 +96,7 @@ export function ScenarioEditorClient({
   absences,
   selectedYear,
   targetTotal,
+  effectifsReels,
 }: Props) {
   // Editable state
   const [name, setName] = useState(scenario.name);
@@ -416,8 +419,8 @@ export function ScenarioEditorClient({
 
   // Run projection (recalculates on every param change)
   const projection = useMemo(() =>
-    projectHeadcount(employees, absences, scenarioParams, selectedYear, targetTotal),
-    [employees, absences, scenarioParams, selectedYear, targetTotal]
+    projectHeadcount(employees, absences, scenarioParams, selectedYear, targetTotal, effectifsReels),
+    [employees, absences, scenarioParams, selectedYear, targetTotal, effectifsReels]
   );
 
   // Transform for chart

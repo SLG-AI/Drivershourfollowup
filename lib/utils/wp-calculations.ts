@@ -1,4 +1,5 @@
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
+import { reclassifierSortiesTemporaires } from "./wp-suspension";
 
 // ============================================================
 // Luxembourg working days calculation
@@ -321,13 +322,118 @@ export function getDepartureHypothesesForMonth(
 // Projection engine
 // ============================================================
 
+/** Colonnes d'une photo de roster nécessaires à effectifReelDuMois. */
+export type SalariePhoto = Pick<
+  Employee,
+  "code_salarie" | "date_entree" | "date_sortie" | "est_sortie_temporaire" | "description_motif_sortie" | "date_fin_sortie_temporaire"
+>;
+
+/** Effectif constaté d'un mois écoulé, lu dans une photographie de roster. */
+export interface EffectifReelMois {
+  mois: number;
+  /** Salariés sous contrat en fin de mois (têtes) */
+  brut: number;
+  /** Dont en sortie temporaire */
+  temp_exits: number;
+  /** Sorties prenant effet ce mois (dernier jour du mois ⇒ mois suivant) */
+  departures: number;
+  /** Têtes absentes CNS (somme des pct_absenteisme des actifs non suspendus) */
+  absents: number;
+  /** Taux CNS en % = absents / (brut − temp_exits), même définition que le tableau de bord */
+  absenteeism_rate: number;
+}
+
+/** Mois/année d'effet d'une sortie : le dernier jour du mois bascule au mois suivant. */
+export function moisEffetSortie(dateSortie: string): { mois: number; annee: number } {
+  const d = new Date(dateSortie);
+  let mois = d.getMonth() + 1;
+  let annee = d.getFullYear();
+  if (dateSortie === lastDayOfMonth(annee, mois)) {
+    mois += 1;
+    if (mois > 12) { mois = 1; annee += 1; }
+  }
+  return { mois, annee };
+}
+
+/** Sous contrat en fin de mois : entrés avant, pas encore sortis (une sortie temporaire reste sous contrat). */
+export function actifsEnFinDeMois<T extends Pick<SalariePhoto, "date_entree" | "date_sortie" | "est_sortie_temporaire">>(
+  photo: T[],
+  monthEnd: string
+): T[] {
+  return photo.filter((e) => {
+    if (!e.date_entree || e.date_entree > monthEnd) return false;
+    if (e.date_sortie && e.date_sortie < monthEnd) {
+      // Keep if on temporary exit (will return)
+      if (e.est_sortie_temporaire) return true;
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Effectif constaté d'un mois depuis UNE photographie de roster.
+ *
+ * À appeler avec la photo DU mois (voir roster-photos.ts) : une photo unique
+ * reconstruite par les dates ignore les embauches postérieures et les
+ * départs antérieurs à son export.
+ */
+export function effectifReelDuMois(
+  photoBrute: SalariePhoto[],
+  year: number,
+  m: number,
+  absences: AbsenceRecord[] = []
+): EffectifReelMois {
+  const monthEnd = lastDayOfMonth(year, m);
+  // Même reclassification que le tableau de bord : un salarié flaggé « sortie
+  // temporaire » sans motif structurel mais avec des heures maladie CNS dans
+  // l'année est un malade, pas une suspension (sur une copie, sans muter).
+  const codesAvecMaladieCns = new Set(
+    absences.filter((a) => a.annee === year && Number(a.hrs_maladie || 0) > 0).map((a) => a.code_salarie)
+  );
+  const photo = reclassifierSortiesTemporaires(photoBrute.map((e) => ({ ...e })), codesAvecMaladieCns);
+  const activeAtMonth = actifsEnFinDeMois(photo, monthEnd);
+  const departures = photo.filter((e) => {
+    if (!e.date_sortie) return false;
+    const effet = moisEffetSortie(e.date_sortie);
+    return effet.mois === m && effet.annee === year;
+  }).length;
+  const tempExits = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd));
+  const tempExitCodes = new Set(tempExits.map((e) => e.code_salarie));
+  // L'absence CNS porte sur les salariés qui travaillent : rattachée par code
+  // à la photo du mois, ce qui écarte les absents hors effectif ou suspendus.
+  // Moyenner le pct des seuls absents puis l'appliquer à tout l'effectif
+  // donnait ~67 % d'absentéisme (« Eff. net 464 » pour 1400 sous contrat).
+  const codesActifs = new Set(activeAtMonth.map((e) => e.code_salarie));
+  const absents = absences
+    .filter((a) => a.mois === m && a.annee === year && codesActifs.has(a.code_salarie) && !tempExitCodes.has(a.code_salarie))
+    .reduce((sum, a) => sum + Number(a.pct_absenteisme || 0) / 100, 0);
+  const net = activeAtMonth.length - tempExits.length;
+  return {
+    mois: m,
+    brut: activeAtMonth.length,
+    temp_exits: tempExits.length,
+    departures,
+    absents,
+    absenteeism_rate: net > 0 ? (absents / net) * 100 : 0,
+  };
+}
+
+/**
+ * @param effectifsReels Effectifs constatés des mois écoulés, lus chacun dans
+ *   sa photo (effectifReelDuMois). À défaut, les mois écoulés sont reconstruits
+ *   depuis `employees`, qui doit alors être la photo la plus récente.
+ */
 export function projectHeadcount(
   employees: Employee[],
   absences: AbsenceRecord[],
   scenario: ScenarioParams,
   year: number,
-  targetTotal?: number
+  targetTotal?: number,
+  effectifsReels?: EffectifReelMois[]
 ): ProjectionMonth[] {
+  const reelParMois = new Map<number, EffectifReelMois>();
+  (effectifsReels ?? []).forEach((r) => reelParMois.set(r.mois, r));
   const currentDate = new Date();
   const currentMonth = currentDate.getMonth() + 1;
   const currentYear = currentDate.getFullYear();
@@ -376,43 +482,17 @@ export function projectHeadcount(
     };
 
     if (!isProjection) {
-      // Real data: count from employee records
-      const activeAtMonth = employees.filter((e) => {
-        if (!e.date_entree || e.date_entree > monthEnd) return false;
-        if (e.date_sortie && e.date_sortie < monthEnd) {
-          // Keep if on temporary exit (will return)
-          if (e.est_sortie_temporaire) return true;
-          return false;
-        }
-        return true;
-      });
+      // Real data: la photo du mois si on l'a, sinon reconstruction depuis employees
+      const reel = reelParMois.get(m) ?? effectifReelDuMois(employees, year, m, absences);
+      const tempExits = reel.temp_exits;
+      const brut = reel.brut;
+      const absRate = reel.absenteeism_rate;
 
-      const tempExits = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd)).length;
-      const brut = activeAtMonth.length;
+      // Net = sous contrat − suspensions de contrat, comme le tableau de bord ;
+      // l'absentéisme est un taux à part, il ne réduit pas le net.
+      const net = brut - tempExits;
 
-      // Use actual absence data if available
-      const monthAbsences = absences.filter((a) => a.mois === m && a.annee === year);
-      const absRate = monthAbsences.length > 0
-        ? monthAbsences.reduce((sum, a) => sum + Number(a.pct_absenteisme), 0) / monthAbsences.length
-        : 0;
-
-      const absentCount = Math.round(brut * absRate / 100);
-      const net = brut - absentCount;
-
-      // Count departures this month (from real data)
-      // If date_sortie is the last day of its month, effective departure is next month
-      const monthDepartures = employees.filter((e) => {
-        if (!e.date_sortie) return false;
-        const d = new Date(e.date_sortie);
-        let depMonth = d.getMonth() + 1;
-        let depYear = d.getFullYear();
-        const ldm = lastDayOfMonth(depYear, depMonth);
-        if (e.date_sortie === ldm) {
-          depMonth += 1;
-          if (depMonth > 12) { depMonth = 1; depYear += 1; }
-        }
-        return depMonth === m && depYear === year;
-      }).length;
+      const monthDepartures = reel.departures;
 
       runningBrut = brut;
 
@@ -506,8 +586,9 @@ export function projectHeadcount(
       const tempExitsProjected = Math.max(0, lastTempExits - returnCount + tempExitHypDepartures - tempExitHypReturns);
 
       // Le taux d'absentéisme du scénario impacte le MCT, pas le CNS
-      // → effectif_net n'est pas réduit par l'absentéisme
-      const net = runningBrut;
+      // → effectif_net n'est pas réduit par l'absentéisme, seulement par les
+      // suspensions de contrat (même définition que les mois réels).
+      const net = runningBrut - tempExitsProjected;
 
       result.push({
         month: m,

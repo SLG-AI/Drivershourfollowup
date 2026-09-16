@@ -16,6 +16,11 @@ import {
   Legend,
 } from "recharts";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { TurnoverAnalysis } from "@/components/workforce/turnover-analysis";
+import { AbsenteeismAnalysis } from "@/components/workforce/absenteeism-analysis";
+import type { AbsenteismeAnnee } from "@/lib/utils/wp-absenteisme";
+import type { TurnoverAnnee } from "@/lib/utils/wp-turnover";
 import { Activity, TrendingDown, Users, Info } from "lucide-react";
 
 const YEAR_COLORS = [
@@ -27,7 +32,8 @@ const YEAR_COLORS = [
 ];
 
 interface Props {
-  absenteeismSeries: { year: number; data: { mois: number; avg_rate: number | null }[] }[];
+  /** Taux global mensuel (CNS + MCT + injustifiées) et son détail, null sans données */
+  absenteeismSeries: { year: number; data: { mois: number; global: number | null; cns: number | null; mct: number | null; injustifiees: number | null }[] }[];
   absTypeData: { type: string; hours: number }[];
   turnoverByYear: { year: number; effectif: number; departures: number; arrivals: number; rate: number }[];
   motifData: { motif: string; count: number }[];
@@ -35,6 +41,10 @@ interface Props {
   suggestedAbsenteeism: Record<number, number>;
   suggestedTurnover: number;
   years: number[];
+  turnoverAnalyses: TurnoverAnnee[];
+  absenteismeAnalyses: AbsenteismeAnnee[];
+  /** Année de la barre de filtres, présélectionnée dans les onglets d'analyse */
+  anneeChoisie: number | null;
 }
 
 export function HistoryClient({
@@ -46,14 +56,18 @@ export function HistoryClient({
   suggestedAbsenteeism,
   suggestedTurnover,
   years,
+  turnoverAnalyses,
+  absenteismeAnalyses,
+  anneeChoisie,
 }: Props) {
   // Build absenteeism chart data (months as rows, years as columns)
   const absChartData = Array.from({ length: 12 }, (_, i) => {
     const row: Record<string, number | string> = { month: FRENCH_MONTHS_SHORT[i + 1] };
     absenteeismSeries.forEach((series) => {
       const entry = series.data[i];
-      if (entry?.avg_rate !== null && entry?.avg_rate !== undefined) {
-        row[String(series.year)] = Math.round(entry.avg_rate * 10) / 10;
+      if (entry?.global !== null && entry?.global !== undefined) {
+        row[String(series.year)] = Math.round(entry.global * 10) / 10;
+        row[`${series.year}_detail`] = `CNS ${entry.cns} % · MCT ${entry.mct} % · inj. ${entry.injustifiees} %`;
       }
     });
     return row;
@@ -76,7 +90,22 @@ export function HistoryClient({
   };
 
   return (
-    <>
+    <Tabs defaultValue="apercu">
+      <TabsList>
+        <TabsTrigger value="apercu">Vue d&apos;ensemble</TabsTrigger>
+        <TabsTrigger value="turnover">Turnover</TabsTrigger>
+        <TabsTrigger value="absenteisme">Absentéisme</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="turnover" className="mt-4">
+        <TurnoverAnalysis analyses={turnoverAnalyses} anneeInitiale={anneeChoisie} />
+      </TabsContent>
+
+      <TabsContent value="absenteisme" className="mt-4">
+        <AbsenteeismAnalysis analyses={absenteismeAnalyses} anneeInitiale={anneeChoisie} />
+      </TabsContent>
+
+      <TabsContent value="apercu" className="mt-4 space-y-6">
       {/* Suggested values card */}
       <Card className="border-blue-200 bg-blue-50/30">
         <CardHeader>
@@ -85,7 +114,7 @@ export function HistoryClient({
             Valeurs suggérées pour les scénarios
           </CardTitle>
           <CardDescription>
-            Basées sur la moyenne historique des données importées.
+            Basées sur la moyenne historique des données importées. Le taux d&apos;absentéisme des scénarios modélise les maladies non prises en charge par la CNS.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -95,13 +124,13 @@ export function HistoryClient({
               <p className="text-xl font-bold">{suggestedTurnover}%</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Absentéisme moyen annuel</p>
+              <p className="text-xs text-muted-foreground">Maladies non prises en charge (MCT)</p>
               <p className="text-xl font-bold">
                 {(Object.values(suggestedAbsenteeism).reduce((a, b) => a + b, 0) / 12).toFixed(1)}%
               </p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Mois le plus absent</p>
+              <p className="text-xs text-muted-foreground">Mois le plus absent (MCT)</p>
               <p className="text-xl font-bold">
                 {FRENCH_MONTHS_SHORT[
                   Number(Object.entries(suggestedAbsenteeism).sort((a, b) => b[1] - a[1])[0]?.[0]) || 1
@@ -125,7 +154,7 @@ export function HistoryClient({
               <Activity className="h-4 w-4" />
               Saisonnalité de l&apos;absentéisme
             </CardTitle>
-            <CardDescription>Taux moyen mensuel par année</CardDescription>
+            <CardDescription>Taux global mensuel par année (CNS + MCT + injustifiées), détail au survol</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -133,7 +162,13 @@ export function HistoryClient({
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                 <YAxis tick={{ fontSize: 12 }} unit="%" />
-                <Tooltip contentStyle={tooltipStyle} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value, name, item) => [
+                    `${value} % — ${(item.payload as Record<string, string | number>)[`${name}_detail`] ?? ""}`,
+                    String(name),
+                  ]}
+                />
                 <Legend />
                 {absenteeismSeries.map((series, i) => (
                   <Line
@@ -276,6 +311,7 @@ export function HistoryClient({
           </CardContent>
         </Card>
       )}
-    </>
+      </TabsContent>
+    </Tabs>
   );
 }

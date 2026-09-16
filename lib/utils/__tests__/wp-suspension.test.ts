@@ -5,6 +5,8 @@ import {
   fractionSuspendue,
   fractionSuspendueEmploye,
   suspensionPartielle,
+  estFinDeMission,
+  estSortieHorsTurnover,
 } from "../wp-suspension";
 
 describe("fractionSuspendue", () => {
@@ -59,5 +61,22 @@ describe("congé parental à temps partiel encodé par le taux", () => {
     expect(fractionSuspendueEmploye(parTaux)).toBe(0);
     expect(fractionSuspendueEmploye({ ...parTaux, description_motif_sortie: "Conge Parental TP", date_debut_sortie_temporaire: "2026-02-01" })).toBe(1);
     expect(fractionSuspendueEmploye({ ...parTaux, description_motif_sortie: "Conge Parental Temps Partiel", date_debut_sortie_temporaire: "2026-02-01" })).toBe(0.5);
+  });
+});
+
+describe("estFinDeMission / estSortieHorsTurnover", () => {
+  it("reconnaît le libellé SIRH « Fin de mission », insensible à la casse", () => {
+    expect(estFinDeMission("Fin de mission")).toBe(true);
+    expect(estFinDeMission("FIN DE MISSION")).toBe(true);
+    expect(estFinDeMission("Licenciement")).toBe(false);
+    expect(estFinDeMission(null)).toBe(false);
+  });
+
+  it("écarte du turnover les sorties temporaires, les CDD et les fins de mission", () => {
+    expect(estSortieHorsTurnover({ est_sortie_temporaire: true })).toBe(true);
+    expect(estSortieHorsTurnover({ type_contrat: "CDD" })).toBe(true);
+    expect(estSortieHorsTurnover({ type_contrat: "cdd" })).toBe(true);
+    expect(estSortieHorsTurnover({ description_motif_sortie: "Fin de mission" })).toBe(true);
+    expect(estSortieHorsTurnover({ type_contrat: "CDI", description_motif_sortie: "Demission" })).toBe(false);
   });
 });

@@ -116,3 +116,79 @@ export function estMotifParentalInconnu(motif: string | null | undefined): boole
   if (normaliser(MOTIF_PARENTAL_TEMPS_PLEIN) === m) return false;
   return suspensionPartielle(motif) === null;
 }
+
+// ============================================================
+// Reclassification des sorties temporaires (partagée tableau de bord,
+// mouvements et moteur de projection)
+// ============================================================
+
+/** Motifs de sortie temporaire structurelle (par opposition à la maladie). */
+export function isCongeStructurel(motif: string): boolean {
+  const m = motif.toLowerCase();
+  return (
+    m.includes("parental") ||
+    m.includes("maternité") ||
+    m.includes("maternite") ||
+    m.includes("sans solde") ||
+    m.includes("accompagnement") ||
+    m.includes("dispense")
+  );
+}
+
+/**
+ * Reclassification des sorties temporaires, APPLIQUÉE SUR PLACE.
+ *
+ * - Flaggé « sortie temporaire » avec un motif non structurel ET des heures
+ *   maladie CNS → en réalité un absent maladie (flag retiré).
+ * - Motif structurel avec une date de sortie mais pas encore flaggé (départ
+ *   futur) → sortie temporaire.
+ *
+ * Extraite du tableau de bord pour être appliquée à l'identique à la
+ * photographie du mois précédent.
+ */
+export function reclassifierSortiesTemporaires<
+  T extends { code_salarie: string; est_sortie_temporaire?: boolean | null; date_sortie?: string | null; description_motif_sortie?: string | null; _reclassified_maladie?: boolean }
+>(employees: T[], codesAvecMaladieCns: Set<string>): T[] {
+  employees.forEach((e) => {
+    if (
+      e.est_sortie_temporaire &&
+      !isCongeStructurel(e.description_motif_sortie || "") &&
+      codesAvecMaladieCns.has(e.code_salarie)
+    ) {
+      e.est_sortie_temporaire = false;
+      e._reclassified_maladie = true;
+    }
+  });
+  employees.forEach((e) => {
+    if (
+      !e.est_sortie_temporaire &&
+      e.date_sortie &&
+      isCongeStructurel(e.description_motif_sortie || "")
+    ) {
+      e.est_sortie_temporaire = true;
+    }
+  });
+  return employees;
+}
+
+// ============================================================
+// Turnover : sorties qui n'en relèvent pas
+// ============================================================
+
+/**
+ * Fin de mission = terme prévu d'un CDD. Exclue du turnover (arbitrage
+ * 2026-09-15) : on mesure les départs subis ou choisis, pas les contrats
+ * arrivés à leur terme. Libellé de l'export IN/OUT : « Fin de mission ».
+ */
+export function estFinDeMission(motif: string | null | undefined): boolean {
+  return /fin\s+de\s+mission/i.test(motif || "");
+}
+
+/** Sortie d'une photo de roster à écarter du turnover : temporaire, CDD ou fin de mission. */
+export function estSortieHorsTurnover(e: {
+  est_sortie_temporaire?: boolean | null;
+  type_contrat?: string | null;
+  description_motif_sortie?: string | null;
+}): boolean {
+  return Boolean(e.est_sortie_temporaire) || (e.type_contrat || "").toUpperCase() === "CDD" || estFinDeMission(e.description_motif_sortie);
+}

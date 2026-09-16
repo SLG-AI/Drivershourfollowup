@@ -69,15 +69,15 @@ export default async function AnalyticsPage({ searchParams }: Props) {
   // Run all independent data fetches in parallel
   const [distData, monthlyData, selectedPeriods, comparisonRaw] = await Promise.all([
     // 1. Counter distribution
-    fetchAllPages<{ driver_id: string; code_salarie: string; vehicle_type: string; latest_counter: number; total_overtime_pay: number }>(
+    fetchAllPages<{ driver_id: string; code_salarie: string; vehicle_type: string; latest_counter: number; total_overtime_pay: number; period_id: string; buffer_hours: number; months_recorded: number }>(
       (from, to) => {
         let q = supabase
           .from("driver_period_summary")
-          .select("driver_id, code_salarie, vehicle_type, latest_counter, total_overtime_pay")
+          .select("driver_id, code_salarie, vehicle_type, latest_counter, total_overtime_pay, period_id, buffer_hours, months_recorded")
           .in("period_id", periodIds)
           .range(from, to);
         if (vehicleType) q = q.eq("vehicle_type", vehicleType);
-        return q as unknown as Promise<{ data: { driver_id: string; code_salarie: string; vehicle_type: string; latest_counter: number; total_overtime_pay: number }[] | null }>;
+        return q as unknown as Promise<{ data: { driver_id: string; code_salarie: string; vehicle_type: string; latest_counter: number; total_overtime_pay: number; period_id: string; buffer_hours: number; months_recorded: number }[] | null }>;
       }
     ),
     // 2. Monthly records (aggregated server-side via RPC)
@@ -244,6 +244,21 @@ export default async function AnalyticsPage({ searchParams }: Props) {
     };
   });
 
+  // === Heures théoriques par période ===
+  // La colonne « 10 % » du fichier importé (buffer_hours) vaut 10 % des heures
+  // de travail théoriques mensuelles du conducteur, selon son temps de travail.
+  // Théoriques sur la période = 10 % × 10 × mois enregistrés. Une valeur
+  // au-delà de 100 h est une anomalie d'import (vu 776,88 h) : ignorée et comptée.
+  const BUFFER_MAX_PLAUSIBLE = 100;
+  const theoriquesParPeriode = new Map<string, { heures: number; anomalies: number }>();
+  distData.forEach((d) => {
+    const cumul = theoriquesParPeriode.get(d.period_id) ?? { heures: 0, anomalies: 0 };
+    const buffer = Number(d.buffer_hours || 0);
+    if (buffer > BUFFER_MAX_PLAUSIBLE) cumul.anomalies += 1;
+    else cumul.heures += buffer * 10 * Number(d.months_recorded || 0);
+    theoriquesParPeriode.set(d.period_id, cumul);
+  });
+
   // === Process period comparison ===
   const periodComparison = (comparisonRaw || []).map(
     (d: Record<string, unknown>) => ({
@@ -257,6 +272,8 @@ export default async function AnalyticsPage({ searchParams }: Props) {
       driversPositive: Number(d.drivers_positive),
       totalMissingEnd: Number(d.total_missing_end),
       driversNegative: Number(d.drivers_negative),
+      totalTheoretical: Math.round(theoriquesParPeriode.get(String(d.period_id))?.heures ?? 0),
+      driversBufferAnomalie: theoriquesParPeriode.get(String(d.period_id))?.anomalies ?? 0,
     })
   );
 

@@ -22,7 +22,11 @@ export interface WpDashboardStats {
   heures_injustifiees?: number | null;
   etp_total: number;
   departs_prevus: number;
-  taux_turnover_annuel: number;
+  /** Sorties définitives du mois hors fins de CDD (ETP) / effectif moyen du mois (ETP), en % */
+  taux_turnover_mensuel: number;
+  /** Le même ×12, pour comparer à un taux annuel */
+  taux_turnover_annualise: number;
+  sorties_mois_etp: number;
   sorties_temporaires: number;
   gap_vs_cible: number | null;
   target_total: number | null;
@@ -138,9 +142,10 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
       iconBg: "bg-amber-50",
     },
     {
-      title: "Taux de turnover annuel",
-      value: `${stats.taux_turnover_annuel.toFixed(1)}%`,
-      description: "Départs définitifs / effectif moyen (année)",
+      title: "Taux de turnover mensuel",
+      value: `${stats.taux_turnover_mensuel.toFixed(2)}%`,
+      description: `Sorties du mois hors fins de CDD (${stats.sorties_mois_etp.toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ETP) / effectif moyen du mois`,
+      average: `Annualisé (×12) : ${stats.taux_turnover_annualise.toFixed(1)} %`,
       icon: Repeat,
       iconColor: "text-orange-600",
       iconBg: "bg-orange-50",

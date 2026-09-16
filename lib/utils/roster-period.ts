@@ -38,14 +38,46 @@ export async function getLatestRosterPeriod(supabase: any): Promise<RosterPeriod
   return periodes[0] ?? null;
 }
 
+/** Rang absolu d'une période, pour comparer deux mois d'années différentes. */
+export function rangPeriode(p: RosterPeriod): number {
+  return p.annee * 12 + p.mois;
+}
+
 /**
- * Période à afficher pour un mois demandé.
+ * Choix pur de la photographie à retenir pour un mois demandé, parmi des
+ * périodes triées de la plus récente à la plus ancienne (ordre de
+ * listRosterPeriods).
  *
- * Exacte si elle existe. Sinon on retient la plus récente ANTÉRIEURE au mois
- * demandé : un effectif se reconduit, alors qu'un effectif futur ne dit rien
- * du passé. En dernier recours seulement — aucun roster antérieur — on prend
- * le plus ancien disponible, pour ne pas afficher une page vide.
+ * Exacte si elle existe. Sinon la plus récente ANTÉRIEURE au mois demandé :
+ * un effectif se reconduit, alors qu'un effectif futur ne dit rien du passé.
+ * En dernier recours seulement — aucune photo antérieure — la plus ancienne
+ * disponible, pour ne pas laisser un trou.
  *
+ * Sert aussi à la courbe d'évolution, qui lit CHAQUE mois dans sa propre
+ * photo : une seule photo reconstruite par les dates d'entrée/sortie ignore
+ * les embauches postérieures et les départs antérieurs à l'export.
+ */
+export function choisirPeriodeRoster(
+  periodes: RosterPeriod[],
+  mois: number,
+  annee: number
+): { periode: RosterPeriod | null; exacte: boolean } {
+  if (periodes.length === 0) return { periode: null, exacte: false };
+
+  const triees = periodes.slice().sort((a, b) => rangPeriode(b) - rangPeriode(a));
+  const demande = annee * 12 + mois;
+
+  const exacte = triees.find((p) => rangPeriode(p) === demande);
+  if (exacte) return { periode: exacte, exacte: true };
+
+  const anterieure = triees.find((p) => rangPeriode(p) < demande);
+  if (anterieure) return { periode: anterieure, exacte: false };
+
+  return { periode: triees[triees.length - 1], exacte: false };
+}
+
+/**
+ * Période à afficher pour un mois demandé (voir choisirPeriodeRoster).
  * `exacte` permet à l'appelant de signaler un affichage par défaut.
  */
 export async function resolveRosterPeriod(
@@ -53,18 +85,5 @@ export async function resolveRosterPeriod(
   mois: number,
   annee: number
 ): Promise<{ periode: RosterPeriod | null; exacte: boolean }> {
-  const periodes = await listRosterPeriods(supabase);
-  if (periodes.length === 0) return { periode: null, exacte: false };
-
-  const rang = (p: RosterPeriod) => p.annee * 12 + p.mois;
-  const demande = annee * 12 + mois;
-
-  const exacte = periodes.find((p) => rang(p) === demande);
-  if (exacte) return { periode: exacte, exacte: true };
-
-  // periodes est trié du plus récent au plus ancien
-  const anterieure = periodes.find((p) => rang(p) < demande);
-  if (anterieure) return { periode: anterieure, exacte: false };
-
-  return { periode: periodes[periodes.length - 1], exacte: false };
+  return choisirPeriodeRoster(await listRosterPeriods(supabase), mois, annee);
 }

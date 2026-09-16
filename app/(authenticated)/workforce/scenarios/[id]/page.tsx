@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { getLatestRosterPeriod } from "@/lib/utils/roster-period";
+import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
+import { effectifReelDuMois, type AbsenceRecord, type EffectifReelMois } from "@/lib/utils/wp-calculations";
 import { notFound } from "next/navigation";
 import { ScenarioEditorClient } from "./scenario-editor-client";
 import { getDistinctEmployeeValues } from "../actions";
@@ -32,6 +34,7 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
     absences,
     targets,
     comboboxOptions,
+    photosAnnee,
   ] = await Promise.all([
     supabase.from("wp_scenarios").select("*").eq("id", id).single(),
     supabase.from("wp_scenario_monthly_params").select("*").eq("scenario_id", id).order("mois"),
@@ -46,11 +49,43 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
     fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, hrs_maternite, hrs_accident, heures_theoriques")),
     fetchAll(supabase.from("wp_target_needs").select("target_headcount")),
     getDistinctEmployeeValues(),
+    // Toutes les photos de l'année : chaque mois écoulé de la projection se
+    // lit dans SA photo (une seule photo culmine toujours sur son mois).
+    fetchAll(
+      supabase
+        .from("wp_employees")
+        .select("code_salarie, mois, annee, date_entree, date_sortie, est_sortie_temporaire, date_fin_sortie_temporaire, description_motif_sortie")
+        .eq("annee", selectedYear)
+    ),
   ]);
 
   if (!scenario) notFound();
 
   const targetTotal = (targets || []).reduce((sum, t) => sum + Number(t.target_headcount), 0);
+
+  // Effectifs constatés des mois écoulés, un par photo (calculés ici pour ne
+  // pas envoyer toutes les photos au client). Un mois sans photo reconduit la
+  // plus récente antérieure, comme le tableau de bord.
+  const photos = indexerPhotos(photosAnnee);
+  ajouterPhotoSiAbsente(photos, rosterPeriode, employees || []);
+  const now = new Date();
+  const dernierMoisEcoule = selectedYear < now.getFullYear() ? 12
+    : selectedYear === now.getFullYear() ? now.getMonth() + 1 : 0;
+  const absencesTypees: AbsenceRecord[] = (absences || []).map((a) => ({
+    code_salarie: a.code_salarie,
+    mois: Number(a.mois),
+    annee: Number(a.annee),
+    pct_absenteisme: Number(a.pct_absenteisme),
+    hrs_maladie: Number(a.hrs_maladie),
+    hrs_maternite: Number(a.hrs_maternite),
+    hrs_accident: Number(a.hrs_accident),
+    heures_theoriques: Number(a.heures_theoriques),
+  }));
+  const effectifsReels: EffectifReelMois[] = [];
+  for (let m = 1; m <= dernierMoisEcoule; m++) {
+    const { lignes } = photoPourLeMois(photos, m, selectedYear);
+    effectifsReels.push(effectifReelDuMois(lignes, selectedYear, m, absencesTypees));
+  }
 
   return (
     <div className="space-y-6">
@@ -124,18 +159,10 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
           centre_cout: e.centre_cout || null,
           description_service: e.description_service || null,
         }))}
-        absences={(absences || []).map((a) => ({
-          code_salarie: a.code_salarie,
-          mois: Number(a.mois),
-          annee: Number(a.annee),
-          pct_absenteisme: Number(a.pct_absenteisme),
-          hrs_maladie: Number(a.hrs_maladie),
-          hrs_maternite: Number(a.hrs_maternite),
-          hrs_accident: Number(a.hrs_accident),
-          heures_theoriques: Number(a.heures_theoriques),
-        }))}
+        absences={absencesTypees}
         selectedYear={selectedYear}
         targetTotal={targetTotal > 0 ? targetTotal : undefined}
+        effectifsReels={effectifsReels}
       />
     </div>
   );
