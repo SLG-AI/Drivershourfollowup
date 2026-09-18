@@ -1,8 +1,15 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { fetchAll } from "@/lib/supabase/fetch-all";
 import type { WpFileType } from "@/lib/utils/wp-excel-parser";
 import { preparerStatsSalariales } from "@/lib/utils/wp-salary-import";
+import {
+  controlerDureesAbsence,
+  messagesControleDurees,
+  type LigneAbsenceAControler,
+  type ReferenceTempsTravail,
+} from "@/lib/utils/wp-duree-absence";
 
 interface WpImportInput {
   fileType: WpFileType;
@@ -243,6 +250,97 @@ async function importMouvements(supabase: any, data: Record<string, unknown>[], 
     const { error } = await supabase.from("wp_mouvements").insert(batch);
     if (error) throw new Error(`Erreur insertion mouvements (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
+}
+
+/**
+ * Contrôle, AVANT insertion, que chaque ligne d'absence (MCT ou injustifiée)
+ * ne dépasse pas la journée contractuelle de son salarié.
+ *
+ * Le temps de travail de référence ne vient jamais du fichier d'absences
+ * lui-même, qui est justement ce que l'on vérifie : il est lu dans le roster
+ * (taux CONTRACTUEL), avec les « Statistiques rapides » en repli pour les
+ * salariés absents de la photographie du mois. Voir lib/utils/wp-duree-absence.ts
+ * pour le détail, notamment pourquoi `tache_pct` ne peut pas servir de source
+ * primaire (il mesure le temps payé, pas le contrat).
+ *
+ * Purement consultatif : rend des avertissements, ne bloque jamais l'import.
+ */
+export async function verifierDureesAbsence(
+  fileType: WpFileType,
+  data: Record<string, unknown>[]
+): Promise<string[]> {
+  if (fileType !== "absences_mct" && fileType !== "absences_injustifiees") return [];
+  if (data.length === 0) return [];
+
+  const supabase = await createClient();
+
+  const lignes: LigneAbsenceAControler[] = data.map((row) => ({
+    code_salarie: String(row.code_salarie || ""),
+    duree_hrs: row.duree_hrs as number,
+    // Le fichier MCT date chaque absence (une ligne = un jour) ; celui des
+    // injustifiées décrit une PÉRIODE, dont la durée couvre tous les jours
+    // ouvrés de l'intervalle — les bornes sont donc indispensables au contrôle.
+    date_absence: (row.date_absence as string) ?? null,
+    date_debut: (row.date_debut as string) ?? null,
+    date_fin: (row.date_fin as string) ?? null,
+    mois: row.mois as number,
+    annee: row.annee as number,
+  }));
+
+  // Les périodes réellement présentes dans le fichier : la proratisation du
+  // taux dépend du mois, on ne mélange donc pas les références.
+  const periodes = new Map<string, { mois: number; annee: number }>();
+  lignes.forEach((l) => {
+    const mois = Number(l.mois);
+    const annee = Number(l.annee);
+    if (mois >= 1 && mois <= 12 && annee > 2000) periodes.set(`${annee}-${mois}`, { mois, annee });
+  });
+  if (periodes.size === 0) return [];
+
+  const references = new Map<string, Map<string, ReferenceTempsTravail>>();
+  for (const { mois, annee } of periodes.values()) {
+    // fetchAll partout : un seul mois dépasse le plafond de 1 000 lignes de
+    // PostgREST, qui tronquerait la référence en silence.
+    const [roster, stats] = await Promise.all([
+      fetchAll(
+        supabase
+          .from("wp_employees")
+          .select("code_salarie, taux_occupation")
+          .eq("mois", mois)
+          .eq("annee", annee)
+      ),
+      fetchAll(
+        supabase
+          .from("wp_salary_stats")
+          .select("code_salarie, tache_pct, date_entree, date_sortie")
+          .eq("mois", mois)
+          .eq("annee", annee)
+      ),
+    ]);
+
+    const parCode = new Map<string, ReferenceTempsTravail>();
+    // Les Statistiques rapides d'abord (repli), puis le roster par-dessus :
+    // son taux d'occupation est le taux CONTRACTUEL et prime toujours.
+    stats.forEach((st) =>
+      parCode.set(String(st.code_salarie), {
+        code_salarie: String(st.code_salarie),
+        tache_pct: st.tache_pct as number,
+        date_entree: (st.date_entree as string) ?? null,
+        date_sortie: (st.date_sortie as string) ?? null,
+      })
+    );
+    roster.forEach((e) => {
+      const code = String(e.code_salarie);
+      const existante = parCode.get(code);
+      parCode.set(code, {
+        ...(existante ?? { code_salarie: code }),
+        taux_occupation: e.taux_occupation as number,
+      });
+    });
+    references.set(`${annee}-${mois}`, parCode);
+  }
+
+  return messagesControleDurees(controlerDureesAbsence(lignes, references));
 }
 
 export async function getWpImportHistory() {

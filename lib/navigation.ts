@@ -11,6 +11,7 @@ import {
   Target,
   History,
   SlidersHorizontal,
+  BookOpen,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,6 +53,7 @@ export const modules: NavModule[] = [
       { href: "/workforce/scenarios", label: "Scénarios", icon: SlidersHorizontal },
       { href: "/workforce/targets", label: "Besoins cibles", icon: Target },
       { href: "/workforce/history", label: "Analyse historique", icon: History },
+      { href: "/workforce/methodologie", label: "Méthodologie", icon: BookOpen },
       { href: "/workforce/import", label: "Importation", icon: Upload },
     ],
   },

@@ -70,6 +70,85 @@ export function getWorkableHoursInMonth(year: number, month: number): number {
   return getWorkingDaysInMonth(year, month) * 8;
 }
 
+/**
+ * Jours fériés luxembourgeois d'une année, en chaînes ISO calculées en UTC.
+ *
+ * `getWorkingDaysInMonth` ci-dessus compare des dates LOCALES converties en
+ * ISO : le décalage s'applique des deux côtés de la comparaison, donc il
+ * s'annule. Ici les dates sont manipulées directement en UTC, ce qui rend la
+ * fonction indépendante du fuseau de la machine.
+ */
+function joursFeriesISO(year: number): Set<string> {
+  // Même algorithme de Pâques que ci-dessus, construit en UTC.
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const moisPaques = Math.floor((h + l - 7 * m + 114) / 31);
+  const jourPaques = ((h + l - 7 * m + 114) % 31) + 1;
+  const paques = Date.UTC(year, moisPaques - 1, jourPaques);
+  const JOUR = 86400000;
+
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+  return new Set([
+    iso(Date.UTC(year, 0, 1)),   // Nouvel An
+    iso(paques + 1 * JOUR),      // Lundi de Pâques
+    iso(Date.UTC(year, 4, 1)),   // Fête du Travail
+    iso(Date.UTC(year, 4, 9)),   // Journée de l'Europe
+    iso(paques + 39 * JOUR),     // Ascension
+    iso(paques + 50 * JOUR),     // Lundi de Pentecôte
+    iso(Date.UTC(year, 5, 23)),  // Fête nationale
+    iso(Date.UTC(year, 7, 15)),  // Assomption
+    iso(Date.UTC(year, 10, 1)),  // Toussaint
+    iso(Date.UTC(year, 11, 25)), // Noël
+    iso(Date.UTC(year, 11, 26)), // Saint-Étienne
+  ]);
+}
+
+/**
+ * Jours ouvrés entre deux dates ISO, BORNES INCLUSES (lundi-vendredi, hors
+ * jours fériés luxembourgeois). Traverse les mois et les années.
+ *
+ * Sert aux absences décrites par une PÉRIODE et non par un jour : le fichier
+ * des absences injustifiées donne un début et une fin, et sa durée en heures
+ * couvre tous les jours ouvrés de l'intervalle. Compter une ligne pour un jour
+ * fait passer une absence d'une semaine pour une absence d'un jour.
+ *
+ * Rend 0 si une borne manque ou si la fin précède le début.
+ */
+export function joursOuvresEntre(debut: string | null | undefined, fin: string | null | undefined): number {
+  if (!debut || !fin) return 0;
+  const d0 = Date.parse(`${debut.slice(0, 10)}T00:00:00Z`);
+  const d1 = Date.parse(`${fin.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(d0) || !Number.isFinite(d1) || d1 < d0) return 0;
+
+  const feries = new Set<string>();
+  const anneeDebut = new Date(d0).getUTCFullYear();
+  const anneeFin = new Date(d1).getUTCFullYear();
+  for (let y = anneeDebut; y <= anneeFin; y++) {
+    joursFeriesISO(y).forEach((j) => feries.add(j));
+  }
+
+  let compte = 0;
+  for (let t = d0; t <= d1; t += 86400000) {
+    const jour = new Date(t);
+    const jourSemaine = jour.getUTCDay();
+    if (jourSemaine === 0 || jourSemaine === 6) continue;
+    if (feries.has(jour.toISOString().slice(0, 10))) continue;
+    compte++;
+  }
+  return compte;
+}
+
 /** Samedi ou dimanche ? Date au format YYYY-MM-DD, lue en UTC comme partout dans ce module. */
 export function estJourDeWeekEnd(dateISO: string | null | undefined): boolean {
   if (!dateISO) return false;

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { parseWpFile, detectFileType, type WpFileType, type WpParseResult } from "@/lib/utils/wp-excel-parser";
-import { importWpData, getWpImportHistory } from "./actions";
+import { importWpData, getWpImportHistory, verifierDureesAbsence } from "./actions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -84,6 +84,10 @@ export default function WorkforceImportPage() {
   const [importHistory, setImportHistory] = useState<ImportHistoryItem[]>([]);
   const [overrideYear, setOverrideYear] = useState<number>(new Date().getFullYear());
   const [overrideMonth, setOverrideMonth] = useState<number>(0);
+  // Contrôle des durées d'absence contre le temps de travail des Statistiques
+  // rapides. Consultatif : il n'empêche jamais de confirmer l'import.
+  const [avertissementsDurees, setAvertissementsDurees] = useState<string[]>([]);
+  const [controleDureesEnCours, setControleDureesEnCours] = useState(false);
 
   // Types dont l'import est rattaché à une période.
   const TYPES_AVEC_PERIODE: (WpFileType | null)[] = ["roster_rh", "salary_stats", "absences_cns", "absences_mct"];
@@ -140,6 +144,18 @@ export default function WorkforceImportPage() {
         toast.error(result.errors[0]);
       }
 
+      // Durées d'absence : comparées à la journée contractuelle lue dans les
+      // Statistiques rapides. Asynchrone (lecture en base), l'aperçu s'affiche
+      // sans l'attendre.
+      setAvertissementsDurees([]);
+      if (result.data.length > 0 && (fileType === "absences_mct" || fileType === "absences_injustifiees")) {
+        setControleDureesEnCours(true);
+        verifierDureesAbsence(fileType, result.data)
+          .then(setAvertissementsDurees)
+          .catch(() => setAvertissementsDurees([]))
+          .finally(() => setControleDureesEnCours(false));
+      }
+
       setStage("preview");
     },
     [selectedType]
@@ -184,6 +200,7 @@ export default function WorkforceImportPage() {
     setStage("select");
     setSelectedType(null);
     setParseResult(null);
+    setAvertissementsDurees([]);
     setFileName("");
     setFileBuffer(null);
     setProgress(0);
@@ -287,6 +304,23 @@ export default function WorkforceImportPage() {
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                 {parseResult.warnings.map((w, i) => (
                   <p key={i} className="text-sm text-amber-700">{w}</p>
+                ))}
+              </div>
+            )}
+
+            {/* Contrôle des durées contre le temps de travail (Statistiques rapides) */}
+            {controleDureesEnCours && (
+              <p className="text-sm text-muted-foreground">
+                Contrôle des durées d&apos;absence en cours…
+              </p>
+            )}
+            {avertissementsDurees.length > 0 && (
+              <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-orange-800">
+                  Durées d&apos;absence
+                </p>
+                {avertissementsDurees.map((w, i) => (
+                  <p key={i} className="mt-1 text-sm text-orange-700">{w}</p>
                 ))}
               </div>
             )}
