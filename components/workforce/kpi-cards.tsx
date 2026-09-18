@@ -1,7 +1,8 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3, Repeat } from "lucide-react";
+import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3, Repeat, HelpCircle } from "lucide-react";
+import Link from "next/link";
 
 export interface WpDashboardStats {
   effectif_brut: number;
@@ -50,7 +51,12 @@ function formatHeures(h: number | null | undefined): string | null {
   return h == null ? null : `${Math.round(h).toLocaleString("fr-FR")} h`;
 }
 
-export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
+/**
+ * `lienMethodologie` porte les filtres courants : chaque carte ouvre la page
+ * Méthodologie directement sur la définition de SON indicateur, dans le même
+ * périmètre, de sorte qu'un chiffre contesté se réconcilie en un clic.
+ */
+export function WpKpiCards({ stats, lienMethodologie }: { stats: WpDashboardStats; lienMethodologie: string }) {
   const heuresTotal =
     stats.heures_cns != null && stats.heures_mct != null && stats.heures_injustifiees != null
       ? stats.heures_cns + stats.heures_mct + stats.heures_injustifiees
@@ -71,6 +77,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
   const cards = [
     {
       title: "Effectif sous contrat (ETP)",
+      ancre: "effectif-sous-contrat",
       value: stats.effectif_brut,
       description: `${stats.bus_count} BUS / ${stats.cam_count} CAM — ${stats.headcount} pers.`,
       average: formatMoyenne("Moyenne du mois", stats.effectif_brut_moyen),
@@ -80,6 +87,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Effectif après suspension de contrat (ETP)",
+      ancre: "effectif-apres-suspension",
       value: stats.effectif_net,
       description: `${stats.sorties_temporaires} ETP en suspension(s) de contrat`,
       average: formatMoyenne("Moyenne du mois", stats.effectif_net_moyen),
@@ -89,6 +97,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Taux de couverture CNS",
+      ancre: "taux-cns",
       value: `${stats.taux_absenteisme.toFixed(1)}%`,
       description: "(effectif net - effectif réel) / effectif net",
       hours: formatHeures(stats.heures_cns),
@@ -100,6 +109,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Taux de maladies non prises en charge",
+      ancre: "taux-mct",
       value: `${stats.taux_mct.toFixed(1)}%`,
       description: "heures MCT hors week-end / heures travaillables ajustées",
       hours: formatHeures(stats.heures_mct),
@@ -111,6 +121,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Taux absences injustifiées",
+      ancre: "taux-injustifiees",
       value: `${stats.taux_injustifiees.toFixed(1)}%`,
       description: "heures injustifiées / heures travaillables ajustées",
       hours: formatHeures(stats.heures_injustifiees),
@@ -122,6 +133,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Taux d'absentéisme global",
+      ancre: "taux-global",
       value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
       description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
       hours: formatHeures(heuresTotal),
@@ -135,6 +147,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Départs prévisibles",
+      ancre: "departs-prevus",
       value: stats.departs_prevus,
       description: "Sorties identifiées (définitives + temporaires)",
       icon: TrendingDown,
@@ -143,6 +156,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Taux de turnover mensuel",
+      ancre: "turnover-mensuel",
       value: `${stats.taux_turnover_mensuel.toFixed(2)}%`,
       description: `Sorties du mois hors fins de CDD (${stats.sorties_mois_etp.toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ETP) / effectif moyen du mois`,
       average: `Annualisé (×12) : ${stats.taux_turnover_annualise.toFixed(1)} %`,
@@ -152,6 +166,7 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
     },
     {
       title: "Gap vs cible",
+      ancre: "gap-vs-cible",
       value: stats.gap_vs_cible !== null ? Math.abs(stats.gap_vs_cible) : "-",
       description: gapLabel,
       icon: Target,
@@ -184,8 +199,18 @@ export function WpKpiCards({ stats }: { stats: WpDashboardStats }) {
                   <p className="mt-1 text-xs font-medium text-amber-600">{card.note}</p>
                 ) : null}
               </div>
-              <div className={`rounded-lg p-2 ${card.iconBg}`}>
-                <card.icon className={`h-5 w-5 ${card.iconColor}`} />
+              <div className="flex shrink-0 items-start gap-1">
+                <Link
+                  href={`${lienMethodologie}#${card.ancre}`}
+                  title={`Comment « ${card.title} » est calculé`}
+                  aria-label={`Méthodologie de calcul : ${card.title}`}
+                  className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </Link>
+                <div className={`rounded-lg p-2 ${card.iconBg}`}>
+                  <card.icon className={`h-5 w-5 ${card.iconColor}`} />
+                </div>
               </div>
             </div>
           </CardContent>

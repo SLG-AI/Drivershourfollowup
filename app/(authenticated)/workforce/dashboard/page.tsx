@@ -6,10 +6,11 @@ import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
-import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, fractionSuspendueEmploye, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
+import { etpDe, etpDisponibleDe, etpSuspenduDe, type SalariePaliers } from "@/lib/utils/wp-paliers";
+import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, lastDayOfMonth, isTempExitAt, moisEffetSortie, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
+import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, joursOuvresEntre, lastDayOfMonth, isTempExitAt, moisEffetSortie, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -51,6 +52,15 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const turnoverSrcId = params.turnover_src || null;
   const absSrcId = params.abs_src || null;
   const leaveSrcId = params.leave_src || null;
+
+  // Lien vers la page Méthodologie, filtres courants conservés : chaque carte
+  // KPI y renvoie sur la définition de son propre indicateur, même périmètre.
+  const qsMethodologie = new URLSearchParams();
+  (["year", "month", "fonctions", "cc", "depots", "equipes", "employee"] as const).forEach((k) => {
+    const v = params[k];
+    if (v) qsMethodologie.set(k, v);
+  });
+  const lienMethodologie = `/workforce/methodologie${qsMethodologie.size ? `?${qsMethodologie}` : ""}`;
 
   // Reference date: last day of selected month
   const refDate = lastDayOfMonth(selectedYear, selectedMonth);
@@ -324,25 +334,18 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const activeEmployees = getActiveEmployeesAt(refDate);
   const headcount = activeEmployees.length;
 
-  // ETP = taux_occupation / 100 (from wp_employees directly)
-  function getEtp(e: Record<string, unknown>): number {
-    return Number(e.taux_occupation || 100) / 100;
-  }
+  // ETP, ETP suspendu et ETP disponible : définitions communes au tableau de
+  // bord et à la page de méthodologie (lib/utils/wp-paliers.ts), pour que les
+  // deux pages ne puissent pas donner deux chiffres différents.
+  const getEtp = (e: Record<string, unknown>) => etpDe(e as unknown as SalariePaliers);
+  const getEtpSuspendu = (e: Record<string, unknown>) => etpSuspenduDe(e as unknown as SalariePaliers);
+  const getEtpDisponible = (e: Record<string, unknown>, date: string) =>
+    etpDisponibleDe(e as unknown as SalariePaliers, date);
 
   // Effectif brut in ETP
   const effectifBrutEtp = activeEmployees.reduce((sum, e) => sum + getEtp(e), 0);
   const busEtp = activeEmployees.filter((e) => e.vehicle_type === "BUS").reduce((sum, e) => sum + getEtp(e), 0);
   const camEtp = activeEmployees.filter((e) => e.vehicle_type === "CAM").reduce((sum, e) => sum + getEtp(e), 0);
-
-  // ETP retiré par une suspension de contrat : l'ETP entier, sauf suspension
-  // partielle (congé parental à temps partiel = moitié). L'ETP DISPONIBLE est
-  // le complément : c'est lui qui porte les absences et les heures travaillables.
-  function getEtpSuspendu(e: Record<string, unknown>): number {
-    return getEtp(e) * fractionSuspendueEmploye(e as Parameters<typeof fractionSuspendueEmploye>[0]);
-  }
-  function getEtpDisponible(e: Record<string, unknown>, date: string): number {
-    return isTempExitAt(e as Parameters<typeof isTempExitAt>[0], date) ? getEtp(e) - getEtpSuspendu(e) : getEtp(e);
-  }
 
   // Sorties temporaires in ETP
   const sortiesTemp = activeEmployees.filter((e) => isTempExitAt(e, refDate));
@@ -483,20 +486,27 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
 
   const selectedMonthInjustifiees = allAbsencesInjustifiees.filter((a) => Number(a.mois) === selectedMonth);
 
-  // Aggregate per employee
+  // Aggregate per employee.
+  // Une ligne du fichier des absences injustifiées décrit une PÉRIODE
+  // (date_debut → date_fin), pas une journée : sa durée couvre tous les jours
+  // ouvrés de l'intervalle. Compter une ligne pour un jour faisait passer une
+  // absence d'une semaine pour une absence d'un jour (7 jours ouvrés et 56 h
+  // affichés « 1 jour »). On compte donc les jours ouvrés de la période ; à
+  // défaut de dates, la ligne vaut un jour.
   const injByEmployee = new Map<string, { nom: string; totalHrs: number; nbJours: number }>();
   for (const row of selectedMonthInjustifiees) {
     const code = row.code_salarie;
     const hrs = Number(row.duree_hrs || 0);
+    const jours = joursOuvresEntre(row.date_debut as string, row.date_fin as string) || 1;
     const existing = injByEmployee.get(code);
     if (existing) {
       existing.totalHrs += hrs;
-      existing.nbJours += 1;
+      existing.nbJours += jours;
     } else {
       injByEmployee.set(code, {
         nom: row.nom_salarie || "",
         totalHrs: hrs,
-        nbJours: 1,
+        nbJours: jours,
       });
     }
   }
@@ -1578,7 +1588,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         </div>
       )}
 
-      <WpKpiCards stats={stats} />
+      <WpKpiCards stats={stats} lienMethodologie={lienMethodologie} />
 
       <HeadcountEvolutionChart
         data={headcountData}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estJourDeWeekEnd, horsWeekEnd } from "../wp-calculations";
+import { estJourDeWeekEnd, horsWeekEnd, joursOuvresEntre } from "../wp-calculations";
 
 describe("estJourDeWeekEnd", () => {
   it("reconnaît samedi et dimanche", () => {
@@ -134,5 +134,45 @@ describe("projectHeadcount — effectif net", () => {
     // Sans mois réel avant lui, les suspensions projetées partent de zéro
     expect(janv.is_projection).toBe(true);
     expect(janv.effectif_net).toBe(janv.effectif_brut - janv.temp_exits);
+  });
+});
+
+describe("joursOuvresEntre", () => {
+  it("compte les bornes incluses", () => {
+    // Lundi 24 au vendredi 28 août 2026
+    expect(joursOuvresEntre("2026-08-24", "2026-08-28")).toBe(5);
+  });
+
+  it("écarte les week-ends", () => {
+    // Mardi 4 au mercredi 12 août 2026 : 4,5,6,7 puis 10,11,12 = 7
+    expect(joursOuvresEntre("2026-08-04", "2026-08-12")).toBe(7);
+  });
+
+  it("écarte les jours fériés luxembourgeois", () => {
+    // 15 août 2026 (Assomption) tombe un samedi : ne retire rien de plus
+    expect(joursOuvresEntre("2026-08-10", "2026-08-21")).toBe(10);
+    // Noël 2026 est un vendredi : la semaine du 21 au 25 n'a que 4 jours
+    expect(joursOuvresEntre("2026-12-21", "2026-12-25")).toBe(4);
+  });
+
+  it("rend 1 pour une absence d'un seul jour ouvré", () => {
+    expect(joursOuvresEntre("2026-08-03", "2026-08-03")).toBe(1);
+  });
+
+  it("rend 0 pour une date tombant un week-end", () => {
+    // Dimanche 30 août 2026
+    expect(joursOuvresEntre("2026-08-30", "2026-08-30")).toBe(0);
+  });
+
+  it("traverse les mois et les années", () => {
+    // 30 et 31 décembre 2026 (mer, jeu) + 1er janvier férié + vendredi 1er ? 
+    // 2026-12-30 mer, 31 jeu, 2027-01-01 férié (ven) => 2
+    expect(joursOuvresEntre("2026-12-30", "2027-01-01")).toBe(2);
+  });
+
+  it("rend 0 quand une borne manque ou que l'ordre est inversé", () => {
+    expect(joursOuvresEntre(null, "2026-08-03")).toBe(0);
+    expect(joursOuvresEntre("2026-08-03", null)).toBe(0);
+    expect(joursOuvresEntre("2026-08-10", "2026-08-03")).toBe(0);
   });
 });
