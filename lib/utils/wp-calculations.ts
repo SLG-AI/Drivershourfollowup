@@ -173,6 +173,15 @@ export function horsWeekEnd<T extends { date_absence?: string | null }>(rows: T[
 // Date helpers
 // ============================================================
 
+/**
+ * Lendemain d'une date YYYY-MM-DD. Calcul en UTC : en heure locale, un
+ * changement d'heure ferait sauter ou répéter un jour.
+ */
+export function jourSuivant(date: string): string {
+  const [y, m, d] = date.slice(0, 10).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
 /** Last calendar day of a given month (1-indexed) as YYYY-MM-DD */
 export function lastDayOfMonth(year: number, month: number): string {
   const d = new Date(year, month, 0);

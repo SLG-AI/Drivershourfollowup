@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { parseWpFile, detectFileType, type WpFileType, type WpParseResult } from "@/lib/utils/wp-excel-parser";
 import { importWpData, getWpImportHistory, verifierDureesAbsence } from "./actions";
+import { controlerTauxCns, messagesControleTauxCns } from "@/lib/utils/wp-taux-cns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -148,7 +149,10 @@ export default function WorkforceImportPage() {
       // Statistiques rapides. Asynchrone (lecture en base), l'aperçu s'affiche
       // sans l'attendre.
       setAvertissementsDurees([]);
-      if (result.data.length > 0 && (fileType === "absences_mct" || fileType === "absences_injustifiees")) {
+      if (fileType === "absences_cns") {
+        // Taux CNS > 100 % : le fichier suffit, aucun aller-retour serveur.
+        setAvertissementsDurees(messagesControleTauxCns(controlerTauxCns(result.data)));
+      } else if (result.data.length > 0 && (fileType === "absences_mct" || fileType === "absences_injustifiees")) {
         setControleDureesEnCours(true);
         verifierDureesAbsence(fileType, result.data)
           .then(setAvertissementsDurees)

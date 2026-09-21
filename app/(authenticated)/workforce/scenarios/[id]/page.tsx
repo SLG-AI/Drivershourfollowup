@@ -6,6 +6,7 @@ import { effectifReelDuMois, type AbsenceRecord, type EffectifReelMois } from "@
 import { notFound } from "next/navigation";
 import { ScenarioEditorClient } from "./scenario-editor-client";
 import { getDistinctEmployeeValues } from "../actions";
+import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -46,7 +47,7 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
     fetchAll(rosterPeriode
       ? supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe, description_fonction, centre_cout, description_service").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
       : supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe, description_fonction, centre_cout, description_service").limit(0)),
-    fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, hrs_maternite, hrs_accident, heures_theoriques")),
+    fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, hrs_maternite, hrs_accident, heures_theoriques")).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_target_needs").select("target_headcount")),
     getDistinctEmployeeValues(),
     // Toutes les photos de l'année : chaque mois écoulé de la projection se

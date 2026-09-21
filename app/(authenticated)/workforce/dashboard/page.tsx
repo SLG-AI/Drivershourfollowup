@@ -2,15 +2,15 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { listRosterPeriods, rangPeriode, resolveRosterPeriod } from "@/lib/utils/roster-period";
 import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
-import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
+import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
-import { etpDe, etpDisponibleDe, etpSuspenduDe, type SalariePaliers } from "@/lib/utils/wp-paliers";
+import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
 import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, joursOuvresEntre, lastDayOfMonth, isTempExitAt, moisEffetSortie, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
+import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, joursOuvresEntre, jourSuivant, lastDayOfMonth, isTempExitAt, moisEffetSortie, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -24,6 +24,7 @@ import { ScenarioHypothesesCard, type ArrivalHypothesisItem, type DepartureHypot
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Upload } from "lucide-react";
+import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 
 const MONTH_LABELS: Record<number, string> = {
   1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril",
@@ -33,7 +34,7 @@ const MONTH_LABELS: Record<number, string> = {
 
 
 interface Props {
-  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
 }
 
 export default async function WorkforceDashboardPage({ searchParams }: Props) {
@@ -47,6 +48,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const selectedCC = filtres.cc;
   const selectedDepots = filtres.depots;
   const selectedEquipes = filtres.equipes;
+  const selectedContrats = filtres.contrats;
   const selectedEmployee = filtres.employee;
   const selectedScenarioIds = params.scenarios ? params.scenarios.split(",").filter(Boolean) : [];
   const turnoverSrcId = params.turnover_src || null;
@@ -56,7 +58,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Lien vers la page Méthodologie, filtres courants conservés : chaque carte
   // KPI y renvoie sur la définition de son propre indicateur, même périmètre.
   const qsMethodologie = new URLSearchParams();
-  (["year", "month", "fonctions", "cc", "depots", "equipes", "employee"] as const).forEach((k) => {
+  (["year", "month", "fonctions", "cc", "depots", "equipes", "contrats", "employee"] as const).forEach((k) => {
     const v = params[k];
     if (v) qsMethodologie.set(k, v);
   });
@@ -132,7 +134,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
             .eq("annee", moisPrecedent.annee)
         )
       : Promise.resolve([] as Record<string, unknown>[]),
-    fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_salary_stats").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_absences_injustifiees").select("*").eq("annee", selectedYear)),
@@ -152,10 +154,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     fetchAll(
       supabase
         .from("wp_employees")
-        .select("code_salarie, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe")
+        .select("code_salarie, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat")
         .eq("annee", selectedYear)
     ),
-    anneeFuture ? fetchAll(supabase.from("wp_absences").select("code_salarie, mois, pct_absenteisme, hrs_maladie").eq("annee", selectedYear - 1)) : Promise.resolve([] as Record<string, unknown>[]),
+    anneeFuture ? fetchAll(supabase.from("wp_absences").select("code_salarie, mois, pct_absenteisme, hrs_maladie").eq("annee", selectedYear - 1)).then(plafonnerTauxCns) : Promise.resolve([] as Record<string, unknown>[]),
     anneeFuture ? fetchAll(supabase.from("wp_absences_mct").select("code_salarie, mois, date_absence, duree_hrs").eq("annee", selectedYear - 1)) : Promise.resolve([] as Record<string, unknown>[]),
     anneeFuture ? fetchAll(supabase.from("wp_absences_injustifiees").select("code_salarie, mois, duree_hrs").eq("annee", selectedYear - 1)) : Promise.resolve([] as Record<string, unknown>[]),
   ]);
@@ -211,8 +213,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Week-ends écartés : le dénominateur (heures travaillables) ne compte que lundi-vendredi.
   const mctHorsWeekEnd = horsWeekEnd(absencesMct);
   const allAbsencesMct = mctHorsWeekEnd.filter((a: any) => employeeCodes.size === 0 || employeeCodes.has(a.code_salarie));
-  // No employee filter for absences injustifiées — include all employees even if not in roster
-  const allAbsencesInjustifiees = absencesInjustifiees;
+  // Injustifiées : tout le fichier sans filtre (y compris un salarié absent du
+  // roster), restreintes au périmètre dès qu'un filtre est actif.
+  const allAbsencesInjustifiees = injustifieesDuPerimetre(absencesInjustifiees, filtres.actifs, employeeCodes);
   const allTargets = targets;
 
   // ============================================================
@@ -424,6 +427,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         vehicle_type: empVehicleMap.get(a.code_salarie) ?? "?",
         description_equipe: empEquipeMap.get(a.code_salarie) ?? "",
         pct_absenteisme: Number(a.pct_absenteisme || 0),
+        pct_absenteisme_source: a.pct_absenteisme_source,
         hrs_maladie: Number(a.hrs_maladie || 0),
         hrs_accident: Number(a.hrs_accident || 0),
         hrs_maternite: Number(a.hrs_maternite || 0),
@@ -603,7 +607,12 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         lastKnownMctRate = (fte / net) * 100;
         lastKnownMctMonth = { mois: m, annee: anneePrec };
       }
-      const injMois = injAnneePrec.filter((a) => Number(a.mois) === m);
+      // Même règle de périmètre que l'année affichée (voir injustifieesDuPerimetre)
+      const injMois = injustifieesDuPerimetre(
+        injAnneePrec.filter((a) => Number(a.mois) === m) as { code_salarie: string; duree_hrs?: unknown }[],
+        filtres.actifs,
+        new Set(dispo.keys())
+      );
       if (lastKnownInjRate === null && injMois.length > 0) {
         const fte = injMois.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0) / workable;
         lastKnownInjRate = (fte / net) * 100;
@@ -668,16 +677,53 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       cnsEstimatedFromMonth = hasAbsenceData ? null : lastKnownCnsMonth;
     }
 
-    // Effectif après MCT = effectif réel - FTE perdus par maladies court terme non CNS
+    // Chaîne du mois : réel (après CNS) −injustifiées→ PAYÉ −MCT→ DISPONIBLE.
+    // Une absence CNS ou injustifiée n'est pas payée ; un salarié en MCT l'est
+    // (remboursement partiel par la mutuelle ensuite). Voir wp-paliers.ts.
+
+    // Effectif payé = effectif réel - FTE perdus par absences injustifiées
+    const monthInj = injustifieesDuPerimetre(
+      absencesInjustifiees.filter((a) => Number(a.mois) === m),
+      filtres.actifs,
+      codesDuMois
+    );
+    let effectifApresInjustifiees: number | undefined;
+    let projectedApresInjustifiees: number | undefined;
+    let ftePerdusInjMois = 0;
+    if (monthInj.length > 0) {
+      const totalInjHrs = monthInj.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
+      const workableHrs = getWorkableHoursInMonth(selectedYear, m);
+      ftePerdusInjMois = workableHrs > 0 ? totalInjHrs / workableHrs : 0;
+      effectifApresInjustifiees = Math.max(0, Math.round((effectifReel - ftePerdusInjMois) * 10) / 10);
+      // Mémoriser le dernier taux connu, même dénominateur que le mois réel
+      if (netEtpAtMonth > 0) {
+        lastKnownInjRate = (ftePerdusInjMois / netEtpAtMonth) * 100;
+        lastKnownInjMonth = { mois: m, annee: selectedYear };
+      }
+    } else if (lastKnownInjRate !== null) {
+      // Projeter avec le dernier taux connu (affiché en pointillé)
+      ftePerdusInjMois = netEtpAtMonth * (lastKnownInjRate / 100);
+      projectedApresInjustifiees = Math.max(0, Math.round((effectifReel - ftePerdusInjMois) * 10) / 10);
+    }
+
+    // Effectif disponible = effectif payé - FTE perdus par maladies court terme non CNS
     // Même règle que allAbsencesMct, mais sur les salariés de la photo du mois
     const monthMct = mctHorsWeekEnd.filter((a) => Number(a.mois) === m && (codesDuMois.size === 0 || codesDuMois.has(a.code_salarie)));
     let effectifApresMct: number | undefined;
     let projectedApresMct: number | undefined;
+    // Base des scénarios : ils ne modélisent PAS les injustifiées, leur point
+    // de départ reste donc réel − MCT, comme avant le réordonnancement.
+    let baseScenarioApresMct: number | undefined;
     if (monthMct.length > 0) {
       const totalMctHrs = monthMct.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
       const workableHrs = getWorkableHoursInMonth(selectedYear, m);
       const ftePerdus = workableHrs > 0 ? totalMctHrs / workableHrs : 0;
-      effectifApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
+      const disponible = Math.max(0, Math.round((effectifReel - ftePerdusInjMois - ftePerdus) * 10) / 10);
+      // MCT mesuré mais injustifiées ESTIMÉES : le disponible l'est en partie
+      // aussi, il se trace donc en pointillé comme toute valeur reprise.
+      if (monthInj.length === 0 && ftePerdusInjMois > 0) projectedApresMct = disponible;
+      else effectifApresMct = disponible;
+      baseScenarioApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
       // Mémoriser le dernier taux MCT connu.
       // Même dénominateur que le calcul du mois réel (heures MCT / heures
       // travaillables ajustées), soit ftePerdus / effectif net — et non
@@ -689,29 +735,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     } else if (lastKnownMctRate !== null) {
       // Projeter avec le dernier taux MCT connu (affiché en pointillé)
       const ftePerdus = netEtpAtMonth * (lastKnownMctRate / 100);
-      projectedApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
-    }
-
-    // Effectif après absences injustifiées = effectif après MCT - FTE perdus par absences injustifiées
-    const monthInj = allAbsencesInjustifiees.filter((a) => Number(a.mois) === m);
-    let effectifApresInjustifiees: number | undefined;
-    let projectedApresInjustifiees: number | undefined;
-    if (monthInj.length > 0) {
-      const totalInjHrs = monthInj.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
-      const workableHrs = getWorkableHoursInMonth(selectedYear, m);
-      const ftePerdusInj = workableHrs > 0 ? totalInjHrs / workableHrs : 0;
-      const base = effectifApresMct ?? effectifReel;
-      effectifApresInjustifiees = Math.max(0, Math.round((base - ftePerdusInj) * 10) / 10);
-      // Mémoriser le dernier taux connu, même dénominateur que le mois réel
-      if (netEtpAtMonth > 0) {
-        lastKnownInjRate = (ftePerdusInj / netEtpAtMonth) * 100;
-        lastKnownInjMonth = { mois: m, annee: selectedYear };
-      }
-    } else if (lastKnownInjRate !== null) {
-      // Projeter avec le dernier taux connu (affiché en pointillé)
-      const ftePerdusInj = netEtpAtMonth * (lastKnownInjRate / 100);
-      const base = effectifApresMct ?? projectedApresMct ?? effectifReel;
-      projectedApresInjustifiees = Math.max(0, Math.round((base - ftePerdusInj) * 10) / 10);
+      projectedApresMct = Math.max(0, Math.round((effectifReel - ftePerdusInjMois - ftePerdus) * 10) / 10);
     }
 
     headcountData.push({
@@ -721,6 +745,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       effectif_reel: Math.max(0, Math.round(effectifReel * 10) / 10),
       effectif_apres_mct: effectifApresMct,
       projected_apres_mct: projectedApresMct,
+      base_scenario_apres_mct: baseScenarioApresMct,
       effectif_apres_injustifiees: effectifApresInjustifiees,
       projected_apres_injustifiees: projectedApresInjustifiees,
       is_projection: isProjection,
@@ -1339,7 +1364,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           }
           const hd = headcountData[m - 1];
           if (hd) {
-            const base = hd.effectif_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
+            const base = hd.base_scenario_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
             if (base != null) {
               hd.scenario_apres_conges = Math.max(0, Math.round((base - leaveFteMonth) * 10) / 10);
             }
@@ -1444,8 +1469,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     ? (() => {
         const net = effectifMoyen.net;
         const apresCns = net - net * (avgAbsenteeism / 100);
-        const apresMct = apresCns - net * (tauxMct / 100);
-        const apresInj = apresMct - net * (tauxInjustifiees / 100);
+        const apresInj = apresCns - net * (tauxInjustifiees / 100); // payé
+        const apresMct = apresInj - net * (tauxMct / 100); // disponible
         return {
           effectif_brut_moyen: arrondi1(effectifMoyen.brut),
           effectif_net_moyen: arrondi1(net),
@@ -1504,23 +1529,17 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Arrivals list
   // ============================================================
 
-  // Nouveaux engagés : entrés PENDANT le mois affiché, ou plus tard dans l'année.
-  //
-  // La règle précédente ne retenait que les dates d'entrée POSTÉRIEURES au mois
-  // affiché. Elle avait un sens tant qu'une seule photographie d'effectif —
-  // toujours la plus récente — servait tous les mois : les recrutements des
-  // mois suivants y figuraient déjà. Depuis l'historisation, le roster de mars
-  // ne contient que l'effectif de mars, si bien que plus aucune ligne ne
-  // satisfaisait ce critère et que la catégorie restait vide.
-  //
-  // On part donc du PREMIER jour du mois. Les entrées futures déjà connues
-  // restent incluses, ce qui préserve l'intention d'origine.
-  const monthStart = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`;
+  // Nouveaux engagés À VENIR : entrée postérieure au mois affiché. Ceux du
+  // mois lui-même figurent déjà dans « Mouvements du mois » (diff des photos) :
+  // les lister ici aussi les montrait deux fois. Un roster historisé ne porte
+  // que rarement des entrées futures, la catégorie est donc souvent vide.
   const nouveauxEngages = allEmployees.filter(
-    (e) => e.date_entree && e.date_entree >= monthStart && e.date_entree <= yearEnd
+    (e) => e.date_entree && e.date_entree > refDate && e.date_entree <= yearEnd
   );
 
-  // Retours de suspension: est_sortie_temporaire with date_fin_sortie_temporaire after refDate
+  // Retours de suspension à venir : encore suspendus à la date de référence
+  // (fin de congé ≥ refDate). `date_fin_sortie_temporaire` est le DERNIER JOUR
+  // du congé ; la reprise, affichée plus bas, est le lendemain.
   const retoursSuspension = allEmployees.filter(
     (e) =>
       e.est_sortie_temporaire &&
@@ -1550,7 +1569,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         nom_salarie: e.nom_salarie || null,
         vehicle_type: e.vehicle_type || "?",
         description_equipe: e.description_equipe || "",
-        date: e.date_fin_sortie_temporaire!,
+        date: jourSuivant(e.date_fin_sortie_temporaire!),
         motif: e.description_motif_sortie || "Non spécifié",
         type: "retour" as const,
       })),
@@ -1576,6 +1595,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
           {selectedFonctions.length > 0 && ` — ${selectedFonctions.length} fonction(s)`}
           {selectedCC.length > 0 && ` — ${selectedCC.length} cost center(s)`}
           {selectedDepots.length > 0 && ` — ${selectedDepots.length} dépôt(s)`}
+          {selectedContrats.length > 0 && ` — ${selectedContrats[0] === AUCUNE_VALEUR ? "aucun contrat" : selectedContrats.join(" + ")}`}
         </p>
       </div>
 

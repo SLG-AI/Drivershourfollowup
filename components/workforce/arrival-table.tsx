@@ -18,7 +18,7 @@ export interface ArrivalItem {
   nom_salarie?: string | null;
   vehicle_type: string;
   description_equipe: string;
-  date: string; // date_entree or date_fin_sortie_temporaire
+  date: string; // date d'entrée, ou date de reprise (lendemain de la fin de suspension)
   motif: string;
   type: "nouveau" | "retour";
 }
@@ -215,7 +215,7 @@ export function ArrivalTable({ arrivals }: { arrivals: ArrivalItem[] }) {
                   <TableHead className="text-xs">Salarié</TableHead>
                   <TableHead className="text-xs">Type</TableHead>
                   <TableHead className="text-xs">Équipe</TableHead>
-                  <TableHead className="text-xs">Date</TableHead>
+                  <TableHead className="text-xs">Entrée / reprise</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

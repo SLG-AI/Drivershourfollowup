@@ -10,7 +10,13 @@
  * La chaîne, telle qu'elle est lue de gauche à droite sur le tableau de bord :
  *
  *   sous contrat  −suspensions→  après suspension  −CNS→  après CNS
- *                 −MCT→  après MCT  −injustifiées→  effectif disponible
+ *                 −injustifiées→  effectif PAYÉ  −MCT→  effectif DISPONIBLE
+ *
+ * L'ordre des deux dernières étapes porte un sens : une absence CNS ou
+ * injustifiée n'est pas payée par l'employeur, alors qu'un salarié en MCT
+ * l'est (la mutuelle rembourse ensuite en partie). Retirer les injustifiées
+ * AVANT le MCT fait donc apparaître l'effectif payé comme un palier de la
+ * chaîne ; le dernier palier, l'effectif disponible, ne dépend pas de l'ordre.
  *
  * Deux dénominateurs seulement, et ils ne changent jamais d'une étape à
  * l'autre :
@@ -133,17 +139,19 @@ export interface PaliersMois {
   cnsMesure: boolean;
   apresCns: number;
 
-  heuresMct: number;
-  etpPerduMct: number;
-  tauxMct: number;
-  mctMesure: boolean;
-  apresMct: number;
-
   heuresInjustifiees: number;
   etpPerduInjustifiees: number;
   tauxInjustifiees: number;
   injustifieesMesure: boolean;
+  /** Effectif PAYÉ : après CNS et absences injustifiées, avant MCT. */
   apresInjustifiees: number;
+
+  heuresMct: number;
+  etpPerduMct: number;
+  tauxMct: number;
+  mctMesure: boolean;
+  /** Effectif DISPONIBLE : dernier palier, toutes absences retirées. */
+  apresMct: number;
 
   /** Somme des trois taux : le « taux d'absentéisme global » du tableau de bord. */
   tauxGlobal: number;
@@ -177,9 +185,11 @@ export function heuresCnsDeLaLigne(a: LigneCns): number {
  * `absencesMct` doit avoir été débarrassée des week-ends (`horsWeekEnd`) :
  * le dénominateur ne compte que du lundi au vendredi.
  *
- * Les absences injustifiées ne sont PAS restreintes aux salariés de la photo,
- * à l'identique du tableau de bord : le fichier peut concerner un salarié sorti
- * depuis, et ces heures ont bien manqué au mois.
+ * Les absences injustifiées ne sont PAS restreintes ici aux salariés de la
+ * photo : le fichier peut concerner un salarié sorti depuis, et ces heures ont
+ * bien manqué au mois. C'est à l'APPELANT de les restreindre au périmètre
+ * quand un filtre est actif (`injustifieesDuPerimetre`), sans quoi les heures
+ * de toute l'entreprise seraient retirées d'un effectif partiel.
  */
 export function calculerPaliers(
   employes: SalariePaliers[],
@@ -228,7 +238,7 @@ export function calculerPaliers(
   const heuresMct = mctDuMois.reduce((s, a) => s + nombre(a.duree_hrs), 0);
   const etpPerduMct = heuresTravaillables > 0 ? heuresMct / heuresTravaillables : 0;
 
-  // --- Injustifiées : même conversion, sans restriction de périmètre
+  // --- Injustifiées : même conversion ; le périmètre est appliqué par l'appelant
   const injDuMois = duMois(absencesInjustifiees);
   const heuresInjustifiees = injDuMois.reduce((s, a) => s + nombre(a.duree_hrs), 0);
   const etpPerduInjustifiees = heuresTravaillables > 0 ? heuresInjustifiees / heuresTravaillables : 0;
@@ -240,8 +250,8 @@ export function calculerPaliers(
   const tauxInjustifiees = enPourcent(etpPerduInjustifiees);
 
   const apresCns = apresSuspension - etpPerduCns;
-  const apresMct = apresCns - etpPerduMct;
-  const apresInjustifiees = apresMct - etpPerduInjustifiees;
+  const apresInjustifiees = apresCns - etpPerduInjustifiees; // effectif payé
+  const apresMct = apresInjustifiees - etpPerduMct; // effectif disponible
 
   const cnsMesure = cnsDuMois.length > 0;
   const mctMesure = mctDuMois.length > 0;
@@ -263,23 +273,38 @@ export function calculerPaliers(
     tauxCns,
     cnsMesure,
     apresCns,
-    heuresMct,
-    etpPerduMct,
-    tauxMct,
-    mctMesure,
-    apresMct,
     heuresInjustifiees,
     etpPerduInjustifiees,
     tauxInjustifiees,
     injustifieesMesure,
     apresInjustifiees,
+    heuresMct,
+    etpPerduMct,
+    tauxMct,
+    mctMesure,
+    apresMct,
     tauxGlobal: tauxCns + tauxMct + tauxInjustifiees,
     etapes: [
       { cle: "effectif-sous-contrat", libelle: "Effectif sous contrat", etp: sousContrat, retire: 0, taux: null, mesure: true },
       { cle: "effectif-apres-suspension", libelle: "Après suspension de contrat", etp: apresSuspension, retire: etpSuspendu, taux: null, mesure: true },
       { cle: "taux-cns", libelle: "Après absences CNS", etp: apresCns, retire: etpPerduCns, taux: tauxCns, mesure: cnsMesure },
-      { cle: "taux-mct", libelle: "Après MCT", etp: apresMct, retire: etpPerduMct, taux: tauxMct, mesure: mctMesure },
-      { cle: "taux-injustifiees", libelle: "Après absences injustifiées", etp: apresInjustifiees, retire: etpPerduInjustifiees, taux: tauxInjustifiees, mesure: injustifieesMesure },
+      { cle: "taux-injustifiees", libelle: "Après absences injustifiées (payé)", etp: apresInjustifiees, retire: etpPerduInjustifiees, taux: tauxInjustifiees, mesure: injustifieesMesure },
+      { cle: "taux-mct", libelle: "Après MCT (disponible)", etp: apresMct, retire: etpPerduMct, taux: tauxMct, mesure: mctMesure },
     ],
   };
+}
+
+/**
+ * Absences injustifiées à retenir pour un périmètre. Sans filtre actif, tout
+ * le fichier compte (y compris un salarié sorti depuis, absent de la photo).
+ * Avec un filtre, seules comptent celles des salariés du périmètre : sinon les
+ * heures de toute l'entreprise seraient retirées d'un effectif partiel — sur
+ * août 2026, 354 h retirées de deux centres de coût qui n'en portaient que 182.
+ */
+export function injustifieesDuPerimetre<T extends { code_salarie: string }>(
+  lignes: T[],
+  filtresActifs: boolean,
+  codesPerimetre: Set<string>
+): T[] {
+  return filtresActifs ? lignes.filter((l) => codesPerimetre.has(l.code_salarie)) : lignes;
 }

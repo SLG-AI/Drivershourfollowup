@@ -33,7 +33,7 @@ export interface WpDashboardStats {
   target_total: number | null;
   /**
    * Effectif MOYEN du mois en ETP (pondéré par les jours), par palier :
-   * sous contrat, après suspensions, après CNS, après MCT, après injustifiées.
+   * sous contrat, après suspensions, après CNS, après injustifiées (payé), après MCT (disponible).
    * Absents quand un scénario remplace les KPI.
    */
   effectif_brut_moyen?: number;
@@ -107,29 +107,30 @@ export function WpKpiCards({ stats, lienMethodologie }: { stats: WpDashboardStat
       iconColor: stats.taux_absenteisme > 8 ? "text-red-600" : stats.taux_absenteisme > 5 ? "text-amber-600" : "text-emerald-600",
       iconBg: stats.taux_absenteisme > 8 ? "bg-red-50" : stats.taux_absenteisme > 5 ? "bg-amber-50" : "bg-emerald-50",
     },
-    {
-      title: "Taux de maladies non prises en charge",
-      ancre: "taux-mct",
-      value: `${stats.taux_mct.toFixed(1)}%`,
-      description: "heures MCT hors week-end / heures travaillables ajustées",
-      hours: formatHeures(stats.heures_mct),
-      average: formatMoyenne("Effectif moyen après CNS et MCT", stats.effectif_apres_mct_moyen),
-      note: stats.taux_mct_estime ? `Estimé — repris de ${stats.taux_mct_estime}` : null,
-      icon: Thermometer,
-      iconColor: "text-pink-600",
-      iconBg: "bg-pink-50",
-    },
+    // Ordre de la chaîne : CNS, puis injustifiées (effectif payé), puis MCT (disponible).
     {
       title: "Taux absences injustifiées",
       ancre: "taux-injustifiees",
       value: `${stats.taux_injustifiees.toFixed(1)}%`,
       description: "heures injustifiées / heures travaillables ajustées",
       hours: formatHeures(stats.heures_injustifiees),
-      average: formatMoyenne("Effectif moyen après toutes absences", stats.effectif_apres_injustifiees_moyen),
+      average: formatMoyenne("Effectif moyen payé", stats.effectif_apres_injustifiees_moyen),
       note: stats.taux_injustifiees_estime ? `Estimé — repris de ${stats.taux_injustifiees_estime}` : null,
       icon: AlertTriangle,
       iconColor: "text-yellow-600",
       iconBg: "bg-yellow-50",
+    },
+    {
+      title: "Taux de maladies non prises en charge",
+      ancre: "taux-mct",
+      value: `${stats.taux_mct.toFixed(1)}%`,
+      description: "heures MCT hors week-end / heures travaillables ajustées",
+      hours: formatHeures(stats.heures_mct),
+      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_mct_moyen),
+      note: stats.taux_mct_estime ? `Estimé — repris de ${stats.taux_mct_estime}` : null,
+      icon: Thermometer,
+      iconColor: "text-pink-600",
+      iconBg: "bg-pink-50",
     },
     {
       title: "Taux d'absentéisme global",
@@ -137,7 +138,7 @@ export function WpKpiCards({ stats, lienMethodologie }: { stats: WpDashboardStat
       value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
       description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
       hours: formatHeures(heuresTotal),
-      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_injustifiees_moyen),
+      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_mct_moyen),
       note: (stats.taux_absenteisme_estime || stats.taux_mct_estime || stats.taux_injustifiees_estime)
         ? "Inclut au moins un taux estimé"
         : null,

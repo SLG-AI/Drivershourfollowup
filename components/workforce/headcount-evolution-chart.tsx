@@ -29,6 +29,8 @@ export interface HeadcountDataPoint {
   effectif_reel?: number;
   effectif_apres_mct?: number;
   projected_apres_mct?: number;
+  /** Réel − MCT, sans les injustifiées : point de départ des scénarios, qui ne les modélisent pas. Non tracé. */
+  base_scenario_apres_mct?: number;
   effectif_apres_injustifiees?: number;
   projected_apres_injustifiees?: number;
   is_projection: boolean;
@@ -70,8 +72,9 @@ const ALL_SERIES: SeriesDef[] = [
   { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)" },
   { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)" },
   { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)" },
-  { key: "effectif_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true },
-  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées", color: "hsl(45, 93%, 47%)" },
+  // Ordre de la chaîne : réel −injustifiées→ payé −MCT→ disponible (wp-paliers.ts)
+  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)" },
+  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", dashed: true },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },

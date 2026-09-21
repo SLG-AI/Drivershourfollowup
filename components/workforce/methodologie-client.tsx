@@ -411,6 +411,7 @@ function exempleTempsPartiel(p: PaliersMois | undefined, libelleMois: string): I
         points: [
           "Le pourcentage du fichier CNS vaut 20, pas 10 : c'est un pourcentage rapporté aux heures théoriques DU SALARIÉ, pas à un mois de temps plein. Un mi-temps a environ moitié moins d'heures théoriques qu'un temps plein.",
           "Ce pourcentage est ensuite multiplié par l'ETP disponible du salarié : 0,20 × 0,5 = 0,10 ETP. Sans cette multiplication, un mi-temps absent pèserait autant qu'un temps plein.",
+          "Le pourcentage est plafonné à 100 % avant tout calcul. Le fichier dépasse parfois ce seuil — 248 h de maladie pour 168 h théoriques, quand le SIRH crédite des journées pleines sur des jours non ouvrés — et un salarié ferait alors perdre plus que son propre ETP. La base conserve la valeur du fichier, les heures affichées restent les siennes, la ligne est marquée « plafonné » et l'import signale ces salariés.",
         ],
       },
       {
@@ -430,7 +431,7 @@ function exempleTempsPartiel(p: PaliersMois | undefined, libelleMois: string): I
         ],
       },
     ],
-    source: "Tables wp_absences, wp_absences_mct, wp_absences_injustifiees ; contrôle dans lib/utils/wp-duree-absence.ts.",
+    source: "Tables wp_absences, wp_absences_mct, wp_absences_injustifiees ; contrôles dans lib/utils/wp-duree-absence.ts et lib/utils/wp-taux-cns.ts.",
   };
 }
 
@@ -664,6 +665,53 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
           source: "Table wp_absences (fichier CNS mensuel).",
         },
         {
+          cle: "taux-injustifiees",
+          titre: "Taux d'absences injustifiées",
+          definition: "Part de l'effectif absente sans justificatif.",
+          valeur: p ? pct(p.tauxInjustifiees) : undefined,
+          valeurNote: p
+            ? p.injustifieesMesure
+              ? `${heures(p.heuresInjustifiees)} = ${etp(p.etpPerduInjustifiees)}`
+              : "aucune absence injustifiée sur ce mois"
+            : undefined,
+          formule:
+            "taux injustifiées = (heures injustifiées / heures travaillables) / effectif après suspension × 100",
+          operandes: p
+            ? [
+                { label: "Heures injustifiées", valeur: heures(p.heuresInjustifiees) },
+                { label: "Heures travaillables", valeur: heures(p.heuresTravaillables) },
+                { label: "ETP perdus", valeur: etp(p.etpPerduInjustifiees) },
+                { label: "Taux", valeur: pct(p.tauxInjustifiees) },
+              ]
+            : undefined,
+          details: [
+            {
+              titre: "Une différence avec les deux autres taux",
+              points: [
+                "Sans filtre, les absences injustifiées ne sont PAS restreintes aux salariés présents dans la photographie du mois : le fichier peut concerner un salarié sorti depuis, et ces heures ont bien manqué au mois.",
+                "Dès qu'un filtre de périmètre est actif, seules comptent celles des salariés du périmètre, comme pour la CNS et le MCT. Sans cela, les heures de toute l'entreprise seraient retirées d'un effectif partiel.",
+              ],
+            },
+            {
+              titre: "Pourquoi ce palier vient avant le MCT : l'effectif payé",
+              points: [
+                "Une absence CNS ou injustifiée n'est pas payée par l'employeur. Un salarié en MCT, lui, reste payé ; la mutuelle rembourse ensuite une partie.",
+                "Retirer les injustifiées juste après la CNS fait donc de ce palier l'effectif PAYÉ. Le MCT se retire ensuite et donne l'effectif disponible, dont la valeur ne dépend pas de l'ordre.",
+              ],
+            },
+            {
+              titre: "Conversion",
+              points: [
+                "Identique au MCT : heures additionnées, divisées par les heures travaillables du mois, puis rapportées à l'effectif après suspension.",
+                "Un jour d'absence injustifiée vaut 8 heures lorsqu'il faut le convertir en jours, par exemple dans le score de Bradford.",
+                "Une ligne de ce fichier décrit une PÉRIODE (début → fin), pas une journée : sa durée couvre tous les jours ouvrés de l'intervalle, à la journée contractuelle du salarié. Une absence du 4 au 12 août vaut ainsi 56 h, soit 7 jours ouvrés à 8 h.",
+                "La colonne « Jours » du détail compte donc les jours ouvrés de chaque période. Elle comptait auparavant les lignes du fichier, ce qui affichait « 1 jour » pour une absence d'une semaine.",
+              ],
+            },
+          ],
+          source: "Table wp_absences_injustifiees.",
+        },
+        {
           cle: "taux-mct",
           titre: "Taux de maladies non prises en charge (MCT)",
           definition:
@@ -708,51 +756,11 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
             {
               titre: "Le dénominateur ne change pas",
               points: [
-                "Le taux est rapporté à l'effectif après suspension, pas à l'effectif après CNS. Le palier « après MCT », lui, se retire bien en cascade du palier précédent.",
+                "Le taux est rapporté à l'effectif après suspension, pas au palier précédent. Le palier « après MCT », lui, se retire bien en cascade de l'effectif payé, et donne l'effectif disponible : le dernier de la chaîne.",
               ],
             },
           ],
           source: "Table wp_absences_mct.",
-        },
-        {
-          cle: "taux-injustifiees",
-          titre: "Taux d'absences injustifiées",
-          definition: "Part de l'effectif absente sans justificatif.",
-          valeur: p ? pct(p.tauxInjustifiees) : undefined,
-          valeurNote: p
-            ? p.injustifieesMesure
-              ? `${heures(p.heuresInjustifiees)} = ${etp(p.etpPerduInjustifiees)}`
-              : "aucune absence injustifiée sur ce mois"
-            : undefined,
-          formule:
-            "taux injustifiées = (heures injustifiées / heures travaillables) / effectif après suspension × 100",
-          operandes: p
-            ? [
-                { label: "Heures injustifiées", valeur: heures(p.heuresInjustifiees) },
-                { label: "Heures travaillables", valeur: heures(p.heuresTravaillables) },
-                { label: "ETP perdus", valeur: etp(p.etpPerduInjustifiees) },
-                { label: "Taux", valeur: pct(p.tauxInjustifiees) },
-              ]
-            : undefined,
-          details: [
-            {
-              titre: "Une différence avec les deux autres taux",
-              points: [
-                "Les absences injustifiées ne sont PAS restreintes aux salariés présents dans la photographie du mois : le fichier peut concerner un salarié sorti depuis, et ces heures ont bien manqué au mois.",
-                "Elles ne sont pas non plus restreintes par les filtres de périmètre. Un filtre par dépôt réduit donc le dénominateur sans réduire le numérateur : à périmètre restreint, ce taux est à lire avec prudence.",
-              ],
-            },
-            {
-              titre: "Conversion",
-              points: [
-                "Identique au MCT : heures additionnées, divisées par les heures travaillables du mois, puis rapportées à l'effectif après suspension.",
-                "Un jour d'absence injustifiée vaut 8 heures lorsqu'il faut le convertir en jours, par exemple dans le score de Bradford.",
-                "Une ligne de ce fichier décrit une PÉRIODE (début → fin), pas une journée : sa durée couvre tous les jours ouvrés de l'intervalle, à la journée contractuelle du salarié. Une absence du 4 au 12 août vaut ainsi 56 h, soit 7 jours ouvrés à 8 h.",
-                "La colonne « Jours » du détail compte donc les jours ouvrés de chaque période. Elle comptait auparavant les lignes du fichier, ce qui affichait « 1 jour » pour une absence d'une semaine.",
-              ],
-            },
-          ],
-          source: "Table wp_absences_injustifiees.",
         },
         {
           cle: "taux-global",
@@ -1072,7 +1080,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
           cle: "perimetre-filtres",
           titre: "Les filtres de périmètre",
           definition:
-            "Fonction, centre de coût, dépôt, équipe et salarié : les filtres de la barre d'en-tête s'appliquent à toutes les pages du module, et sont conservés dans l'adresse de la page.",
+            "Fonction, centre de coût, dépôt, équipe, contrat (CDI ou CDD) et salarié : les filtres de la barre d'en-tête s'appliquent à toutes les pages du module, et sont conservés dans l'adresse de la page.",
           details: [
             {
               titre: "Comment ils se combinent",
@@ -1083,9 +1091,9 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               ],
             },
             {
-              titre: "Une exception à connaître",
+              titre: "Le cas des absences injustifiées",
               points: [
-                "Les absences injustifiées ne sont pas filtrées par périmètre, alors que leur dénominateur l'est. À périmètre restreint, ce taux et le taux global qui l'inclut sont surestimés.",
+                "Sans filtre, tout le fichier compte, y compris un salarié absent du roster. Avec un filtre, elles sont restreintes aux salariés du périmètre, comme les autres absences.",
               ],
             },
           ],

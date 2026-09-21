@@ -18,9 +18,10 @@ import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
 import { estFinDeMission, estSortieHorsTurnover } from "@/lib/utils/wp-suspension";
-import { calculerPaliers, etpDe, type SalariePaliers } from "@/lib/utils/wp-paliers";
+import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
+import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 
 interface Props {
   searchParams: Promise<{
@@ -30,6 +31,7 @@ interface Props {
     cc?: string;
     depots?: string;
     equipes?: string;
+    contrats?: string;
     employee?: string;
   }>;
 }
@@ -49,6 +51,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     { libelle: "Centres de coût", valeurs: filtres.cc },
     { libelle: "Dépôts", valeurs: filtres.depots },
     { libelle: "Équipes", valeurs: filtres.equipes },
+    { libelle: "Contrats", valeurs: filtres.contrats },
     { libelle: "Salarié", valeurs: filtres.employee ? [filtres.employee] : [] },
   ].filter((f) => f.valeurs.length > 0);
 
@@ -89,7 +92,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
             supabase.from("wp_employees").select("*").eq("mois", moisPrecedent.mois).eq("annee", moisPrecedent.annee)
           )
         : Promise.resolve([] as Record<string, unknown>[]),
-      fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
+      fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
       fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
       fetchAll(supabase.from("wp_absences_injustifiees").select("*").eq("annee", selectedYear)),
       fetchAll(
@@ -125,7 +128,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     roster as unknown as SalariePaliers[],
     cns,
     mct,
-    absencesInj,
+    injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
     selectedMonth,
     selectedYear
   );

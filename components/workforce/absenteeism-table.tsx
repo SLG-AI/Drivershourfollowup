@@ -18,6 +18,8 @@ export interface AbsenteeismItem {
   vehicle_type: string;
   description_equipe: string;
   pct_absenteisme: number;
+  /** Taux du fichier quand il dépassait 100 % : `pct_absenteisme` est alors plafonné (voir wp-taux-cns.ts). */
+  pct_absenteisme_source?: number;
   hrs_maladie: number;
   hrs_accident: number;
   hrs_maternite: number;
@@ -100,7 +102,18 @@ function EmployeeRows({ items, hrsField }: { items: AbsenteeismItem[]; hrsField:
           </TableCell>
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
           <TableCell className="text-sm text-right">{Math.round(Number(d[hrsField]) * 10) / 10}h</TableCell>
-          <TableCell className="text-sm text-right">{d.pct_absenteisme.toFixed(1)}%</TableCell>
+          <TableCell className="text-sm text-right">
+            {d.pct_absenteisme.toFixed(1)}%
+            {d.pct_absenteisme_source != null && (
+              <Badge
+                variant="outline"
+                className="ml-2 border-amber-300 bg-amber-50 text-[10px] text-amber-900"
+                title={`${d.pct_absenteisme_source.toFixed(1)} % dans le fichier CNS : plus d'heures d'absence que d'heures théoriques. Taux plafonné à 100 %, heures laissées telles quelles.`}
+              >
+                plafonné
+              </Badge>
+            )}
+          </TableCell>
           <TableCell className="text-sm text-right">{d.etp_perdu.toFixed(2)}</TableCell>
         </TableRow>
       ))}

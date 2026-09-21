@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { lireFiltresWorkforce } from "../wp-filtres";
+import { familleContrat, lireFiltresWorkforce } from "../wp-filtres";
 
-const e = (extra: Record<string, string | null> = {}) => ({ code_salarie: "A", description_fonction: "Chauffeur", centre_cout: "CC1", description_service: "Depots - Mersch", description_equipe: "E1", ...extra });
+const e = (extra: Record<string, string | null> = {}) => ({ code_salarie: "A", description_fonction: "Chauffeur", centre_cout: "CC1", description_service: "Depots - Mersch", description_equipe: "E1", type_contrat: "CDI CHAUFF. BUS", ...extra });
 
 describe("lireFiltresWorkforce", () => {
   it("sans paramètre, tout passe et les filtres sont inactifs", () => {
@@ -17,6 +17,23 @@ describe("lireFiltresWorkforce", () => {
     expect(f.passe(e())).toBe(true);
     expect(f.passe(e({ description_service: "Depots - Allerborn" }))).toBe(false);
     expect(f.passe(e({ centre_cout: "CC2" }))).toBe(false);
+  });
+
+  it("ramène les libellés du SIRH à leur famille CDI ou CDD", () => {
+    expect(familleContrat("CDI CHAUFF. BUS")).toBe("CDI");
+    expect(familleContrat("CDD CHAUF. BUS")).toBe("CDD");
+    expect(familleContrat(" cdi std 40h")).toBe("CDI");
+    expect(familleContrat("")).toBe("");
+    expect(familleContrat(null)).toBe("");
+  });
+
+  it("filtre sur CDI/CDD, et un contrat non renseigné ne passe aucune sélection", () => {
+    const f = lireFiltresWorkforce({ contrats: "CDD" });
+    expect(f.actifs).toBe(true);
+    expect(f.contrats).toEqual(["CDD"]);
+    expect(f.passe(e({ type_contrat: "CDD CHAUF. BUS" }))).toBe(true);
+    expect(f.passe(e())).toBe(false);
+    expect(f.passe(e({ type_contrat: null }))).toBe(false);
   });
 
   it("__none__ ne laisse rien passer, et le salarié filtre par code", () => {

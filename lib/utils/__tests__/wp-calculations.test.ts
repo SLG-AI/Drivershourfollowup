@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estJourDeWeekEnd, horsWeekEnd, joursOuvresEntre } from "../wp-calculations";
+import { estJourDeWeekEnd, horsWeekEnd, jourSuivant, joursOuvresEntre } from "../wp-calculations";
 
 describe("estJourDeWeekEnd", () => {
   it("reconnaît samedi et dimanche", () => {
@@ -174,5 +174,20 @@ describe("joursOuvresEntre", () => {
     expect(joursOuvresEntre(null, "2026-08-03")).toBe(0);
     expect(joursOuvresEntre("2026-08-03", null)).toBe(0);
     expect(joursOuvresEntre("2026-08-10", "2026-08-03")).toBe(0);
+  });
+});
+
+describe("jourSuivant", () => {
+  it("passe au lendemain, fins de mois et d'année comprises", () => {
+    expect(jourSuivant("2026-08-30")).toBe("2026-08-31");
+    expect(jourSuivant("2026-08-31")).toBe("2026-09-01");
+    expect(jourSuivant("2026-12-31")).toBe("2027-01-01");
+    expect(jourSuivant("2028-02-28")).toBe("2028-02-29"); // bissextile
+  });
+
+  it("ne saute ni ne répète un jour au changement d'heure, et accepte un horodatage", () => {
+    expect(jourSuivant("2026-03-28")).toBe("2026-03-29");
+    expect(jourSuivant("2026-10-24")).toBe("2026-10-25");
+    expect(jourSuivant("2026-10-25T00:00:00")).toBe("2026-10-26");
   });
 });
