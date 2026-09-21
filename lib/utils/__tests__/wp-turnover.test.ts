@@ -75,9 +75,16 @@ describe("analyserTurnover", () => {
   });
 
   it("ventile par mois et par motif", () => {
-    expect(r.parMois[0]).toEqual({ mois: 1, volontaire: 1, involontaire: 0, autre: 0 });
-    expect(r.parMois[1]).toEqual({ mois: 2, volontaire: 0, involontaire: 1, autre: 0 });
+    expect(r.parMois[0]).toMatchObject({ mois: 1, volontaire: 1, involontaire: 0, autre: 0 });
+    expect(r.parMois[1]).toMatchObject({ mois: 2, volontaire: 0, involontaire: 1, autre: 0 });
     expect(r.parMotif.map((m) => m.motif)).toEqual(expect.arrayContaining(["Demission", "Licenciement", "Fin de mission"]));
+  });
+
+  it("donne le taux mensuel sur l'effectif de fin de mois, fin de mission exclue", () => {
+    expect(r.parMois[0]).toMatchObject({ effectifEtp: 4, taux: 25, couvert: true }); // 1 / 4
+    expect(r.parMois[1]).toMatchObject({ effectifEtp: 3, taux: 33.33, couvert: true }); // 1 / 3, C (fin de mission) exclue
+    // Mars n'a pas de photo : effectif reconduit de février, aucun sorti ⇒ 0 %
+    expect(r.parMois[2]).toMatchObject({ effectifEtp: 3, taux: 0, couvert: false });
   });
 
   it("classe les dépôts par taux, les petits effectifs non classables", () => {

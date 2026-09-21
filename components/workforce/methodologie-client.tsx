@@ -571,6 +571,14 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "L'activité et la suspension sont évaluées jour par jour avec les règles décrites plus haut, y compris la fraction suspendue.",
               ],
             },
+            {
+              titre: "La vue « Moyenne » de la courbe",
+              points: [
+                "Le bouton « Fin de mois / Moyenne » de la courbe d'évolution applique ce calcul aux douze mois, chacun lu dans sa propre photographie.",
+                "Sous contrat et net sont des moyennes journalières. Les paliers suivants (réel, payé, disponible) appliquent à l'effectif net moyen les taux d'absence du mois, qui sont déjà des moyennes : le point du mois affiché donne donc les mêmes chiffres que les lignes violettes des cartes, à l'arrondi près.",
+                "Les sortis absents de la photographie ne sont repris que lorsque le mois et le précédent ont chacun leur photo. Les scénarios restent projetés en fin de mois : la vue Moyenne est suspendue tant qu'un scénario est affiché.",
+              ],
+            },
           ],
           source: "lib/utils/wp-effectif-moyen.ts.",
         },
@@ -1029,6 +1037,8 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               points: [
                 "Le KPI du tableau de bord est mensuel, calculé sur l'effectif moyen du mois, et son ×12 n'est qu'une projection.",
                 "L'analyse historique est annuelle et s'appuie sur les entrées/sorties de l'année. Les deux chiffres n'ont pas vocation à coïncider.",
+                "Sous le graphique « Sorties par mois », chaque mois porte son taux mensuel : sorties du mois hors fins de mission / effectif en fin de mois, lu dans la photo du mois — la même base que l'effectif moyen de l'année. Le KPI du tableau de bord divise, lui, par l'effectif moyen pondéré par les jours : les deux peuvent différer de quelques centièmes de point.",
+                "Un mois sans roster (mois à venir dont des sorties sont déjà connues) reprend l'effectif de la dernière photo, sorties déjà datées retirées ; son taux s'affiche en gris italique.",
               ],
             },
           ],

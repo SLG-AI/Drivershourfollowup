@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { ChevronDown } from "lucide-react";
+import type { PaliersDuPoint } from "@/lib/utils/wp-effectif-moyen";
 import {
   ResponsiveContainer,
   LineChart,
@@ -29,6 +30,10 @@ export interface HeadcountDataPoint {
   effectif_reel?: number;
   effectif_apres_mct?: number;
   projected_apres_mct?: number;
+  /** Sous contrat et net en moyenne journalière du mois (intermédiaire de calcul). */
+  moyenne_brute?: { brut: number; net: number };
+  /** Les mêmes paliers en MOYENNE du mois, pour la vue « Moyenne ». */
+  moyenne?: PaliersDuPoint;
   /** Réel − MCT, sans les injustifiées : point de départ des scénarios, qui ne les modélisent pas. Non tracé. */
   base_scenario_apres_mct?: number;
   effectif_apres_injustifiees?: number;
@@ -114,6 +119,9 @@ export function HeadcountEvolutionChart({
   const [absSrc, setAbsSrc] = useState<string | null>(initialAbsSrc);
   const [leaveSrc, setLeaveSrc] = useState<string | null>(initialLeaveSrc);
   const [urlDirty, setUrlDirty] = useState(false);
+  // Lecture de la courbe : effectif au dernier jour du mois, ou moyenne du
+  // mois pondérée par les jours (celle des cartes KPI).
+  const [vue, setVue] = useState<"fin" | "moyenne">("fin");
 
   // Sync selection to URL query params via useEffect (avoids setState during render)
   useEffect(() => {
@@ -207,9 +215,14 @@ export function HeadcountEvolutionChart({
 
   const lastMctRealMonth = data.reduce((last, d, i) => d.effectif_apres_mct != null ? i + 1 : last, 0);
 
+  // Les scénarios sont projetés en FIN de mois : la moyenne ne s'applique
+  // qu'aux séries mesurées, la vue est donc suspendue quand un scénario s'affiche.
+  const moyenneDisponible = data.some((d) => d.moyenne != null);
+  const vueMoyenne = vue === "moyenne" && !showScenario && moyenneDisponible;
+
   const chartData = data.map((d, idx) => {
     // Merge projected_* into effectif_* for a single continuous line
-    let merged = d;
+    let merged = vueMoyenne && d.moyenne ? { ...d, ...d.moyenne } : d;
     if (d.projected_apres_mct != null && d.effectif_apres_mct == null) {
       merged = { ...merged, effectif_apres_mct: d.projected_apres_mct };
     }
@@ -320,7 +333,37 @@ export function HeadcountEvolutionChart({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-4">
-          <CardTitle className="text-base">{title}</CardTitle>
+          <CardTitle className="text-base">
+            {title}
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {vueMoyenne ? "moyenne du mois, pondérée par les jours" : "au dernier jour du mois"}
+            </span>
+          </CardTitle>
+          <div className="flex items-center gap-2">
+          {moyenneDisponible && (
+            <div
+              role="group"
+              aria-label="Lecture de la courbe"
+              className="inline-flex h-8 items-center rounded-md border p-0.5 text-xs"
+              title={showScenario ? "Les scénarios sont projetés en fin de mois : la vue Moyenne est suspendue tant qu'un scénario est affiché." : undefined}
+            >
+              {([["fin", "Fin de mois"], ["moyenne", "Moyenne"]] as const).map(([cle, libelle]) => {
+                const actif = cle === "moyenne" ? vueMoyenne : !vueMoyenne;
+                return (
+                  <button
+                    key={cle}
+                    type="button"
+                    aria-pressed={actif}
+                    disabled={cle === "moyenne" && showScenario}
+                    onClick={() => setVue(cle)}
+                    className={`h-full rounded px-2.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${actif ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {libelle}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {scenarios.length > 0 && (
             <Popover>
               <PopoverTrigger asChild>
@@ -416,6 +459,7 @@ export function HeadcountEvolutionChart({
               </PopoverContent>
             </Popover>
           )}
+          </div>
         </div>
 
         {/* Series toggles */}
@@ -464,13 +508,13 @@ export function HeadcountEvolutionChart({
             <Tooltip
               contentStyle={{
                 borderRadius: "8px",
-                border: "1px solid hsl(var(--border))",
-                backgroundColor: "hsl(var(--background))",
+                border: "1px solid var(--border)",
+                backgroundColor: "var(--background)",
               }}
               itemSorter={(item) => {
                 const order: Record<string, number> = {
                   effectif_brut: 0, effectif_net: 1, effectif_reel: 2,
-                  effectif_apres_mct: 3, effectif_apres_injustifiees: 4, target: 5,
+                  effectif_apres_injustifiees: 3, effectif_apres_mct: 4, target: 5,
                   scenario_brut: 6, scenario_net: 7, scenario_reel: 8, scenario_apres_mct: 9, scenario_apres_conges: 10,
                 };
                 return order[String(item.dataKey)] ?? 99;
@@ -485,15 +529,18 @@ export function HeadcountEvolutionChart({
                 const deltaParent: Record<string, string> = {
                   effectif_net: "effectif_brut",
                   effectif_reel: "effectif_net",
-                  effectif_apres_mct: "effectif_reel",
-                  effectif_apres_injustifiees: "effectif_apres_mct",
+                  // Chaîne : réel −injustifiées→ payé −MCT→ disponible
+                  effectif_apres_injustifiees: "effectif_reel",
+                  effectif_apres_mct: "effectif_apres_injustifiees",
                   scenario_net: "scenario_brut",
                   scenario_reel: "scenario_net",
                   scenario_apres_mct: "scenario_reel",
                   scenario_apres_conges: "scenario_apres_mct",
                 };
 
-                const parentKey = deltaParent[key];
+                // Série parente masquée : on remonte la chaîne jusqu'à une série affichée
+                let parentKey: string | undefined = deltaParent[key];
+                while (parentKey && !payload.some((p: { dataKey: string }) => p.dataKey === parentKey)) parentKey = deltaParent[parentKey];
                 if (parentKey) {
                   const parent = payload.find((p: { dataKey: string; value: number }) => p.dataKey === parentKey);
                   if (parent?.value != null) {
@@ -526,7 +573,7 @@ export function HeadcountEvolutionChart({
             {projectionStartIndex > 0 && (
               <ReferenceLine
                 x={data[projectionStartIndex].month}
-                stroke="hsl(var(--muted-foreground))"
+                stroke="var(--muted-foreground)"
                 strokeDasharray="4 4"
                 label={{ value: "Projection", position: "top", fontSize: 11 }}
               />

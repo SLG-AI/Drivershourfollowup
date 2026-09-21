@@ -70,7 +70,27 @@ export function TurnoverAnalysis({ analyses, anneeInitiale }: Props) {
     Involontaire: m.involontaire,
     Autre: m.autre,
     Total: arrondi1(m.volontaire + m.involontaire + m.autre),
+    taux: m.taux,
+    effectifEtp: m.effectifEtp,
+    couvert: m.couvert,
   }));
+  const fmtPct2 = (n: number) => `${n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+  const aDesMoisReconduits = a.parMois.some((m) => !m.couvert && m.volontaire + m.involontaire + m.autre > 0);
+  // Axe à deux lignes : le mois, et dessous son taux de turnover mensuel.
+  // Un mois sans photo (effectif reconduit) s'écrit en gris italique.
+  const tickMoisEtTaux = ({ x, y, payload, index }: { x?: number | string; y?: number | string; payload?: { value: string }; index?: number }) => {
+    const d = chartData[index ?? 0];
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <text dy={12} textAnchor="middle" fontSize={12} className="fill-muted-foreground">{payload?.value}</text>
+        {d && d.effectifEtp > 0 && (
+          <text dy={30} textAnchor="middle" fontSize={12} fontWeight={600} fontStyle={d.couvert ? "normal" : "italic"} className={d.couvert ? "fill-foreground" : "fill-muted-foreground"}>
+            {fmtPct2(d.taux)}
+          </text>
+        )}
+      </g>
+    );
+  };
   const aDesAutres = a.categories.autre.nb > 0;
   const nbMoisCouverts = a.moisCouverts.length;
   const annualise = (taux: number) => (nbMoisCouverts > 0 && nbMoisCouverts < 12 ? (taux * 12) / nbMoisCouverts : taux);
@@ -83,8 +103,8 @@ export function TurnoverAnalysis({ analyses, anneeInitiale }: Props) {
 
   const tooltipStyle = {
     borderRadius: "8px",
-    border: "1px solid hsl(var(--border))",
-    backgroundColor: "hsl(var(--background))",
+    border: "1px solid var(--border)",
+    backgroundColor: "var(--background)",
   };
 
   const tuiles: { label: string; taux: number; nb: number; etp: number; couleur?: string }[] = [
@@ -150,22 +170,34 @@ export function TurnoverAnalysis({ analyses, anneeInitiale }: Props) {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Sorties par mois</CardTitle>
-          <CardDescription>ETP sortis chaque mois, hors fins de mission</CardDescription>
+          <CardDescription>
+            ETP sortis chaque mois, hors fins de mission. Sous chaque mois, le taux de turnover mensuel : sorties du mois / effectif en fin de mois.
+            {aDesMoisReconduits && " En gris italique : mois sans roster, effectif reconduit de la dernière photo (sorties déjà datées retirées)."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={chartData} margin={{ top: 18, right: 20, bottom: 5, left: 0 }} barCategoryGap="35%">
               <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-muted" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="month" tick={tickMoisEtTaux} height={48} interval={0} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} width={36} />
-              <Tooltip contentStyle={tooltipStyle} formatter={(v) => `${fmtEtp(Number(v))} ETP`} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(v) => `${fmtEtp(Number(v))} ETP`}
+                labelFormatter={(label) => {
+                  const d = chartData.find((c) => c.month === label);
+                  return d && d.effectifEtp > 0
+                    ? `${label} — turnover ${fmtPct2(d.taux)} (${fmtEtp(d.Total)} / ${fmtEtp(d.effectifEtp)} ETP${d.couvert ? "" : ", effectif reconduit"})`
+                    : String(label);
+                }}
+              />
               <Legend />
-              <Bar dataKey="Volontaire" stackId="s" fill={COULEURS.volontaire} stroke="hsl(var(--background))" strokeWidth={1} />
-              <Bar dataKey="Involontaire" stackId="s" fill={COULEURS.involontaire} stroke="hsl(var(--background))" strokeWidth={1} radius={aDesAutres ? 0 : [4, 4, 0, 0]}>
+              <Bar dataKey="Volontaire" stackId="s" fill={COULEURS.volontaire} stroke="var(--background)" strokeWidth={1} />
+              <Bar dataKey="Involontaire" stackId="s" fill={COULEURS.involontaire} stroke="var(--background)" strokeWidth={1} radius={aDesAutres ? 0 : [4, 4, 0, 0]}>
                 {!aDesAutres && <LabelList dataKey="Total" position="top" offset={6} formatter={(v) => (Number(v) > 0 ? fmtEtp(Number(v)) : "")} className="fill-foreground" fontSize={12} />}
               </Bar>
               {aDesAutres && (
-                <Bar dataKey="Autre" stackId="s" fill={COULEURS.autre} stroke="hsl(var(--background))" strokeWidth={1} radius={[4, 4, 0, 0]}>
+                <Bar dataKey="Autre" stackId="s" fill={COULEURS.autre} stroke="var(--background)" strokeWidth={1} radius={[4, 4, 0, 0]}>
                   <LabelList dataKey="Total" position="top" offset={6} formatter={(v) => (Number(v) > 0 ? fmtEtp(Number(v)) : "")} className="fill-foreground" fontSize={12} />
                 </Bar>
               )}

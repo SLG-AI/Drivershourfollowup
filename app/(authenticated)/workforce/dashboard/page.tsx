@@ -5,7 +5,7 @@ import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/uti
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
-import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
+import { computeEffectifMoyen, paliersEnMoyenne } from "@/lib/utils/wp-effectif-moyen";
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
@@ -283,24 +283,28 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // du roster alors que la photo précédente ne connaît que la date prévue).
   // Source 1 : l'export IN/OUT du SIRH (date ET motif réels) ; source 2, à
   // défaut : la date de sortie des statistiques salariales.
-  const estSurLaPeriode = (mois: unknown, annee: unknown) =>
-    (Number(mois) === selectedMonth && Number(annee) === selectedYear) ||
-    (Number(mois) === moisPrecedent.mois && Number(annee) === moisPrecedent.annee);
-  const sortiesConstatees = new Map<string, { date: string; motif?: string }>();
-  mouvementsSirh
-    .filter((mv) => mv.type === "sortie" && mv.date_sortie && estSurLaPeriode(mv.mois, mv.annee))
-    .forEach((mv) => {
-      const d = String(mv.date_sortie).slice(0, 10);
-      const prev = sortiesConstatees.get(mv.code_salarie);
-      if (!prev || d > prev.date) sortiesConstatees.set(mv.code_salarie, { date: d, motif: mv.motif_sortie || undefined });
-    });
-  salaryStats
-    .filter((st) => st.date_sortie && estSurLaPeriode(st.mois, st.annee) && !sortiesConstatees.has(st.code_salarie))
-    .forEach((st) => {
-      const d = String(st.date_sortie).slice(0, 10);
-      const prev = sortiesConstatees.get(st.code_salarie);
-      if (!prev || d > prev.date) sortiesConstatees.set(st.code_salarie, { date: d });
-    });
+  const sortiesConstateesSur = (mois: number, annee: number, prec: MoisAnnee) => {
+    const estSurLaPeriode = (mo: unknown, an: unknown) =>
+      (Number(mo) === mois && Number(an) === annee) ||
+      (Number(mo) === prec.mois && Number(an) === prec.annee);
+    const constatees = new Map<string, { date: string; motif?: string }>();
+    mouvementsSirh
+      .filter((mv) => mv.type === "sortie" && mv.date_sortie && estSurLaPeriode(mv.mois, mv.annee))
+      .forEach((mv) => {
+        const d = String(mv.date_sortie).slice(0, 10);
+        const prev = constatees.get(mv.code_salarie);
+        if (!prev || d > prev.date) constatees.set(mv.code_salarie, { date: d, motif: mv.motif_sortie || undefined });
+      });
+    salaryStats
+      .filter((st) => st.date_sortie && estSurLaPeriode(st.mois, st.annee) && !constatees.has(st.code_salarie))
+      .forEach((st) => {
+        const d = String(st.date_sortie).slice(0, 10);
+        const prev = constatees.get(st.code_salarie);
+        if (!prev || d > prev.date) constatees.set(st.code_salarie, { date: d });
+      });
+    return constatees;
+  };
+  const sortiesConstatees = sortiesConstateesSur(selectedMonth, selectedYear, moisPrecedent);
   const mouvements = moisPrecedentDisponible
     ? computeRosterMovements(employeesPrecedents, allEmployees, selectedMonth, selectedYear, sortiesConstatees)
     : null;
@@ -364,6 +368,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       nom_salarie: e.nom_salarie || null,
       vehicle_type: e.vehicle_type || "?",
       description_equipe: e.description_equipe || "",
+      centre_cout: e.centre_cout || "",
       type_contrat: e.type_contrat || "",
       date_entree: e.date_entree || null,
       etp: Math.round(getEtp(e) * 100) / 100,
@@ -634,6 +639,25 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     const tempExitsEtp = tempExitsAtMonth.reduce((sum, e) => sum + getEtpSuspendu(e), 0);
     const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
 
+    // Moyenne du mois pondérée par les jours, pour la vue « Moyenne » de la
+    // courbe : même calcul que les cartes KPI. Les sortis du mois absents de
+    // la photo ne sont repris que si le mois ET le précédent ont chacun LEUR
+    // photo — comparer une photo reconduite à elle-même n'apprend rien.
+    const photoM = photoPourLeMois(photosParRang, m, selectedYear);
+    const precM: MoisAnnee = m === 1 ? { mois: 12, annee: selectedYear - 1 } : { mois: m - 1, annee: selectedYear };
+    const photoPrecM = photoPourLeMois(photosParRang, precM.mois, precM.annee);
+    let sortisHorsPhotoM: { date_sortie: string; taux_occupation: number }[] = [];
+    if (photoM.exacte && photoPrecM.exacte) {
+      const codesPhotoM = new Set(photoDuMois(m).map((e) => e.code_salarie));
+      sortisHorsPhotoM = computeRosterMovements(
+        photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, selectedYear,
+        sortiesConstateesSur(m, selectedYear, precM)
+      ).sortiesDefinitives
+        .filter((i) => i.date && !codesPhotoM.has(i.code_salarie))
+        .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
+    }
+    const moyenneDuMois = computeEffectifMoyen(photoDuMois(m), sortisHorsPhotoM, m, selectedYear);
+
     // Effectif réel après maladie
     // Grâce à la reclassification, les employés maladie CNS ne sont plus
     // comptés comme sorties temporaires → ils font partie de l'effectif net
@@ -746,6 +770,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       effectif_apres_mct: effectifApresMct,
       projected_apres_mct: projectedApresMct,
       base_scenario_apres_mct: baseScenarioApresMct,
+      moyenne_brute: { brut: moyenneDuMois.brut, net: moyenneDuMois.net },
       effectif_apres_injustifiees: effectifApresInjustifiees,
       projected_apres_injustifiees: projectedApresInjustifiees,
       is_projection: isProjection,
@@ -764,6 +789,12 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   if (lastInjRealIdx >= 0 && headcountData.some((d) => d.projected_apres_injustifiees != null)) {
     headcountData[lastInjRealIdx].projected_apres_injustifiees = headcountData[lastInjRealIdx].effectif_apres_injustifiees;
   }
+
+  // Vue « Moyenne » de la courbe : chaque point de fin de mois, une fois les
+  // jonctions posées, exprimé en moyenne du mois (voir paliersEnMoyenne).
+  headcountData.forEach((d) => {
+    if (d.moyenne_brute) d.moyenne = paliersEnMoyenne(d, d.moyenne_brute);
+  });
 
   // Point de départ des projections de scénario : le dernier mois réel de
   // l'année affichée, ou, pour une année future, la fin du mois courant lue
