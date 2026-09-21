@@ -57,8 +57,8 @@ export function BreakdownChart({ byType, byDepot }: Props) {
                   <Tooltip
                     contentStyle={{
                       borderRadius: "8px",
-                      border: "1px solid hsl(var(--border))",
-                      backgroundColor: "hsl(var(--background))",
+                      border: "1px solid var(--border)",
+                      backgroundColor: "var(--background)",
                     }}
                   />
                   <Legend />
@@ -82,8 +82,8 @@ export function BreakdownChart({ byType, byDepot }: Props) {
                   <Tooltip
                     contentStyle={{
                       borderRadius: "8px",
-                      border: "1px solid hsl(var(--border))",
-                      backgroundColor: "hsl(var(--background))",
+                      border: "1px solid var(--border)",
+                      backgroundColor: "var(--background)",
                     }}
                   />
                   <Legend />

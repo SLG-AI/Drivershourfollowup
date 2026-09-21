@@ -47,7 +47,7 @@ export function PeriodComparisonChart({ data }: { data: PeriodData[] }) {
               formatter={(value) => [`${Number(value).toFixed(2)}h`]}
               contentStyle={{
                 borderRadius: "8px",
-                border: "1px solid hsl(var(--border))",
+                border: "1px solid var(--border)",
               }}
             />
             <Legend />

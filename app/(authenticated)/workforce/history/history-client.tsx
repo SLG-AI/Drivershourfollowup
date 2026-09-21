@@ -85,8 +85,8 @@ export function HistoryClient({
 
   const tooltipStyle = {
     borderRadius: "8px",
-    border: "1px solid hsl(var(--border))",
-    backgroundColor: "hsl(var(--background))",
+    border: "1px solid var(--border)",
+    backgroundColor: "var(--background)",
   };
 
   return (
