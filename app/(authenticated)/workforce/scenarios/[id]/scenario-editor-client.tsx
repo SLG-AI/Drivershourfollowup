@@ -16,6 +16,8 @@ import { updateScenario } from "../actions";
 import { ArrivalHypothesesTab } from "./arrival-hypotheses-tab";
 import { TemporaryExitsTab } from "./temporary-exits-tab";
 import { DepartureHypothesesTab } from "./departure-hypotheses-tab";
+import { CostLeversTab } from "./cost-levers-tab";
+import type { LevierCout } from "@/lib/utils/wp-leviers-cout";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { Save, ArrowLeft, Calendar, ChevronDown, RotateCcw, Repeat, Pencil } from "lucide-react";
 import { toast } from "sonner";
@@ -74,6 +76,8 @@ interface Props {
   departureHypotheses: DepartureHypothesis[];
   arrivalHypotheses: ArrivalHypothesis[];
   tempExitHypotheses: TempExitHypothesis[];
+  /** Leviers de coût du scénario (indexation, SSM, coefficient, primes) */
+  costParams: LevierCout[];
   comboboxOptions: ComboboxOptions;
   employees: Employee[];
   absences: AbsenceRecord[];
@@ -91,6 +95,7 @@ export function ScenarioEditorClient({
   departureHypotheses: initialDepartureHypotheses,
   arrivalHypotheses: initialArrivalHypotheses,
   tempExitHypotheses: initialTempExitHypotheses,
+  costParams: initialCostParams,
   comboboxOptions,
   employees,
   absences,
@@ -244,6 +249,8 @@ export function ScenarioEditorClient({
   const [tempExitCount, setTempExitCount] = useState(initialTempExitHypotheses.length);
   // Departure hypotheses state
   const [departureHypotheses, setDepartureHypotheses] = useState<DepartureHypothesis[]>(initialDepartureHypotheses);
+  // Cost levers count (rows are managed by the tab through server actions)
+  const [costParamCount, setCostParamCount] = useState(initialCostParams.length);
 
   // Check if any selected cost center has specific rates
   const hasSpecificRates = useMemo(() => {
@@ -545,6 +552,7 @@ export function ScenarioEditorClient({
           <TabsTrigger value="arrivals">Hypothèses d&apos;arrivées</TabsTrigger>
           <TabsTrigger value="temp_exits">Sorties temporaires ({tempExitCount})</TabsTrigger>
           <TabsTrigger value="departures">Départs ({departureHypotheses.length})</TabsTrigger>
+          <TabsTrigger value="couts">Coûts ({costParamCount})</TabsTrigger>
           <TabsTrigger value="detail">Détail projection</TabsTrigger>
         </TabsList>
 
@@ -1054,6 +1062,17 @@ export function ScenarioEditorClient({
             comboboxOptions={comboboxOptions}
             employees={employees}
             selectedYear={selectedYear}
+          />
+        </TabsContent>
+
+        {/* Cost levers */}
+        <TabsContent value="couts">
+          <CostLeversTab
+            scenarioId={scenario.id}
+            costParams={initialCostParams}
+            costCenterOptions={comboboxOptions.centres_cout}
+            selectedYear={selectedYear}
+            onCountChange={setCostParamCount}
           />
         </TabsContent>
 

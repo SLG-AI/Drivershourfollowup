@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 import { ScenarioEditorClient } from "./scenario-editor-client";
 import { getDistinctEmployeeValues } from "../actions";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
+import type { ModeLevier, TypeLevier } from "@/lib/utils/wp-leviers-cout";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -31,6 +32,7 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
     { data: departures },
     { data: arrivalHypotheses },
     { data: tempExitHypotheses },
+    { data: costParams },
     employees,
     absences,
     targets,
@@ -44,6 +46,7 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
     supabase.from("wp_scenario_departures").select("*").eq("scenario_id", id).order("departure_month"),
     supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", id).order("start_year, start_month"),
     supabase.from("wp_scenario_temp_exit_hypotheses").select("*").eq("scenario_id", id).order("departure_year, departure_month"),
+    supabase.from("wp_scenario_cost_params").select("*").eq("scenario_id", id).order("annee_effet, mois_effet, created_at"),
     fetchAll(rosterPeriode
       ? supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe, description_fonction, centre_cout, description_service").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
       : supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement, description_equipe, description_fonction, centre_cout, description_service").limit(0)),
@@ -144,6 +147,17 @@ export default async function ScenarioEditorPage({ params, searchParams }: Props
           return_day: h.return_day ? Number(h.return_day) : null,
           return_month: h.return_month ? Number(h.return_month) : null,
           return_year: h.return_year ? Number(h.return_year) : null,
+        }))}
+        costParams={(costParams || []).map((c: Record<string, unknown>) => ({
+          id: c.id as string,
+          scenario_id: c.scenario_id as string,
+          type: c.type as TypeLevier,
+          centre_cout: (c.centre_cout as string) || null,
+          annee_effet: Number(c.annee_effet),
+          mois_effet: Number(c.mois_effet),
+          valeur: Number(c.valeur),
+          mode: c.mode as ModeLevier,
+          libelle: (c.libelle as string) || null,
         }))}
         comboboxOptions={comboboxOptions}
         employees={(employees || []).map((e) => ({
