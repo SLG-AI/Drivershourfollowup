@@ -392,6 +392,7 @@ function WorkforceFilters() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [societes, setSocietes] = useState<string[]>([]);
   const [fonctions, setFonctions] = useState<string[]>([]);
   const [centreCouts, setCentreCouts] = useState<string[]>([]);
   const [depots, setDepots] = useState<string[]>([]);
@@ -415,18 +416,20 @@ function WorkforceFilters() {
 
       let requete = supabase
         .from("wp_employees")
-        .select("description_fonction, centre_cout, description_service, description_equipe, type_contrat, code_salarie");
+        .select("code_employeur, description_fonction, centre_cout, description_service, description_equipe, type_contrat, code_salarie");
       if (periode) requete = requete.eq("mois", periode.mois).eq("annee", periode.annee);
       // fetchAll : un mois dépasse 1400 salariés, au-delà du plafond de 1000
       // lignes de PostgREST qui amputait silencieusement les listes de filtres.
       const data = periode ? await fetchAll(requete) : [];
       if (data) {
+        const socs = [...new Set(data.map((e) => e.code_employeur).filter(Boolean))].sort() as string[];
         const fns = [...new Set(data.map((e) => e.description_fonction).filter(Boolean))].sort() as string[];
         const ccs = [...new Set(data.map((e) => e.centre_cout).filter(Boolean))].sort() as string[];
         const deps = [...new Set(data.map((e) => e.description_service).filter(Boolean))].sort() as string[];
         const eqs = [...new Set(data.map((e) => e.description_equipe).filter(Boolean))].sort() as string[];
         const cts = [...new Set(data.map((e) => familleContrat(e.type_contrat)).filter(Boolean))].sort() as string[];
         const codes = [...new Set(data.map((e) => e.code_salarie).filter(Boolean))].sort() as string[];
+        setSocietes(socs);
         setFonctions(fns);
         setCentreCouts(ccs);
         setDepots(deps);
@@ -484,6 +487,15 @@ function WorkforceFilters() {
           ))}
         </SelectContent>
       </Select>
+      {societes.length > 0 && (
+        <MultiSelectFilter
+          label="Sociétés"
+          paramKey="societes"
+          options={societes}
+          searchParams={new URLSearchParams(searchParams.toString())}
+          onUpdate={updateFilter}
+        />
+      )}
       {fonctions.length > 0 && (
         <MultiSelectFilter
           label="Fonctions"

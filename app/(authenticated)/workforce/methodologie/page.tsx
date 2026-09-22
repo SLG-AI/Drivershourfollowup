@@ -33,6 +33,7 @@ interface Props {
     depots?: string;
     equipes?: string;
     contrats?: string;
+    societes?: string;
     employee?: string;
   }>;
 }
@@ -48,6 +49,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
 
   // Périmètre actif, pour que le lecteur sache à quoi se rapportent les chiffres
   const perimetre: { libelle: string; valeurs: string[] }[] = [
+    { libelle: "Sociétés", valeurs: filtres.societes },
     { libelle: "Fonctions", valeurs: filtres.fonctions },
     { libelle: "Centres de coût", valeurs: filtres.cc },
     { libelle: "Dépôts", valeurs: filtres.depots },

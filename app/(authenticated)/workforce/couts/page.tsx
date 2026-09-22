@@ -33,7 +33,7 @@ const MONTH_LABELS: Record<number, string> = {
 };
 
 interface Props {
-  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; societes?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
 }
 
 /**
@@ -56,7 +56,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const leaveSrcId = params.leave_src || null;
 
   const qsMethodologie = new URLSearchParams();
-  (["year", "month", "fonctions", "cc", "depots", "equipes", "contrats", "employee"] as const).forEach((k) => {
+  (["year", "month", "societes", "fonctions", "cc", "depots", "equipes", "contrats", "employee"] as const).forEach((k) => {
     const v = params[k];
     if (v) qsMethodologie.set(k, v);
   });
@@ -83,7 +83,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
 
   const { periode: rosterPeriode, exacte: rosterPeriodeExacte } = await resolveRosterPeriod(supabase, selectedMonth, selectedYear);
   const anneeFuture = selectedYear > now.getFullYear();
-  const colonnesPhoto = "code_salarie, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, brut_indice";
+  const colonnesPhoto = "code_salarie, code_employeur, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, brut_indice";
 
   const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*").eq("mois", rosterPeriode?.mois ?? -1).eq("annee", rosterPeriode?.annee ?? -1)),
@@ -317,6 +317,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
 
   const maxValeur = Math.max(0, ...points.map((p) => p.effectif_brut));
   const filtresDesc = [
+    filtres.societes.length > 0 ? filtres.societes.join(" + ") : null,
     filtres.fonctions.length > 0 ? `${filtres.fonctions.length} fonction(s)` : null,
     filtres.cc.length > 0 ? `${filtres.cc.length} cost center(s)` : null,
     filtres.depots.length > 0 ? `${filtres.depots.length} dépôt(s)` : null,

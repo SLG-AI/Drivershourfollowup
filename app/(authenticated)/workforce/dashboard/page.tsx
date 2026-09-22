@@ -36,7 +36,7 @@ const MONTH_LABELS: Record<number, string> = {
 
 
 interface Props {
-  searchParams: Promise<{ year?: string; month?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; societes?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string; scenarios?: string; turnover_src?: string; abs_src?: string; leave_src?: string }>;
 }
 
 export default async function WorkforceDashboardPage({ searchParams }: Props) {
@@ -60,7 +60,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Lien vers la page Méthodologie, filtres courants conservés : chaque carte
   // KPI y renvoie sur la définition de son propre indicateur, même périmètre.
   const qsMethodologie = new URLSearchParams();
-  (["year", "month", "fonctions", "cc", "depots", "equipes", "contrats", "employee"] as const).forEach((k) => {
+  (["year", "month", "societes", "fonctions", "cc", "depots", "equipes", "contrats", "employee"] as const).forEach((k) => {
     const v = params[k];
     if (v) qsMethodologie.set(k, v);
   });
@@ -156,7 +156,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     fetchAll(
       supabase
         .from("wp_employees")
-        .select("code_salarie, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, nom_salarie, vehicle_type")
+        .select("code_salarie, code_employeur, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, nom_salarie, vehicle_type")
         .eq("annee", selectedYear)
     ),
     anneeFuture ? fetchAll(supabase.from("wp_absences").select("code_salarie, mois, pct_absenteisme, hrs_maladie").eq("annee", selectedYear - 1)).then(plafonnerTauxCns) : Promise.resolve([] as Record<string, unknown>[]),
@@ -905,6 +905,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         <h1 className="text-2xl font-bold">Workforce Planning</h1>
         <p className="text-muted-foreground">
           Prévision et suivi des effectifs — {MONTH_LABELS[selectedMonth]} {selectedYear}
+          {filtres.societes.length > 0 && ` — ${filtres.societes.join(" + ")}`}
           {selectedFonctions.length > 0 && ` — ${selectedFonctions.length} fonction(s)`}
           {selectedCC.length > 0 && ` — ${selectedCC.length} cost center(s)`}
           {selectedDepots.length > 0 && ` — ${selectedDepots.length} dépôt(s)`}

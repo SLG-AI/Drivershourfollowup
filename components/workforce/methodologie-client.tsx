@@ -1106,7 +1106,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
           cle: "perimetre-filtres",
           titre: "Les filtres de périmètre",
           definition:
-            "Fonction, centre de coût, dépôt, équipe, contrat (CDI ou CDD) et salarié : les filtres de la barre d'en-tête s'appliquent à toutes les pages du module, et sont conservés dans l'adresse de la page.",
+            "Société (code employeur), fonction, centre de coût, dépôt, équipe, contrat (CDI ou CDD) et salarié : les filtres de la barre d'en-tête s'appliquent à toutes les pages du module, et sont conservés dans l'adresse de la page.",
           details: [
             {
               titre: "Comment ils se combinent",

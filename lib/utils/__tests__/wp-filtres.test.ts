@@ -36,6 +36,14 @@ describe("lireFiltresWorkforce", () => {
     expect(f.passe(e({ type_contrat: null }))).toBe(false);
   });
 
+  it("filtre sur la société (code employeur)", () => {
+    const f = lireFiltresWorkforce({ societes: "SLA" });
+    expect(f.actifs).toBe(true);
+    expect(f.passe(e({ code_employeur: "SLA" }))).toBe(true);
+    expect(f.passe(e({ code_employeur: "AUTRE" }))).toBe(false);
+    expect(f.passe(e())).toBe(false); // employeur non renseigné
+  });
+
   it("__none__ ne laisse rien passer, et le salarié filtre par code", () => {
     expect(lireFiltresWorkforce({ fonctions: "__none__" }).passe(e())).toBe(false);
     const f = lireFiltresWorkforce({ employee: "B" });

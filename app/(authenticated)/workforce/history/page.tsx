@@ -11,7 +11,7 @@ import { HistoryClient } from "./history-client";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 
 interface Props {
-  searchParams: Promise<{ year?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string }>;
+  searchParams: Promise<{ year?: string; societes?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string }>;
 }
 
 export default async function HistoryPage({ searchParams }: Props) {
@@ -33,7 +33,7 @@ export default async function HistoryPage({ searchParams }: Props) {
     // lit dans SA photo. Une photo unique reconstruite par les dates culmine
     // toujours sur son propre mois, et ne connaît ni les partis avant elle ni
     // les embauchés après.
-    fetchAll(supabase.from("wp_employees").select("code_salarie, mois, annee, date_entree, date_sortie, est_sortie_temporaire, date_debut_sortie_temporaire, date_fin_sortie_temporaire, description_motif_sortie, type_contrat, taux_occupation, description_service, nom_salarie, description_fonction, centre_cout, description_equipe")),
+    fetchAll(supabase.from("wp_employees").select("code_salarie, code_employeur, mois, annee, date_entree, date_sortie, est_sortie_temporaire, date_debut_sortie_temporaire, date_fin_sortie_temporaire, description_motif_sortie, type_contrat, taux_occupation, description_service, nom_salarie, description_fonction, centre_cout, description_equipe")),
     // Mouvements constatés par le SIRH (export IN/OUT) : dates et motifs RÉELS
     // des entrées/sorties, là où une photo ne connaît que les sorties prévues.
     fetchAll(supabase.from("wp_mouvements").select("code_salarie, type, motif_sortie, date_sortie, mois, annee")),
