@@ -36,6 +36,8 @@ export interface CoutsStats {
   /** Mois affiché (libellé) et mois de la photo de référence salariale. */
   mois_label: string;
   reference_label: string | null;
+  /** Masse annuelle avec les scénarios sélectionnés (mois projetés remplacés), absente sans scénario. */
+  masse_annuelle_scenario?: number;
 }
 
 const euros = (n: number | undefined | null) => (n == null ? "—" : formatEuros(n));
@@ -118,7 +120,10 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       value: euros(stats.masse_annuelle),
       description: "Somme des douze mois, coût employeur contractuel",
       average: null,
-      note: stats.mois_reportes > 0 ? `${stats.mois_reportes} mois sur 12 reportés (photo ou salaires d'un autre mois)` : null,
+      note:
+        stats.masse_annuelle_scenario != null
+          ? `Avec scénario : ${euros(stats.masse_annuelle_scenario)} (${stats.masse_annuelle_scenario - stats.masse_annuelle >= 0 ? "+" : "−"}${euros(Math.abs(stats.masse_annuelle_scenario - stats.masse_annuelle))})`
+          : stats.mois_reportes > 0 ? `${stats.mois_reportes} mois sur 12 reportés (photo ou salaires d'un autre mois)` : null,
       icon: CalendarRange, iconColor: "text-teal-600", iconBg: "bg-teal-50",
     },
   ];
