@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { ChevronDown } from "lucide-react";
 import type { PaliersDuPoint } from "@/lib/utils/wp-effectif-moyen";
+import { formatEuros } from "@/lib/utils/format";
 import {
   ResponsiveContainer,
   LineChart,
@@ -127,8 +128,8 @@ interface Props {
   combinedProjection?: ScenarioProjectionData | null;
   /** Séries à tracer, dans l'ordre de la chaîne (défaut : les effectifs). */
   series?: SeriesDef[];
-  /** Formatage d'une valeur (infobulle, écarts). Défaut : au dixième, sans unité. */
-  formatValue?: (n: number) => string;
+  /** Unité des valeurs (infobulle, axe, écarts) : ETP au dixième, ou euros à l'euro près. Une prop sérialisable, la page étant un composant serveur. */
+  unite?: "etp" | "euros";
   /** Pas d'arrondi des bornes de l'axe Y. Défaut 10 (effectifs) ; en euros, un pas à l'échelle des montants. */
   axeStep?: number;
   /** Série de la réglette de zoom. */
@@ -148,13 +149,14 @@ export function HeadcountEvolutionChart({
   initialLeaveSrc = null,
   combinedProjection = null,
   series = ALL_SERIES,
-  formatValue = formatDefaut,
+  unite = "etp",
   axeStep = 10,
   brushDataKey = "effectif_brut",
   libelleVide = "Importez des données pour visualiser l'évolution des effectifs.",
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const formatValue = unite === "euros" ? formatEuros : formatDefaut;
   // Visibilité des séries (pastilles) — toutes visibles par défaut. Déclaré ici,
   // avant tout retour conditionnel : les hooks doivent s'exécuter dans le même ordre.
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());

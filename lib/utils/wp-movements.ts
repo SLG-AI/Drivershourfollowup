@@ -59,6 +59,41 @@ export interface SortieConstatee {
   motif?: string;
 }
 
+/**
+ * Sorties CONSTATÉES sur deux mois (le mois affiché et le précédent), par code
+ * salarié. Source 1 : l'export IN/OUT du SIRH (date ET motif réels) ; source 2,
+ * à défaut : la date de sortie des statistiques salariales. Un CDD arrêté avant
+ * terme disparaît du roster alors que la photo précédente ne connaît que la
+ * date prévue : c'est ici que vient la date réelle.
+ */
+export function sortiesConstateesSur(
+  mouvementsSirh: { code_salarie: string; type?: string | null; date_sortie?: string | null; motif_sortie?: string | null; mois?: unknown; annee?: unknown }[],
+  salaryStats: { code_salarie: string; date_sortie?: string | null; mois?: unknown; annee?: unknown }[],
+  mois: number,
+  annee: number,
+  prec: { mois: number; annee: number }
+): Map<string, SortieConstatee> {
+  const estSurLaPeriode = (mo: unknown, an: unknown) =>
+    (Number(mo) === mois && Number(an) === annee) ||
+    (Number(mo) === prec.mois && Number(an) === prec.annee);
+  const constatees = new Map<string, SortieConstatee>();
+  mouvementsSirh
+    .filter((mv) => mv.type === "sortie" && mv.date_sortie && estSurLaPeriode(mv.mois, mv.annee))
+    .forEach((mv) => {
+      const d = String(mv.date_sortie).slice(0, 10);
+      const prev = constatees.get(mv.code_salarie);
+      if (!prev || d > prev.date) constatees.set(mv.code_salarie, { date: d, motif: mv.motif_sortie || undefined });
+    });
+  salaryStats
+    .filter((st) => st.date_sortie && estSurLaPeriode(st.mois, st.annee) && !constatees.has(st.code_salarie))
+    .forEach((st) => {
+      const d = String(st.date_sortie).slice(0, 10);
+      const prev = constatees.get(st.code_salarie);
+      if (!prev || d > prev.date) constatees.set(st.code_salarie, { date: d });
+    });
+  return constatees;
+}
+
 export interface RosterMovements {
   nouveaux: MovementItem[];
   sortiesDefinitives: MovementItem[];

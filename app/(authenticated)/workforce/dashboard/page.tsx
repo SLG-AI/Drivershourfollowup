@@ -3,7 +3,7 @@ import { fetchAll } from "@/lib/supabase/fetch-all";
 import { listRosterPeriods, rangPeriode, resolveRosterPeriod } from "@/lib/utils/roster-period";
 import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
-import { computeRosterMovements, reclassifierSortiesTemporaires, type MovementItem } from "@/lib/utils/wp-movements";
+import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur as sortiesConstateesSurListes, type MovementItem } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
@@ -284,27 +284,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // du roster alors que la photo précédente ne connaît que la date prévue).
   // Source 1 : l'export IN/OUT du SIRH (date ET motif réels) ; source 2, à
   // défaut : la date de sortie des statistiques salariales.
-  const sortiesConstateesSur = (mois: number, annee: number, prec: MoisAnnee) => {
-    const estSurLaPeriode = (mo: unknown, an: unknown) =>
-      (Number(mo) === mois && Number(an) === annee) ||
-      (Number(mo) === prec.mois && Number(an) === prec.annee);
-    const constatees = new Map<string, { date: string; motif?: string }>();
-    mouvementsSirh
-      .filter((mv) => mv.type === "sortie" && mv.date_sortie && estSurLaPeriode(mv.mois, mv.annee))
-      .forEach((mv) => {
-        const d = String(mv.date_sortie).slice(0, 10);
-        const prev = constatees.get(mv.code_salarie);
-        if (!prev || d > prev.date) constatees.set(mv.code_salarie, { date: d, motif: mv.motif_sortie || undefined });
-      });
-    salaryStats
-      .filter((st) => st.date_sortie && estSurLaPeriode(st.mois, st.annee) && !constatees.has(st.code_salarie))
-      .forEach((st) => {
-        const d = String(st.date_sortie).slice(0, 10);
-        const prev = constatees.get(st.code_salarie);
-        if (!prev || d > prev.date) constatees.set(st.code_salarie, { date: d });
-      });
-    return constatees;
-  };
+  // Sorties constatées (IN/OUT, puis statistiques salariales) : voir wp-movements.ts
+  const sortiesConstateesSur = (mois: number, annee: number, prec: MoisAnnee) =>
+    sortiesConstateesSurListes(mouvementsSirh, salaryStats, mois, annee, prec);
   const sortiesConstatees = sortiesConstateesSur(selectedMonth, selectedYear, moisPrecedent);
   const mouvements = moisPrecedentDisponible
     ? computeRosterMovements(employeesPrecedents, allEmployees, selectedMonth, selectedYear, sortiesConstatees, {
