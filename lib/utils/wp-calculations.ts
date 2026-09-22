@@ -340,14 +340,40 @@ export interface ProjectionMonth {
 // Arrival hypothesis helpers
 // ============================================================
 
+/** Hypothèses d'arrivée qui démarrent le mois donné (le journal de projection les liste). */
+export function arriveesDuMois(
+  hypotheses: ArrivalHypothesis[],
+  month: number,
+  year: number
+): ArrivalHypothesis[] {
+  return hypotheses.filter((h) => h.start_month === month && h.start_year === year);
+}
+
 export function getArrivalsForMonth(
   hypotheses: ArrivalHypothesis[],
   month: number,
   year: number
 ): number {
-  return hypotheses
-    .filter((h) => h.start_month === month && h.start_year === year)
+  return arriveesDuMois(hypotheses, month, year)
     .reduce((sum, h) => sum + h.nb_personnes, 0);
+}
+
+/** Hypothèses de CDD dont le départ automatique tombe le mois donné. */
+export function finsDeCddDuMois(
+  hypotheses: ArrivalHypothesis[],
+  month: number,
+  year: number
+): ArrivalHypothesis[] {
+  return hypotheses.filter((h) => {
+    if (h.type_contrat !== "CDD") return false;
+    // CDD auto-depart the month AFTER end of contract
+    // (end_month is the last month the CDD is active)
+    const endMonth = h.end_month ?? h.start_month;
+    const endYear = h.end_year ?? h.start_year;
+    const departMonth = endMonth === 12 ? 1 : endMonth + 1;
+    const departYear = endMonth === 12 ? endYear + 1 : endYear;
+    return departMonth === month && departYear === year;
+  });
 }
 
 export function getCddDeparturesForMonth(
@@ -355,17 +381,7 @@ export function getCddDeparturesForMonth(
   month: number,
   year: number
 ): number {
-  return hypotheses
-    .filter((h) => {
-      if (h.type_contrat !== "CDD") return false;
-      // CDD auto-depart the month AFTER end of contract
-      // (end_month is the last month the CDD is active)
-      const endMonth = h.end_month ?? h.start_month;
-      const endYear = h.end_year ?? h.start_year;
-      const departMonth = endMonth === 12 ? 1 : endMonth + 1;
-      const departYear = endMonth === 12 ? endYear + 1 : endYear;
-      return departMonth === month && departYear === year;
-    })
+  return finsDeCddDuMois(hypotheses, month, year)
     .reduce((sum, h) => sum + h.nb_personnes, 0);
 }
 

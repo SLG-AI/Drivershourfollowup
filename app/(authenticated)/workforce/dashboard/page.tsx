@@ -10,8 +10,9 @@ import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
-import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
-import { getArrivalsForMonth, getCddDeparturesForMonth, getWorkableHoursInMonth, horsWeekEnd, joursOuvresEntre, jourSuivant, lastDayOfMonth, isTempExitAt, moisEffetSortie, getTempExitDeparturesForMonth, getTempExitReturnsForMonth, type ArrivalHypothesis, type TempExitHypothesis } from "@/lib/utils/wp-calculations";
+import { HeadcountEvolutionChart, type HeadcountDataPoint, type ScenarioOption } from "@/components/workforce/headcount-evolution-chart";
+import { getWorkableHoursInMonth, horsWeekEnd, joursOuvresEntre, jourSuivant, lastDayOfMonth, isTempExitAt, moisEffetSortie } from "@/lib/utils/wp-calculations";
+import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
 import { DepartureTable, type DepartureItem } from "@/components/workforce/departure-table";
 import { ArrivalTable, type ArrivalItem } from "@/components/workforce/arrival-table";
 import { TempExitsTable, type TempExitItem } from "@/components/workforce/temp-exits-table";
@@ -21,7 +22,7 @@ import { AbsenteeismTable, type AbsenteeismItem } from "@/components/workforce/a
 import { MctTable, type MctItem } from "@/components/workforce/mct-table";
 import { InjustifieesTable, type InjustifieeItem } from "@/components/workforce/injustifiees-table";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
-import { ScenarioHypothesesCard, type ArrivalHypothesisItem, type DepartureHypothesisItem, type TempExitHypothesisItem, type RateByMonthCC } from "@/components/workforce/scenario-hypotheses-card";
+import { ScenarioHypothesesCard } from "@/components/workforce/scenario-hypotheses-card";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Upload } from "lucide-react";
@@ -608,33 +609,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     name: s.name,
   }));
 
-  // Fetch all scenario data in parallel
-  const scenarioProjections: ScenarioProjectionData[] = [];
-  let hypArrivals: ArrivalHypothesisItem[] = [];
-  let hypDepartures: DepartureHypothesisItem[] = [];
-  let hypTempExits: TempExitHypothesisItem[] = [];
-  let hypTurnoverRates: RateByMonthCC[] = [];
-  let hypAbsRates: RateByMonthCC[] = [];
-  let hypLeaveRates: RateByMonthCC[] = [];
-  let hypTurnoverSrcName: string | null = null;
-  let hypAbsSrcName: string | null = null;
-  let hypLeaveSrcName: string | null = null;
-  // Scenario KPI overrides for selected month
-  let scenarioKpiOverride: {
-    effectif_brut: number;
-    effectif_net: number;
-    sorties_temporaires: number;
-    taux_absenteisme: number;
-    taux_mct: number;
-  } | null = null;
-  let scenarioTurnoverLossesTotal = 0;
-  // Pertes par turnover du scénario combiné sur le MOIS affiché (KPI mensuel)
-  let scenarioTurnoverLossesMoisAffiche = 0;
-
-  if (scenarioOptions.length > 0) {
-    const scenarioIds = scenarioOptions.map((s) => s.id);
-
-    const [scenarioParamsAll, scenarioTurnoverParamsAll, scenarioLeaveParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = await Promise.all([
+  // Requêtes des tables wp_scenario_* (lignes brutes) ; le calcul lui-même
+  // vit dans lib/utils/wp-projection-scenarios.ts.
+  const scenarioIds = scenarioOptions.map((s) => s.id);
+  const [scenarioParamsAll, scenarioTurnoverParamsAll, scenarioLeaveParamsAll, scenarioDeparturesAll, scenarioArrivalsAll, scenarioTempExitsAll, scenarioDetailsAll] = scenarioOptions.length > 0
+    ? await Promise.all([
       fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_monthly_turnover_params").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_monthly_leave_params").select("*").in("scenario_id", scenarioIds)),
@@ -642,552 +621,46 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       fetchAll(supabase.from("wp_scenario_arrival_hypotheses").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenario_temp_exit_hypotheses").select("*").in("scenario_id", scenarioIds)),
       fetchAll(supabase.from("wp_scenarios").select("id, projected_turnover_rate").in("id", scenarioIds)),
-    ]);
+    ])
+    : [[], [], [], [], [], [], []];
 
-    for (const sc of scenarioOptions) {
-      const scParams = scenarioParamsAll.filter((p) => p.scenario_id === sc.id);
-      const scDepartures = scenarioDeparturesAll.filter((d) => d.scenario_id === sc.id);
-      const scArrivals = scenarioArrivalsAll.filter((a) => a.scenario_id === sc.id) as unknown as ArrivalHypothesis[];
-      const scTempExits = scenarioTempExitsAll
-        .filter((t) => t.scenario_id === sc.id)
-        .map((t) => ({
-          id: t.id as string,
-          scenario_id: t.scenario_id as string,
-          nb_personnes: Number(t.nb_personnes),
-          taux_occupation: Number(t.taux_occupation),
-          fonction: (t.fonction as string) || null,
-          centre_cout: (t.centre_cout as string) || null,
-          depot: (t.depot as string) || null,
-          vehicle_type: (t.vehicle_type as "BUS" | "CAM") || null,
-          motif: (t.motif as string) || "Congé parental",
-          departure_day: Number(t.departure_day) || 1,
-          departure_month: Number(t.departure_month),
-          departure_year: Number(t.departure_year),
-          return_day: t.return_day ? Number(t.return_day) : null,
-          return_month: t.return_month ? Number(t.return_month) : null,
-          return_year: t.return_year ? Number(t.return_year) : null,
-        })) as TempExitHypothesis[];
-      const scDetail = scenarioDetailsAll.find((s) => s.id === sc.id);
-      const turnoverRate = Number(scDetail?.projected_turnover_rate ?? 0);
-
-      // Build per-month turnover rate: weighted average across cost centers
-      const scTurnoverParams = scenarioTurnoverParamsAll.filter((p) => p.scenario_id === sc.id);
-      const globalTurnoverByMonth = new Map<number, number>();
-      const ccTurnoverByMonthCc = new Map<string, number>();
-      scTurnoverParams.forEach((p) => {
-        const mois = Number(p.mois);
-        const rate = Number(p.projected_turnover_rate);
-        if (!p.centre_cout) {
-          globalTurnoverByMonth.set(mois, rate);
-        } else {
-          ccTurnoverByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
-        }
-      });
-      const turnoverRateByMonth = new Map<number, number>();
-      for (let m = 1; m <= 12; m++) {
-        const monthEnd = lastDayOfMonth(selectedYear, m);
-        const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
-        const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
-        if (totalEtp > 0 && ccTurnoverByMonthCc.size > 0) {
-          const weightedRate = activeAtM.reduce((sum, e) => {
-            const ccKey = `${m}:${e.centre_cout}`;
-            const rate = ccTurnoverByMonthCc.get(ccKey) ?? globalTurnoverByMonth.get(m) ?? turnoverRate;
-            return sum + getEtp(e) * rate;
-          }, 0);
-          turnoverRateByMonth.set(m, weightedRate / totalEtp);
-        } else {
-          turnoverRateByMonth.set(m, globalTurnoverByMonth.get(m) ?? turnoverRate);
-        }
-      }
-
-      // Build per-month absenteeism rate: weighted average across cost centers
-      // Global rates (centre_cout IS NULL) as fallback
-      const globalRateByMonth = new Map<number, number>();
-      const ccRateByMonthCc = new Map<string, number>();
-      scParams.forEach((p) => {
-        const mois = Number(p.mois);
-        const rate = Number(p.projected_absenteeism_rate);
-        if (!p.centre_cout) {
-          globalRateByMonth.set(mois, rate);
-        } else {
-          ccRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
-        }
-      });
-      // Compute weighted average rate per month using active employees
-      const absRateByMonth = new Map<number, number>();
-      for (let m = 1; m <= 12; m++) {
-        const monthEnd = lastDayOfMonth(selectedYear, m);
-        const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
-        const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
-        if (totalEtp > 0 && ccRateByMonthCc.size > 0) {
-          const weightedRate = activeAtM.reduce((sum, e) => {
-            const ccKey = `${m}:${e.centre_cout}`;
-            const rate = ccRateByMonthCc.get(ccKey) ?? globalRateByMonth.get(m) ?? 5;
-            return sum + getEtp(e) * rate;
-          }, 0);
-          absRateByMonth.set(m, weightedRate / totalEtp);
-        } else {
-          absRateByMonth.set(m, globalRateByMonth.get(m) ?? 5);
-        }
-      }
-
-      // Build departure ETP by month (exclude temporary exits — they stay "sous contrat")
-      // Clé « annee-mois » : la projection peut enchaîner plusieurs années
-      const depCountByMonth = new Map<string, number>();
-      scDepartures
-        .filter((d) => !String(d.departure_type || "").startsWith("temp_exit"))
-        .forEach((d) => {
-          const cle = `${Number(d.departure_year)}-${Number(d.departure_month)}`;
-          const nb = Number(d.nb_personnes) || 1;
-          const taux = Number(d.taux_occupation) || 100;
-          const etp = nb * taux / 100;
-          depCountByMonth.set(cle, (depCountByMonth.get(cle) || 0) + etp);
-        });
-
-      // Return counts from temp exits
-      const returnCountByMonth = new Map<string, number>();
-      scDepartures
-        .filter((d) => d.return_year && d.return_month)
-        .forEach((d) => {
-          const cle = `${Number(d.return_year)}-${Number(d.return_month)}`;
-          returnCountByMonth.set(cle, (returnCountByMonth.get(cle) || 0) + 1);
-        });
-
-      // Find the last real month's values as starting point
-      let runningBrut = departProjection.brut;
-      let runningTempExitsEtp = departProjection.brut - departProjection.net;
-      let cumulTempExitHyp = 0; // cumulative ETP from temp exit hypotheses
-
-      const months: ScenarioProjectionData["months"] = [];
-
-      for (const { annee, mois: m } of etapesProjection) {
-
-        // Turnover losses (use per-month weighted rate)
-        const effectiveTurnoverRate = turnoverRateByMonth.get(m) ?? turnoverRate;
-        const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
-        const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate * 10) / 10;
-
-        // Known departures
-        const knownDeps = depCountByMonth.get(`${annee}-${m}`) || 0;
-
-        // Data-based departures in ETP (employees with date_sortie in this month)
-        // Exclude temporary exits — they stay "sous contrat"
-        // If date_sortie is the last day of its month, effective departure is next month
-        const dataExits = allEmployees.filter((e) => {
-          if (!e.date_sortie || e.est_sortie_temporaire) return false;
-          const d = new Date(e.date_sortie);
-          let depMonth = d.getMonth() + 1;
-          let depYear = d.getFullYear();
-          const ldm = lastDayOfMonth(depYear, depMonth);
-          if (e.date_sortie === ldm) {
-            depMonth += 1;
-            if (depMonth > 12) { depMonth = 1; depYear += 1; }
-          }
-          return depMonth === m && depYear === annee;
-        }).reduce((sum, e) => sum + getEtp(e), 0);
-
-        // Arrivals from data (employees with date_entree in this month)
-        const dataArrivals = allEmployees.filter((e) => {
-          if (!e.date_entree) return false;
-          const d = new Date(e.date_entree);
-          return d.getMonth() + 1 === m && d.getFullYear() === annee;
-        }).reduce((sum, e) => sum + getEtp(e), 0);
-
-        // Arrivals from hypotheses
-        const arrivals = getArrivalsForMonth(scArrivals, m, annee);
-        // CDD auto-departures
-        const cddDepartures = getCddDeparturesForMonth(scArrivals, m, annee);
-
-        // Returns from temp exits
-        const returns = returnCountByMonth.get(`${annee}-${m}`) || 0;
-
-        const totalDepartures = Math.max(knownDeps, dataExits) + turnoverLosses + cddDepartures;
-        const totalArrivals = arrivals + dataArrivals;
-
-        runningBrut = Math.max(0, runningBrut - totalDepartures + totalArrivals + returns);
-
-        // Calculate temp exits ETP directly from employee data for this month
-        const monthEnd = lastDayOfMonth(annee, m);
-        const activeAtMonth = getActiveEmployeesAt(monthEnd);
-        const dataTempExitsEtp = activeAtMonth
-          .filter((e) => isTempExitAt(e, monthEnd))
-          .reduce((sum, e) => sum + getEtp(e), 0);
-
-        // Add cumulative temp exit hypotheses from scenario
-        const tempExitHypDepartures = getTempExitDeparturesForMonth(scTempExits, m, annee);
-        const tempExitHypReturns = getTempExitReturnsForMonth(scTempExits, m, annee);
-        cumulTempExitHyp = Math.max(0, cumulTempExitHyp + tempExitHypDepartures - tempExitHypReturns);
-        runningTempExitsEtp = dataTempExitsEtp + cumulTempExitHyp;
-
-        const scenarioNet = runningBrut - runningTempExitsEtp;
-
-        // Réel projeté = net - dernier taux CNS connu
-        const cnsRate = lastKnownCnsRate ?? 0;
-        const scenarioCnsEtp = scenarioNet * (cnsRate / 100);
-        const scenarioReel = scenarioNet - scenarioCnsEtp;
-
-        // Le taux d'absentéisme du scénario impacte le MCT
-        const absRate = absRateByMonth.get(m) ?? 5;
-        const scenarioMctFte = scenarioNet * (absRate / 100);
-
-        // Seuls les mois de l'année affichée sont rendus ; les mois antérieurs
-        // (fin de l'année en cours) ne servent qu'à enchaîner la projection.
-        if (annee !== selectedYear) continue;
-        months.push({
-          month_index: m,
-          scenario_brut: Math.round(runningBrut * 10) / 10,
-          scenario_net: Math.max(0, Math.round(scenarioNet * 10) / 10),
-          scenario_reel: Math.max(0, Math.round(scenarioReel * 10) / 10),
-          scenario_apres_mct: Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10),
-        });
-      }
-
-      scenarioProjections.push({ scenario_id: sc.id, months });
-    }
-
-    // ============================================================
-    // Combined projection: merge selected scenarios
-    // ============================================================
-    if (selectedScenarioIds.length > 0) {
-      const selectedScs = scenarioOptions.filter((s) => selectedScenarioIds.includes(s.id));
-      if (selectedScs.length > 0) {
-        // Merge hypotheses from all selected scenarios
-        const combinedArrivals: ArrivalHypothesis[] = [];
-        const combinedDepCountByMonth = new Map<string, number>();
-        const combinedReturnCountByMonth = new Map<string, number>();
-        const combinedTempExits: TempExitHypothesis[] = [];
-
-        for (const sc of selectedScs) {
-          const scArrivals = scenarioArrivalsAll.filter((a) => a.scenario_id === sc.id) as unknown as ArrivalHypothesis[];
-          const scDepartures = scenarioDeparturesAll.filter((d) => d.scenario_id === sc.id);
-          const scTempExits = scenarioTempExitsAll
-            .filter((t) => t.scenario_id === sc.id)
-            .map((t) => ({
-              id: t.id as string,
-              scenario_id: t.scenario_id as string,
-              nb_personnes: Number(t.nb_personnes),
-              taux_occupation: Number(t.taux_occupation),
-              fonction: (t.fonction as string) || null,
-              centre_cout: (t.centre_cout as string) || null,
-              depot: (t.depot as string) || null,
-              vehicle_type: (t.vehicle_type as "BUS" | "CAM") || null,
-              motif: (t.motif as string) || "Congé parental",
-              departure_day: Number(t.departure_day) || 1,
-              departure_month: Number(t.departure_month),
-              departure_year: Number(t.departure_year),
-              return_day: t.return_day ? Number(t.return_day) : null,
-              return_month: t.return_month ? Number(t.return_month) : null,
-              return_year: t.return_year ? Number(t.return_year) : null,
-            })) as TempExitHypothesis[];
-
-          combinedArrivals.push(...scArrivals);
-          combinedTempExits.push(...scTempExits);
-
-          // Accumulate departures by month
-          scDepartures
-            .filter((d) => !String(d.departure_type || "").startsWith("temp_exit"))
-            .forEach((d) => {
-              const cle = `${Number(d.departure_year)}-${Number(d.departure_month)}`;
-              const nb = Number(d.nb_personnes) || 1;
-              const taux = Number(d.taux_occupation) || 100;
-              const etp = nb * taux / 100;
-              combinedDepCountByMonth.set(cle, (combinedDepCountByMonth.get(cle) || 0) + etp);
-            });
-
-          // Accumulate return counts
-          scDepartures
-            .filter((d) => d.return_year && d.return_month)
-            .forEach((d) => {
-              const cle = `${Number(d.return_year)}-${Number(d.return_month)}`;
-              combinedReturnCountByMonth.set(cle, (combinedReturnCountByMonth.get(cle) || 0) + 1);
-            });
-        }
-
-        // Select turnover rates from source scenario
-        const turnoverSrcScId = turnoverSrcId && selectedScenarioIds.includes(turnoverSrcId)
-          ? turnoverSrcId : selectedScenarioIds[0];
-        const turnoverSrcParams = scenarioTurnoverParamsAll.filter((p) => p.scenario_id === turnoverSrcScId);
-        const turnoverSrcDetail = scenarioDetailsAll.find((s) => s.id === turnoverSrcScId);
-        const combinedTurnoverFallback = Number(turnoverSrcDetail?.projected_turnover_rate ?? 0);
-        const combinedGlobalTurnoverByMonth = new Map<number, number>();
-        const combinedCcTurnoverByMonthCc = new Map<string, number>();
-        turnoverSrcParams.forEach((p) => {
-          const mois = Number(p.mois);
-          const rate = Number(p.projected_turnover_rate);
-          if (!p.centre_cout) {
-            combinedGlobalTurnoverByMonth.set(mois, rate);
-          } else {
-            combinedCcTurnoverByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
-          }
-        });
-        const combinedTurnoverRateByMonth = new Map<number, number>();
-        for (let m = 1; m <= 12; m++) {
-          const monthEnd = lastDayOfMonth(selectedYear, m);
-          const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
-          const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
-          if (totalEtp > 0 && combinedCcTurnoverByMonthCc.size > 0) {
-            const weightedRate = activeAtM.reduce((sum, e) => {
-              const ccKey = `${m}:${e.centre_cout}`;
-              const rate = combinedCcTurnoverByMonthCc.get(ccKey) ?? combinedGlobalTurnoverByMonth.get(m) ?? combinedTurnoverFallback;
-              return sum + getEtp(e) * rate;
-            }, 0);
-            combinedTurnoverRateByMonth.set(m, weightedRate / totalEtp);
-          } else {
-            combinedTurnoverRateByMonth.set(m, combinedGlobalTurnoverByMonth.get(m) ?? combinedTurnoverFallback);
-          }
-        }
-
-        // Select absenteeism rates from source scenario
-        const absSrcScId = absSrcId && selectedScenarioIds.includes(absSrcId)
-          ? absSrcId : selectedScenarioIds[0];
-        const absSrcParams = scenarioParamsAll.filter((p) => p.scenario_id === absSrcScId);
-        const combinedGlobalAbsRateByMonth = new Map<number, number>();
-        const combinedCcAbsRateByMonthCc = new Map<string, number>();
-        absSrcParams.forEach((p) => {
-          const mois = Number(p.mois);
-          const rate = Number(p.projected_absenteeism_rate);
-          if (!p.centre_cout) {
-            combinedGlobalAbsRateByMonth.set(mois, rate);
-          } else {
-            combinedCcAbsRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
-          }
-        });
-        const combinedAbsRateByMonth = new Map<number, number>();
-        for (let m = 1; m <= 12; m++) {
-          const monthEnd = lastDayOfMonth(selectedYear, m);
-          const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
-          const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
-          if (totalEtp > 0 && combinedCcAbsRateByMonthCc.size > 0) {
-            const weightedRate = activeAtM.reduce((sum, e) => {
-              const ccKey = `${m}:${e.centre_cout}`;
-              const rate = combinedCcAbsRateByMonthCc.get(ccKey) ?? combinedGlobalAbsRateByMonth.get(m) ?? 5;
-              return sum + getEtp(e) * rate;
-            }, 0);
-            combinedAbsRateByMonth.set(m, weightedRate / totalEtp);
-          } else {
-            combinedAbsRateByMonth.set(m, combinedGlobalAbsRateByMonth.get(m) ?? 5);
-          }
-        }
-
-        // Select leave rates from source scenario
-        const leaveSrcScId = leaveSrcId && selectedScenarioIds.includes(leaveSrcId)
-          ? leaveSrcId : selectedScenarioIds[0];
-        const leaveSrcParams = scenarioLeaveParamsAll.filter((p) => p.scenario_id === leaveSrcScId);
-        const combinedGlobalLeaveRateByMonth = new Map<number, number>();
-        const combinedCcLeaveRateByMonthCc = new Map<string, number>();
-        leaveSrcParams.forEach((p) => {
-          const mois = Number(p.mois);
-          const rate = Number(p.projected_leave_rate);
-          if (!p.centre_cout) {
-            combinedGlobalLeaveRateByMonth.set(mois, rate);
-          } else {
-            combinedCcLeaveRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
-          }
-        });
-        const combinedLeaveRateByMonth = new Map<number, number>();
-        for (let m = 1; m <= 12; m++) {
-          const monthEnd = lastDayOfMonth(selectedYear, m);
-          const activeAtM = getActiveEmployeesAt(monthEnd).filter((e) => !isTempExitAt(e, monthEnd));
-          const totalEtp = activeAtM.reduce((sum, e) => sum + getEtp(e), 0);
-          if (totalEtp > 0 && combinedCcLeaveRateByMonthCc.size > 0) {
-            const weightedRate = activeAtM.reduce((sum, e) => {
-              const ccKey = `${m}:${e.centre_cout}`;
-              const rate = combinedCcLeaveRateByMonthCc.get(ccKey) ?? combinedGlobalLeaveRateByMonth.get(m) ?? 0;
-              return sum + getEtp(e) * rate;
-            }, 0);
-            combinedLeaveRateByMonth.set(m, weightedRate / totalEtp);
-          } else {
-            combinedLeaveRateByMonth.set(m, combinedGlobalLeaveRateByMonth.get(m) ?? 0);
-          }
-        }
-
-        // Compile hypotheses for the card
-        hypArrivals = combinedArrivals.map((a) => ({
-          nb_personnes: a.nb_personnes,
-          taux_occupation: a.taux_occupation,
-          type_contrat: a.type_contrat,
-          fonction: a.fonction,
-          centre_cout: a.centre_cout,
-          vehicle_type: a.vehicle_type,
-          start_month: a.start_month,
-          start_year: a.start_year,
-          end_month: a.end_month,
-          end_year: a.end_year,
-        }));
-        hypDepartures = selectedScs.flatMap((sc) =>
-          scenarioDeparturesAll
-            .filter((d) => d.scenario_id === sc.id && !d.is_from_data)
-            .map((d) => ({
-              nb_personnes: Number(d.nb_personnes) || 1,
-              taux_occupation: Number(d.taux_occupation) || 100,
-              departure_type: String(d.departure_type || ""),
-              fonction: (d.fonction as string) || null,
-              centre_cout: (d.centre_cout as string) || null,
-              vehicle_type: (d.vehicle_type as "BUS" | "CAM") || null,
-              departure_month: Number(d.departure_month),
-              departure_year: Number(d.departure_year),
-            }))
-        );
-        hypTempExits = combinedTempExits.map((t) => ({
-          nb_personnes: t.nb_personnes,
-          taux_occupation: t.taux_occupation,
-          motif: t.motif,
-          fonction: t.fonction,
-          centre_cout: t.centre_cout,
-          vehicle_type: t.vehicle_type,
-          departure_month: t.departure_month,
-          departure_year: t.departure_year,
-          return_month: t.return_month,
-          return_year: t.return_year,
-        }));
-        hypTurnoverRates = turnoverSrcParams.map((p) => ({
-          mois: Number(p.mois),
-          centre_cout: (p.centre_cout as string) || null,
-          rate: Number(p.projected_turnover_rate),
-        }));
-        hypAbsRates = absSrcParams.map((p) => ({
-          mois: Number(p.mois),
-          centre_cout: (p.centre_cout as string) || null,
-          rate: Number(p.projected_absenteeism_rate),
-        }));
-        hypLeaveRates = leaveSrcParams.map((p) => ({
-          mois: Number(p.mois),
-          centre_cout: (p.centre_cout as string) || null,
-          rate: Number(p.projected_leave_rate),
-        }));
-        hypTurnoverSrcName = scenarioOptions.find((s) => s.id === turnoverSrcScId)?.name ?? null;
-        hypAbsSrcName = scenarioOptions.find((s) => s.id === absSrcScId)?.name ?? null;
-        hypLeaveSrcName = scenarioOptions.find((s) => s.id === leaveSrcScId)?.name ?? null;
-
-        // Run the same projection loop with combined data
-        let runningBrut = departProjection.brut;
-        let cumulTempExitHyp = 0;
-
-        const combinedMonths: ScenarioProjectionData["months"] = [];
-
-        for (const { annee, mois: m } of etapesProjection) {
-
-          const effectiveTurnoverRate = combinedTurnoverRateByMonth.get(m) ?? combinedTurnoverFallback;
-          const monthlyTurnoverRate = effectiveTurnoverRate / 100 / 12;
-          const turnoverLosses = Math.round(runningBrut * monthlyTurnoverRate * 10) / 10;
-          if (annee === selectedYear) {
-            scenarioTurnoverLossesTotal += turnoverLosses;
-            if (m === selectedMonth) scenarioTurnoverLossesMoisAffiche = turnoverLosses;
-          }
-
-          const knownDeps = combinedDepCountByMonth.get(`${annee}-${m}`) || 0;
-
-          const dataExits = allEmployees.filter((e) => {
-            if (!e.date_sortie || e.est_sortie_temporaire) return false;
-            const d = new Date(e.date_sortie);
-            let depMonth = d.getMonth() + 1;
-            let depYear = d.getFullYear();
-            const ldm = lastDayOfMonth(depYear, depMonth);
-            if (e.date_sortie === ldm) {
-              depMonth += 1;
-              if (depMonth > 12) { depMonth = 1; depYear += 1; }
-            }
-            return depMonth === m && depYear === annee;
-          }).reduce((sum, e) => sum + getEtp(e), 0);
-
-          const dataArrivals = allEmployees.filter((e) => {
-            if (!e.date_entree) return false;
-            const d = new Date(e.date_entree);
-            return d.getMonth() + 1 === m && d.getFullYear() === annee;
-          }).reduce((sum, e) => sum + getEtp(e), 0);
-
-          const arrivals = getArrivalsForMonth(combinedArrivals, m, annee);
-          const cddDepartures = getCddDeparturesForMonth(combinedArrivals, m, annee);
-          const returns = combinedReturnCountByMonth.get(`${annee}-${m}`) || 0;
-
-          const totalDepartures = Math.max(knownDeps, dataExits) + turnoverLosses + cddDepartures;
-          const totalArrivals = arrivals + dataArrivals;
-
-          runningBrut = Math.max(0, runningBrut - totalDepartures + totalArrivals + returns);
-
-          const monthEnd = lastDayOfMonth(annee, m);
-          const activeAtMonth = getActiveEmployeesAt(monthEnd);
-          const dataTempExitsEtp = activeAtMonth
-            .filter((e) => isTempExitAt(e, monthEnd))
-            .reduce((sum, e) => sum + getEtp(e), 0);
-
-          const tempExitHypDepartures = getTempExitDeparturesForMonth(combinedTempExits, m, annee);
-          const tempExitHypReturns = getTempExitReturnsForMonth(combinedTempExits, m, annee);
-          cumulTempExitHyp = Math.max(0, cumulTempExitHyp + tempExitHypDepartures - tempExitHypReturns);
-          const runningTempExitsEtp = dataTempExitsEtp + cumulTempExitHyp;
-
-          const scenarioNet = runningBrut - runningTempExitsEtp;
-
-          const cnsRate = lastKnownCnsRate ?? 0;
-          const scenarioCnsEtp = scenarioNet * (cnsRate / 100);
-          const scenarioReel = scenarioNet - scenarioCnsEtp;
-
-          const absRate = combinedAbsRateByMonth.get(m) ?? 5;
-          const scenarioMctFte = scenarioNet * (absRate / 100);
-
-          const scenarioBrutR = Math.round(runningBrut * 10) / 10;
-          const scenarioNetR = Math.max(0, Math.round(scenarioNet * 10) / 10);
-          const scenarioReelR = Math.max(0, Math.round(scenarioReel * 10) / 10);
-          const scenarioApresMctR = Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10);
-
-          // Seuls les mois de l'année affichée sont rendus ; les mois antérieurs
-          // (fin de l'année en cours) ne servent qu'à enchaîner la projection.
-          if (annee !== selectedYear) continue;
-          combinedMonths.push({
-            month_index: m,
-            scenario_brut: scenarioBrutR,
-            scenario_net: scenarioNetR,
-            scenario_reel: scenarioReelR,
-            scenario_apres_mct: scenarioApresMctR,
-          });
-
-          // Capture KPI overrides for the selected month
-          if (m === selectedMonth) {
-            scenarioKpiOverride = {
-              effectif_brut: scenarioBrutR,
-              effectif_net: scenarioNetR,
-              sorties_temporaires: Math.round(runningTempExitsEtp * 10) / 10,
-              taux_absenteisme: cnsRate,
-              taux_mct: absRate,
-            };
-          }
-        }
-
-        scenarioProjections.push({ scenario_id: "__combined__", months: combinedMonths });
-
-        // Compute leave (congés) pool and distribute by monthly rate
-        // 1. Collect effectif_net for all 12 months (real or projected)
-        let sumNetAnnual = 0;
-        for (let m = 1; m <= 12; m++) {
-          const projMonth = combinedMonths.find((cm) => cm.month_index === m);
-          if (projMonth) {
-            sumNetAnnual += projMonth.scenario_net;
-          } else {
-            sumNetAnnual += headcountData[m - 1]?.effectif_net ?? 0;
-          }
-        }
-        const avgNetAnnual = sumNetAnnual / 12;
-        // 2. Total leave pool in FTE-months: avgNet × 240h / 173h
-        const totalLeavePoolFte = avgNetAnnual * 240 / 173;
-        // 3. Distribute by monthly rate and inject into headcountData + combinedMonths
-        for (let m = 1; m <= 12; m++) {
-          const leaveRate = combinedLeaveRateByMonth.get(m) ?? 0;
-          const leaveFteMonth = totalLeavePoolFte * (leaveRate / 100);
-          const projMonth = combinedMonths.find((cm) => cm.month_index === m);
-          if (projMonth) {
-            projMonth.scenario_apres_conges = Math.max(0, Math.round((projMonth.scenario_apres_mct - leaveFteMonth) * 10) / 10);
-          }
-          const hd = headcountData[m - 1];
-          if (hd) {
-            const base = hd.base_scenario_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
-            if (base != null) {
-              hd.scenario_apres_conges = Math.max(0, Math.round((base - leaveFteMonth) * 10) / 10);
-            }
-          }
-        }
-      }
-    }
-  }
+  const projection = projeterScenarios({
+    scenarioOptions,
+    selectedScenarioIds,
+    turnoverSrcId,
+    absSrcId,
+    leaveSrcId,
+    rows: {
+      params: scenarioParamsAll,
+      turnoverParams: scenarioTurnoverParamsAll,
+      leaveParams: scenarioLeaveParamsAll,
+      departures: scenarioDeparturesAll,
+      arrivals: scenarioArrivalsAll,
+      tempExits: scenarioTempExitsAll,
+      details: scenarioDetailsAll,
+    },
+    selectedYear,
+    selectedMonth,
+    allEmployees,
+    getActiveEmployeesAt,
+    etapesProjection,
+    departProjection,
+    lastKnownCnsRate,
+    // Muté pour scenario_apres_conges, comme avant
+    headcountData,
+  });
+  const { scenarioProjections, scenarioKpiOverride, scenarioTurnoverLossesTotal, scenarioTurnoverLossesMoisAffiche } = projection;
+  const {
+    arrivals: hypArrivals,
+    departures: hypDepartures,
+    tempExits: hypTempExits,
+    turnoverRates: hypTurnoverRates,
+    absRates: hypAbsRates,
+    leaveRates: hypLeaveRates,
+    turnoverSrcName: hypTurnoverSrcName,
+    absSrcName: hypAbsSrcName,
+    leaveSrcName: hypLeaveSrcName,
+  } = projection.hypotheses;
 
   // ============================================================
   // Taux MCT = total heures MCT / total heures travaillables ajustées au taux d'occupation
