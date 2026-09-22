@@ -5,7 +5,8 @@ import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/uti
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, type MovementItem } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
-import { computeEffectifMoyen, paliersEnMoyenne } from "@/lib/utils/wp-effectif-moyen";
+import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
+import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
@@ -564,10 +565,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const injTotalHrs = Math.round(injustifieesItems.reduce((sum, d) => sum + d.total_hrs, 0) * 10) / 10;
   const injEtpTotal = Math.round(injustifieesItems.reduce((sum, d) => sum + d.etp_perdu, 0) * 10) / 10;
 
-  // Taux d'absentéisme pour le mois sélectionné = (net - réel) / net
-  // Calculé après la boucle headcount, initialisé ici
-  let avgAbsenteeism = 0;
-
   // Départs prévisibles: employees with date_sortie after refDate but within the selected year
   const yearEnd = `${selectedYear}-12-31`;
   const departsPrevus = allEmployees.filter(
@@ -578,267 +575,47 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const targetTotal = allTargets.reduce((sum, t) => sum + Number(t.target_headcount), 0);
   const gapVsCible = targetTotal > 0 ? Math.round((effectifNetEtp - targetTotal) * 10) / 10 : null;
 
-  // stats construit après la boucle headcount (besoin de avgAbsenteeism)
-
   // ============================================================
-  // Headcount evolution (month by month for selected year)
+  // Courbe d'évolution des effectifs (12 points) — calcul partagé avec la
+  // page Coûts, voir lib/utils/wp-courbe-effectifs.ts
   // ============================================================
 
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
-
-  const headcountData: HeadcountDataPoint[] = [];
-  let lastKnownCnsRate: number | null = null;
-  let lastKnownMctRate: number | null = null;
-  let lastKnownInjRate: number | null = null;
-  // Mois d'origine des taux repris, pour signaler une valeur estimée dans les KPI
-  type MoisAnnee = { mois: number; annee: number };
-  let lastKnownCnsMonth: MoisAnnee | null = null;
-  let lastKnownMctMonth: MoisAnnee | null = null;
-  let lastKnownInjMonth: MoisAnnee | null = null;
-  let cnsEstimatedFromMonth: MoisAnnee | null = null;
-
-  // Mois à projeter : du 1er mois après le dernier mois réel jusqu'à décembre
-  // de l'année affichée. Une année future s'enchaîne ainsi aux mois restants
-  // de l'année en cours (turnover, arrivées, sorties temporaires des
-  // scénarios) au lieu de repartir de la dernière photo.
-  const etapesProjection: MoisAnnee[] = [];
-  if (selectedYear >= currentYear) {
-    for (let y = currentYear; y <= selectedYear; y++) {
-      for (let m = 1; m <= 12; m++) {
-        if (y === currentYear && m <= currentMonth) continue;
-        etapesProjection.push({ annee: y, mois: m });
-      }
-    }
-  }
-
-  // Année future : amorcer les taux CNS / MCT / injustifiées avec le dernier
-  // mois connu de l'année précédente, calculé comme dans la boucle ci-dessous
-  // (photo du mois reconduite, ETP disponible, heures travaillables).
-  if (anneeFuture) {
-    const anneePrec = selectedYear - 1;
-    const mctPrecHorsWeekEnd = horsWeekEnd(mctAnneePrec);
-    for (let m = 12; m >= 1; m--) {
-      if (lastKnownCnsRate !== null && lastKnownMctRate !== null && lastKnownInjRate !== null) break;
-      const monthEnd = lastDayOfMonth(anneePrec, m);
-      const actifs = actifsParmi(photoDuMoisDe(m, anneePrec), monthEnd);
-      const dispo = new Map<string, number>();
-      actifs.forEach((e) => dispo.set(e.code_salarie, getEtpDisponible(e, monthEnd)));
-      const net = [...dispo.values()].reduce((a, b) => a + b, 0);
-      const workable = getWorkableHoursInMonth(anneePrec, m);
-      if (net <= 0 || workable <= 0) continue;
-      const cnsMois = absencesAnneePrec.filter((a) => Number(a.mois) === m);
-      if (lastKnownCnsRate === null && cnsMois.length > 0) {
-        const absent = cnsMois.reduce((sum, a) => sum + (Number(a.pct_absenteisme || 0) / 100) * (dispo.get(a.code_salarie) ?? 0), 0);
-        lastKnownCnsRate = (absent / net) * 100;
-        lastKnownCnsMonth = { mois: m, annee: anneePrec };
-      }
-      const mctMois = mctPrecHorsWeekEnd.filter((a) => Number(a.mois) === m && dispo.has(a.code_salarie));
-      if (lastKnownMctRate === null && mctMois.length > 0) {
-        const fte = mctMois.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0) / workable;
-        lastKnownMctRate = (fte / net) * 100;
-        lastKnownMctMonth = { mois: m, annee: anneePrec };
-      }
-      // Même règle de périmètre que l'année affichée (voir injustifieesDuPerimetre)
-      const injMois = injustifieesDuPerimetre(
-        injAnneePrec.filter((a) => Number(a.mois) === m) as { code_salarie: string; duree_hrs?: unknown }[],
-        filtres.actifs,
-        new Set(dispo.keys())
-      );
-      if (lastKnownInjRate === null && injMois.length > 0) {
-        const fte = injMois.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0) / workable;
-        lastKnownInjRate = (fte / net) * 100;
-        lastKnownInjMonth = { mois: m, annee: anneePrec };
-      }
-    }
-  }
-
-  for (let m = 1; m <= 12; m++) {
-    const monthEnd = lastDayOfMonth(selectedYear, m);
-    const isProjection = selectedYear > currentYear || (selectedYear === currentYear && m > currentMonth);
-
-    // Chaque mois dans sa propre photo (voir photoDuMois)
-    const activeAtMonth = actifsParmi(photoDuMois(m), monthEnd);
-    const codesDuMois = new Set(activeAtMonth.map((e) => e.code_salarie));
-
-    const brutEtpAtMonth = activeAtMonth.reduce((sum, e) => sum + getEtp(e), 0);
-    const tempExitsAtMonth = activeAtMonth.filter((e) => isTempExitAt(e, monthEnd));
-    const tempExitsEtp = tempExitsAtMonth.reduce((sum, e) => sum + getEtpSuspendu(e), 0);
-    const netEtpAtMonth = brutEtpAtMonth - tempExitsEtp;
-
-    // Moyenne du mois pondérée par les jours, pour la vue « Moyenne » de la
-    // courbe : même calcul que les cartes KPI. Les sortis du mois absents de
-    // la photo ne sont repris que si le mois ET le précédent ont chacun LEUR
-    // photo — comparer une photo reconduite à elle-même n'apprend rien.
-    const photoM = photoPourLeMois(photosParRang, m, selectedYear);
-    const precM: MoisAnnee = m === 1 ? { mois: 12, annee: selectedYear - 1 } : { mois: m - 1, annee: selectedYear };
-    const photoPrecM = photoPourLeMois(photosParRang, precM.mois, precM.annee);
-    let sortisHorsPhotoM: { date_sortie: string; taux_occupation: number }[] = [];
-    if (photoM.exacte && photoPrecM.exacte) {
+  const courbe = construireCourbeEffectifs({
+    selectedYear,
+    selectedMonth,
+    now,
+    anneeFuture,
+    filtresActifs: filtres.actifs,
+    targetTotal,
+    photoDuMoisDe,
+    photoExacte: (m, annee) => photoPourLeMois(photosParRang, m, annee).exacte,
+    // Sortis du mois absents de la photo : repris seulement si le mois ET le
+    // précédent ont chacun LEUR photo — comparer une photo reconduite à
+    // elle-même n'apprend rien.
+    sortisHorsPhotoPour: (m) => {
+      const precM: MoisAnnee = m === 1 ? { mois: 12, annee: selectedYear - 1 } : { mois: m - 1, annee: selectedYear };
+      if (!photoPourLeMois(photosParRang, m, selectedYear).exacte || !photoPourLeMois(photosParRang, precM.mois, precM.annee).exacte) return [];
       const codesPhotoM = new Set(photoDuMois(m).map((e) => e.code_salarie));
-      sortisHorsPhotoM = computeRosterMovements(
+      return computeRosterMovements(
         photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, selectedYear,
         sortiesConstateesSur(m, selectedYear, precM)
       ).sortiesDefinitives
         .filter((i) => i.date && !codesPhotoM.has(i.code_salarie))
         .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
-    }
-    const moyenneDuMois = computeEffectifMoyen(photoDuMois(m), sortisHorsPhotoM, m, selectedYear);
-
-    // Effectif réel après maladie
-    // Grâce à la reclassification, les employés maladie CNS ne sont plus
-    // comptés comme sorties temporaires → ils font partie de l'effectif net
-    // On calcule leur impact maladie individuellement (pct_absenteisme * taux_occupation)
-    let absentEtp: number;
-
-    // Absences de l'année entière : celles d'un salarié absent de la photo
-    // affichée comptent pour les mois où il figurait. Le rattachement à
-    // l'effectif se fait plus bas par l'ETP disponible (0 hors photo du mois).
-    const monthAbs = absences.filter((a) => Number(a.mois) === m);
-    const hasAbsenceData = monthAbs.length > 0;
-
-    let effectifReel: number;
-    if (hasAbsenceData) {
-      // L'absence porte sur l'ETP DISPONIBLE : entier pour qui travaille, nul
-      // pour une suspension complète, la part restante pour une partielle.
-      const empEtpDisponible = new Map<string, number>();
-      activeAtMonth.forEach((e) => empEtpDisponible.set(e.code_salarie, getEtpDisponible(e, monthEnd)));
-
-      absentEtp = monthAbs.reduce((sum, a) => {
-        const etp = empEtpDisponible.get(a.code_salarie) ?? 0;
-        return sum + (Number(a.pct_absenteisme || 0) / 100) * etp;
-      }, 0);
-      effectifReel = netEtpAtMonth - absentEtp;
-      // Mémoriser le dernier taux CNS connu
-      if (netEtpAtMonth > 0) {
-        lastKnownCnsRate = (absentEtp / netEtpAtMonth) * 100;
-        lastKnownCnsMonth = { mois: m, annee: selectedYear };
-      }
-    } else {
-      // Pas de données réelles CNS → appliquer le dernier taux CNS connu
-      const cnsRate = lastKnownCnsRate ?? 0;
-      absentEtp = netEtpAtMonth * (cnsRate / 100);
-      effectifReel = netEtpAtMonth - absentEtp;
-    }
-
-    // Capturer le taux d'absentéisme pour le mois sélectionné
-    if (m === selectedMonth && netEtpAtMonth > 0) {
-      avgAbsenteeism = (absentEtp / netEtpAtMonth) * 100;
-      // Sans données réelles, la valeur ci-dessus est le dernier taux CNS connu
-      cnsEstimatedFromMonth = hasAbsenceData ? null : lastKnownCnsMonth;
-    }
-
-    // Chaîne du mois : réel (après CNS) −injustifiées→ PAYÉ −MCT→ DISPONIBLE.
-    // Une absence CNS ou injustifiée n'est pas payée ; un salarié en MCT l'est
-    // (remboursement partiel par la mutuelle ensuite). Voir wp-paliers.ts.
-
-    // Effectif payé = effectif réel - FTE perdus par absences injustifiées
-    const monthInj = injustifieesDuPerimetre(
-      absencesInjustifiees.filter((a) => Number(a.mois) === m),
-      filtres.actifs,
-      codesDuMois
-    );
-    let effectifApresInjustifiees: number | undefined;
-    let projectedApresInjustifiees: number | undefined;
-    let ftePerdusInjMois = 0;
-    if (monthInj.length > 0) {
-      const totalInjHrs = monthInj.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
-      const workableHrs = getWorkableHoursInMonth(selectedYear, m);
-      ftePerdusInjMois = workableHrs > 0 ? totalInjHrs / workableHrs : 0;
-      effectifApresInjustifiees = Math.max(0, Math.round((effectifReel - ftePerdusInjMois) * 10) / 10);
-      // Mémoriser le dernier taux connu, même dénominateur que le mois réel
-      if (netEtpAtMonth > 0) {
-        lastKnownInjRate = (ftePerdusInjMois / netEtpAtMonth) * 100;
-        lastKnownInjMonth = { mois: m, annee: selectedYear };
-      }
-    } else if (lastKnownInjRate !== null) {
-      // Projeter avec le dernier taux connu (affiché en pointillé)
-      ftePerdusInjMois = netEtpAtMonth * (lastKnownInjRate / 100);
-      projectedApresInjustifiees = Math.max(0, Math.round((effectifReel - ftePerdusInjMois) * 10) / 10);
-    }
-
-    // Effectif disponible = effectif payé - FTE perdus par maladies court terme non CNS
-    // Même règle que allAbsencesMct, mais sur les salariés de la photo du mois
-    const monthMct = mctHorsWeekEnd.filter((a) => Number(a.mois) === m && (codesDuMois.size === 0 || codesDuMois.has(a.code_salarie)));
-    let effectifApresMct: number | undefined;
-    let projectedApresMct: number | undefined;
-    // Base des scénarios : ils ne modélisent PAS les injustifiées, leur point
-    // de départ reste donc réel − MCT, comme avant le réordonnancement.
-    let baseScenarioApresMct: number | undefined;
-    if (monthMct.length > 0) {
-      const totalMctHrs = monthMct.reduce((sum, a) => sum + Number(a.duree_hrs || 0), 0);
-      const workableHrs = getWorkableHoursInMonth(selectedYear, m);
-      const ftePerdus = workableHrs > 0 ? totalMctHrs / workableHrs : 0;
-      const disponible = Math.max(0, Math.round((effectifReel - ftePerdusInjMois - ftePerdus) * 10) / 10);
-      // MCT mesuré mais injustifiées ESTIMÉES : le disponible l'est en partie
-      // aussi, il se trace donc en pointillé comme toute valeur reprise.
-      if (monthInj.length === 0 && ftePerdusInjMois > 0) projectedApresMct = disponible;
-      else effectifApresMct = disponible;
-      baseScenarioApresMct = Math.max(0, Math.round((effectifReel - ftePerdus) * 10) / 10);
-      // Mémoriser le dernier taux MCT connu.
-      // Même dénominateur que le calcul du mois réel (heures MCT / heures
-      // travaillables ajustées), soit ftePerdus / effectif net — et non
-      // l'effectif après CNS, qui gonflerait le taux repris.
-      if (netEtpAtMonth > 0) {
-        lastKnownMctRate = (ftePerdus / netEtpAtMonth) * 100;
-        lastKnownMctMonth = { mois: m, annee: selectedYear };
-      }
-    } else if (lastKnownMctRate !== null) {
-      // Projeter avec le dernier taux MCT connu (affiché en pointillé)
-      const ftePerdus = netEtpAtMonth * (lastKnownMctRate / 100);
-      projectedApresMct = Math.max(0, Math.round((effectifReel - ftePerdusInjMois - ftePerdus) * 10) / 10);
-    }
-
-    headcountData.push({
-      month: FRENCH_MONTHS_SHORT[m],
-      effectif_brut: Math.round(brutEtpAtMonth * 10) / 10,
-      effectif_net: Math.max(0, Math.round(netEtpAtMonth * 10) / 10),
-      effectif_reel: Math.max(0, Math.round(effectifReel * 10) / 10),
-      effectif_apres_mct: effectifApresMct,
-      projected_apres_mct: projectedApresMct,
-      base_scenario_apres_mct: baseScenarioApresMct,
-      moyenne_brute: { brut: moyenneDuMois.brut, net: moyenneDuMois.net },
-      effectif_apres_injustifiees: effectifApresInjustifiees,
-      projected_apres_injustifiees: projectedApresInjustifiees,
-      is_projection: isProjection,
-      target: targetTotal > 0 ? targetTotal : undefined,
-      // Valeurs REPORTÉES (tracées en pointillé) : photo reconduite d'un autre
-      // mois, ou taux d'absence repris du dernier mois connu. Un palier hérite
-      // du report de ses entrées.
-      reporte: (() => {
-        const brut = !photoM.exacte;
-        const reel = brut || !hasAbsenceData;
-        const injustifiees = reel || monthInj.length === 0;
-        const mct = injustifiees || monthMct.length === 0;
-        return { brut, net: brut, reel, injustifiees, mct };
-      })(),
-    });
-  }
-
-  // Vue « Moyenne » de la courbe : chaque point de fin de mois, une fois les
-  // jonctions posées, exprimé en moyenne du mois (voir paliersEnMoyenne).
-  headcountData.forEach((d) => {
-    if (d.moyenne_brute) d.moyenne = paliersEnMoyenne(d, d.moyenne_brute);
+    },
+    absences,
+    mctHorsWeekEnd,
+    absencesInjustifiees,
+    absencesAnneePrec,
+    mctAnneePrec,
+    injAnneePrec,
   });
-
-  // Point de départ des projections de scénario : le dernier mois réel de
-  // l'année affichée, ou, pour une année future, la fin du mois courant lue
-  // dans la dernière photo (reconduite).
-  const departProjection = (() => {
-    const lastRealIdx = headcountData.findIndex((d) => d.is_projection) - 1;
-    if (lastRealIdx >= 0) {
-      return { brut: headcountData[lastRealIdx].effectif_brut, net: headcountData[lastRealIdx].effectif_net };
-    }
-    if (anneeFuture) {
-      const monthEnd = lastDayOfMonth(currentYear, currentMonth);
-      const actifs = actifsParmi(photoDuMoisDe(currentMonth, currentYear), monthEnd);
-      const brut = actifs.reduce((sum, e) => sum + getEtp(e), 0);
-      const suspendu = actifs.filter((e) => isTempExitAt(e, monthEnd)).reduce((sum, e) => sum + getEtpSuspendu(e), 0);
-      return { brut: Math.round(brut * 10) / 10, net: Math.round((brut - suspendu) * 10) / 10 };
-    }
-    const dernier = headcountData[headcountData.length - 1];
-    return { brut: dernier.effectif_brut, net: dernier.effectif_net };
-  })();
+  const { headcountData, etapesProjection, departProjection, avgAbsenteeism, cnsEstimatedFromMonth } = courbe;
+  const lastKnownCnsRate = courbe.tauxRepris.cns?.taux ?? null;
+  const lastKnownMctRate = courbe.tauxRepris.mct?.taux ?? null;
+  const lastKnownInjRate = courbe.tauxRepris.inj?.taux ?? null;
+  const lastKnownMctMonth: MoisAnnee | null = courbe.tauxRepris.mct ? { mois: courbe.tauxRepris.mct.mois, annee: courbe.tauxRepris.mct.annee } : null;
+  const lastKnownInjMonth: MoisAnnee | null = courbe.tauxRepris.inj ? { mois: courbe.tauxRepris.inj.mois, annee: courbe.tauxRepris.inj.annee } : null;
 
   // ============================================================
   // Scenario projections for chart overlay
