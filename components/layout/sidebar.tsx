@@ -1,14 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { modules, globalNavItems, getActiveModule, type NavModule } from "@/lib/navigation";
 import { Bus, ChevronLeft } from "lucide-react";
 
+/**
+ * Paramètres de sélection du module Workforce (période, filtres de périmètre,
+ * scénarios) : conservés d'une page du module à l'autre, pour que « Coûts »
+ * s'ouvre sur le même mois et le même périmètre que le tableau de bord.
+ */
+const PARAMS_WORKFORCE = ["year", "month", "societes", "fonctions", "cc", "depots", "equipes", "contrats", "employee", "scenarios", "turnover_src", "abs_src", "leave_src"];
+
 export function Sidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const lienAvecSelection = (href: string) => {
+    if (!href.startsWith("/workforce/") || !pathname.startsWith("/workforce/")) return href;
+    const qs = new URLSearchParams();
+    PARAMS_WORKFORCE.forEach((k) => {
+      const v = searchParams.get(k);
+      if (v) qs.set(k, v);
+    });
+    return qs.size > 0 ? `${href}?${qs}` : href;
+  };
   const [selectedModule, setSelectedModule] = useState<NavModule | null>(null);
 
   // Sync selected module with current pathname
@@ -109,7 +126,7 @@ export function Sidebar() {
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={lienAvecSelection(item.href)}
               className={cn(
                 "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
                 isActive

@@ -10,7 +10,9 @@ export default function AuthenticatedLayout({
 }) {
   return (
     <div className="flex h-screen">
-      <Sidebar />
+      <Suspense>
+        <Sidebar />
+      </Suspense>
       <div className="flex flex-1 flex-col overflow-hidden">
         <Suspense>
           <Header />
