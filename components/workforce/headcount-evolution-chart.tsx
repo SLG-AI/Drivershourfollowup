@@ -268,10 +268,33 @@ export function HeadcountEvolutionChart({
 
   const lastMctRealMonth = data.reduce((last, d, i) => d.effectif_apres_mct != null ? i + 1 : last, 0);
 
-  // Les scénarios sont projetés en FIN de mois : la moyenne ne s'applique
-  // qu'aux séries mesurées, la vue est donc suspendue quand un scénario s'affiche.
+  // Vue Moyenne : les mois mesurés portent leur moyenne pondérée par les
+  // jours ; un mois projeté par un scénario, qui n'a qu'une valeur de fin de
+  // mois, prend la moyenne de ses deux fins de mois (la précédente et la
+  // sienne), une interpolation linéaire à l'intérieur du mois.
   const moyenneDisponible = data.some((d) => d.moyenne != null);
-  const vueMoyenne = vue === "moyenne" && !showScenario && moyenneDisponible;
+  const vueMoyenne = vue === "moyenne" && moyenneDisponible;
+  const CLE_FIN_MESUREE: Record<string, (d: HeadcountDataPoint) => number | undefined> = {
+    scenario_brut: (d) => d.effectif_brut,
+    scenario_net: (d) => d.effectif_net,
+    scenario_reel: (d) => d.effectif_reel,
+    scenario_apres_injustifiees: (d) => d.effectif_apres_injustifiees ?? d.projected_apres_injustifiees,
+    scenario_apres_mct: (d) => d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
+    scenario_apres_conges: (d) => d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
+  };
+  /** Valeur de FIN du mois d'indice `i` pour une série de scénario : celle du scénario s'il couvre ce mois, sinon la mesure. */
+  const finDuMois = (i: number, key: string): number | undefined => {
+    if (i < 0) return undefined;
+    const md = selectedProjection?.months.find((m) => m.month_index === i + 1);
+    const v = md ? (md as unknown as Record<string, number | undefined>)[key] : undefined;
+    if (v != null) return v;
+    return CLE_FIN_MESUREE[key]?.(data[i]);
+  };
+  const moyenneProjetee = (i: number, key: string, cur: number | undefined): number | undefined => {
+    if (!vueMoyenne || cur == null) return cur;
+    const prev = finDuMois(i - 1, key);
+    return prev == null ? cur : (prev + cur) / 2;
+  };
 
   const chartDataFusionne = data.map((d, idx) => {
     // Merge projected_* into effectif_* for a single continuous line
@@ -312,12 +335,12 @@ export function HeadcountEvolutionChart({
       effectif_reel: undefined,
       effectif_apres_mct: undefined,
       effectif_apres_injustifiees: undefined,
-      scenario_brut: monthData.scenario_brut,
-      scenario_net: monthData.scenario_net,
-      scenario_reel: monthData.scenario_reel,
-      scenario_apres_injustifiees: monthData.scenario_apres_injustifiees,
-      scenario_apres_mct: monthData.scenario_apres_mct,
-      scenario_apres_conges: monthData.scenario_apres_conges,
+      scenario_brut: moyenneProjetee(idx, "scenario_brut", monthData.scenario_brut),
+      scenario_net: moyenneProjetee(idx, "scenario_net", monthData.scenario_net),
+      scenario_reel: moyenneProjetee(idx, "scenario_reel", monthData.scenario_reel),
+      scenario_apres_injustifiees: moyenneProjetee(idx, "scenario_apres_injustifiees", monthData.scenario_apres_injustifiees),
+      scenario_apres_mct: moyenneProjetee(idx, "scenario_apres_mct", monthData.scenario_apres_mct),
+      scenario_apres_conges: moyenneProjetee(idx, "scenario_apres_conges", monthData.scenario_apres_conges),
     };
   });
 
@@ -406,7 +429,7 @@ export function HeadcountEvolutionChart({
           <CardTitle className="text-base">
             {title}
             <span className="ml-2 text-xs font-normal text-muted-foreground">
-              {vueMoyenne ? "moyenne du mois, pondérée par les jours" : "au dernier jour du mois"}
+              {vueMoyenne ? (showScenario ? "moyenne du mois — scénario : moyenne des deux fins de mois" : "moyenne du mois, pondérée par les jours") : "au dernier jour du mois"}
             </span>
           </CardTitle>
           <div className="flex items-center gap-2">
@@ -415,7 +438,7 @@ export function HeadcountEvolutionChart({
               role="group"
               aria-label="Lecture de la courbe"
               className="inline-flex h-8 items-center rounded-md border p-0.5 text-xs"
-              title={showScenario ? "Les scénarios sont projetés en fin de mois : la vue Moyenne est suspendue tant qu'un scénario est affiché." : undefined}
+              title={showScenario ? "Un scénario est projeté en fin de mois : en vue Moyenne, chaque mois projeté vaut la moyenne de ses deux fins de mois." : undefined}
             >
               {([["fin", "Fin de mois"], ["moyenne", "Moyenne"]] as const).map(([cle, libelle]) => {
                 const actif = cle === "moyenne" ? vueMoyenne : !vueMoyenne;
@@ -424,7 +447,6 @@ export function HeadcountEvolutionChart({
                     key={cle}
                     type="button"
                     aria-pressed={actif}
-                    disabled={cle === "moyenne" && showScenario}
                     onClick={() => setVue(cle)}
                     className={`h-full rounded px-2.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${actif ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   >
