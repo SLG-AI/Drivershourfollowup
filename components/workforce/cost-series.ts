@@ -3,7 +3,7 @@ import type { SeriesDef } from "./headcount-evolution-chart";
 /**
  * Séries de la page Coûts : les mêmes clés et les mêmes couleurs que la courbe
  * des effectifs (un palier se reconnaît d'une page à l'autre), les valeurs en
- * euros. « Réalisé » est la paie du mois (Total SECU des statistiques
+ * euros. « Réalisé » est la paie du mois (brut + charges patronales des statistiques
  * salariales), tracée seulement sur les mois qui portent des montants.
  */
 export const SERIES_COUTS: SeriesDef[] = [

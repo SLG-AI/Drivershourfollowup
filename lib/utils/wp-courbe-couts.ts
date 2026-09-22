@@ -39,6 +39,8 @@ export interface EntreesCourbeCouts {
   /** Dernière photo portant des salaires (non filtrée), ou null si aucune. */
   photoReference: SalarieCout[] | null;
   coef: number;
+  /** Coefficient par cost center lu dans la paie (voir calculerCoefficientsParCostCenter), optionnel. */
+  coefParCc?: Map<string, { coef: number }>;
   absences: LigneCns[];
   mctHorsWeekEnd: LigneHeures[];
   absencesInjustifiees: LigneHeures[];
@@ -69,7 +71,7 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       injustifieesDuPerimetre(e.absencesInjustifiees, e.filtresActifs, codes),
       m,
       e.selectedYear,
-      { coef: e.coef, source }
+      { coef: e.coef, source, coefParCc: e.coefParCc }
     );
 
     // Un palier suit la règle de son homologue ETP : mesuré ⇒ valorisé
@@ -104,9 +106,9 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       effectif_reel: arrondi(apresCns),
       effectif_apres_injustifiees: arrondi(apresInj),
       effectif_apres_mct: arrondi(apresMct),
-      // Réalisé employeur : la colonne importée si elle est bien un coût
-      // employeur (≥ brut), sinon le brut réel × coefficient (voir wp-couts.ts)
-      realise: realise.mesure ? Math.round(realise.employeur >= realise.brut ? realise.employeur : realise.brut * e.coef) : undefined,
+      // Réalisé employeur : brut + charges patronales quand la paie les porte,
+      // sinon le brut réel × coefficient (estimation)
+      realise: realise.mesure ? Math.round(realise.employeurMesure ? realise.employeur : realise.brut * e.coef) : undefined,
       is_projection: etp.is_projection,
       reporte,
       taux_appliques: etp.taux_appliques,

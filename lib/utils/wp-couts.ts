@@ -54,7 +54,27 @@ export interface LigneStatSalariale {
   total_brut?: unknown;
   brut_base?: unknown;
   supplements?: unknown;
+  /** « Total SECU » du fichier : total des cotisations salariales et patronales, PAS un coût employeur. */
   cout_total_secu?: unknown;
+  /** Somme des cotisations patronales (import), et leur détail. Coût employeur = total_brut + charges_patronales. */
+  charges_patronales?: unknown;
+  cm_patronale?: unknown;
+  cp_patronale?: unknown;
+  assurance_accident?: unknown;
+  allocation_familiale?: unknown;
+  sante_travail?: unknown;
+  mutualite?: unknown;
+  cot_pat_autres?: unknown;
+  centre_cout?: string | null;
+}
+
+/** Une ligne dont les charges patronales sont connues : le coût employeur peut en être lu. */
+export function ligneAvecCharges(l: LigneStatSalariale): boolean {
+  return nombre(l.charges_patronales) > 0;
+}
+/** Coût employeur d'une ligne = brut + charges patronales. */
+export function coutEmployeurDeLaLigne(l: LigneStatSalariale): number {
+  return nombre(l.total_brut) + nombre(l.charges_patronales);
 }
 
 function nombre(v: unknown): number {
@@ -95,17 +115,37 @@ export function realiseDuMois(
   mois: number,
   annee: number,
   codes?: Set<string>
-): { brut: number; brutBase: number; supplements: number; employeur: number; n: number; mesure: boolean } {
+): {
+  brut: number; brutBase: number; supplements: number;
+  /** Coût employeur = brut + charges patronales ; égal au brut quand aucune ligne ne porte de charges. */
+  employeur: number;
+  chargesPatronales: number;
+  /** Détail des charges patronales par nature. */
+  charges: { cm: number; cp: number; accident: number; allocation: number; sante: number; mutualite: number; autres: number };
+  cotisationsTotales: number;
+  n: number;
+  mesure: boolean;
+  /** Au moins une ligne porte des charges patronales : le coût employeur est lu, pas estimé. */
+  employeurMesure: boolean;
+} {
   const lignes = stats.filter(
     (l) => Number(l.mois) === mois && Number(l.annee) === annee && dansPerimetre(l, codes)
   );
+  const somme = (cle: keyof LigneStatSalariale) => lignes.reduce((s, l) => s + nombre(l[cle]), 0);
   return {
-    brut: lignes.reduce((s, l) => s + nombre(l.total_brut), 0),
-    brutBase: lignes.reduce((s, l) => s + nombre(l.brut_base), 0),
-    supplements: lignes.reduce((s, l) => s + nombre(l.supplements), 0),
-    employeur: lignes.reduce((s, l) => s + nombre(l.cout_total_secu), 0),
+    brut: somme("total_brut"),
+    brutBase: somme("brut_base"),
+    supplements: somme("supplements"),
+    employeur: lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0),
+    chargesPatronales: somme("charges_patronales"),
+    charges: {
+      cm: somme("cm_patronale"), cp: somme("cp_patronale"), accident: somme("assurance_accident"),
+      allocation: somme("allocation_familiale"), sante: somme("sante_travail"), mutualite: somme("mutualite"), autres: somme("cot_pat_autres"),
+    },
+    cotisationsTotales: somme("cout_total_secu"),
     n: lignes.length,
     mesure: lignes.some(ligneAvecMontants),
+    employeurMesure: lignes.some(ligneAvecCharges),
   };
 }
 
@@ -151,7 +191,8 @@ export function calculerCoefficientCharges(
   codes?: Set<string>,
   defaut: number = COEF_CHARGES_DEFAUT
 ): { coef: number; source: SourceCoefficient | null } {
-  const avecMontants = stats.filter(ligneAvecMontants);
+  // Seules les lignes dont les charges patronales sont connues donnent un coût employeur
+  const avecMontants = stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l));
   const duPerimetre = codes === undefined ? [] : avecMontants.filter((l) => codes.has(l.code_salarie));
 
   const candidats: Array<{ lignes: LigneStatSalariale[]; perimetre: "filtre" | "entreprise" }> = [];
@@ -162,11 +203,8 @@ export function calculerCoefficientCharges(
     const dernier = dernierMois(lignes);
     if (!dernier) continue;
     const brut = dernier.lignes.reduce((s, l) => s + nombre(l.total_brut), 0);
-    const employeur = dernier.lignes.reduce((s, l) => s + nombre(l.cout_total_secu), 0);
-    // Garde : un coût employeur ne peut pas être inférieur au brut. La colonne
-    // « Total SECU » des Statistiques rapides s'est révélée être le total des
-    // cotisations (≈ 27 % du brut), pas le coût employeur : tant que le fichier
-    // ne fournit pas les charges patronales, on garde le coefficient par défaut.
+    const employeur = dernier.lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
+    // Garde : un coût employeur ne peut pas être inférieur au brut
     if (brut <= 0 || employeur < brut) continue;
     return {
       coef: employeur / brut,
@@ -174,6 +212,32 @@ export function calculerCoefficientCharges(
     };
   }
   return { coef: defaut, source: null };
+}
+
+/**
+ * Coefficient de charges par cost center, sur le dernier mois de statistiques
+ * salariales qui porte des charges patronales : les charges varient avec la
+ * structure des salaires (plafonds, régimes), un centre de chauffeurs ne pèse
+ * pas comme l'administration. Un cost center sans ligne ce mois-là garde le
+ * coefficient global.
+ */
+export function calculerCoefficientsParCostCenter(
+  stats: LigneStatSalariale[]
+): Map<string, { coef: number; n: number; brut: number; employeur: number }> {
+  const resultat = new Map<string, { coef: number; n: number; brut: number; employeur: number }>();
+  const dernier = dernierMois(stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l) && !!l.centre_cout));
+  if (!dernier) return resultat;
+  const parCc = new Map<string, LigneStatSalariale[]>();
+  dernier.lignes.forEach((l) => {
+    const cc = String(l.centre_cout);
+    parCc.set(cc, [...(parCc.get(cc) ?? []), l]);
+  });
+  parCc.forEach((lignes, cc) => {
+    const brut = lignes.reduce((s, l) => s + nombre(l.total_brut), 0);
+    const employeur = lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
+    if (brut > 0 && employeur >= brut) resultat.set(cc, { coef: employeur / brut, n: lignes.length, brut, employeur });
+  });
+  return resultat;
 }
 
 /** D'où vient le brut de chaque salarié du mois. */
@@ -293,9 +357,11 @@ export function calculerCoutsPaliers(
   absencesInjustifiees: LigneHeures[],
   mois: number,
   annee: number,
-  opts: { coef: number; source: SourceSalaires; coutEtpRepli?: number }
+  opts: { coef: number; source: SourceSalaires; coutEtpRepli?: number; coefParCc?: Map<string, { coef: number }> }
 ): CoutsMois {
-  const { coef, source, coutEtpRepli } = opts;
+  const { coef, source, coutEtpRepli, coefParCc } = opts;
+  // Coefficient du cost center du salarié quand la paie le donne, sinon le global
+  const coefDe = (e: SalarieCout) => (e.centre_cout && coefParCc?.get(e.centre_cout)?.coef) || coef;
   const refDate = lastDayOfMonth(annee, mois);
   const heuresTravaillables = getWorkableHoursInMonth(annee, mois);
 
@@ -311,7 +377,7 @@ export function calculerCoutsPaliers(
       codesManquants += 1;
       cout.set(e.code_salarie, (coutEtpRepli ?? 0) * etpDe(e));
     } else {
-      cout.set(e.code_salarie, brut * etpDe(e) * coef);
+      cout.set(e.code_salarie, brut * etpDe(e) * coefDe(e));
     }
   });
   const coutDe = (e: SalarieCout) => cout.get(e.code_salarie) ?? 0;
@@ -345,12 +411,12 @@ export function calculerCoutsPaliers(
 
   // Coût employeur d'un ETP d'un salarié pour valoriser ses heures d'absence :
   // son brut chargé s'il est dans la photo avec un brut, le repli sinon.
-  const brutParCode = new Map<string, number | null>();
-  employes.forEach((e) => brutParCode.set(e.code_salarie, source.brutDe(e.code_salarie)));
-  const coutEtpDe = (code: string): number => {
-    const brut = brutParCode.get(code) ?? null;
-    return brut !== null ? brut * coef : coutEtpRepli ?? coutMoyenEtp;
-  };
+  const brutChargeParCode = new Map<string, number | null>();
+  employes.forEach((e) => {
+    const brut = source.brutDe(e.code_salarie);
+    brutChargeParCode.set(e.code_salarie, brut !== null ? brut * coefDe(e) : null);
+  });
+  const coutEtpDe = (code: string): number => brutChargeParCode.get(code) ?? coutEtpRepli ?? coutMoyenEtp;
   const coutDesHeures = (lignes: LigneHeures[]) =>
     heuresTravaillables > 0
       ? lignes.reduce((s, a) => s + (nombre(a.duree_hrs) / heuresTravaillables) * coutEtpDe(a.code_salarie), 0)

@@ -6,7 +6,7 @@ import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
-import { calculerCoefficientCharges, construireSourceSalaires, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, construireSourceSalaires, type SalarieCout } from "@/lib/utils/wp-couts";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
 import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
 import { valoriserProjection } from "@/lib/utils/wp-couts-scenario";
@@ -88,7 +88,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*").eq("mois", rosterPeriode?.mois ?? -1).eq("annee", rosterPeriode?.annee ?? -1)),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
-    fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, date_sortie, total_brut, brut_base, supplements, cout_total_secu").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, date_sortie, centre_cout, hrs_supp, total_brut, brut_base, supplements, cout_total_secu, charges_patronales, cm_patronale, cp_patronale, assurance_accident, allocation_familiale, sante_travail, mutualite, cot_pat_autres").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_absences_injustifiees").select("*").eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_mouvements").select("code_salarie, type, date_sortie, motif_sortie, mois, annee").in("annee", [selectedYear, selectedYear - 1]).in("type", ["sortie", "sortie_temporaire"])),
@@ -100,7 +100,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     // Photo de référence salariale : la plus récente qui porte un brut indice
     supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
     // Dernier mois de statistiques salariales avec montants, pour le coefficient de charges
-    supabase.from("wp_salary_stats").select("mois, annee").gt("total_brut", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
     fetchAll(supabase.from("wp_scenarios").select("id, name").order("created_at", { ascending: false })),
   ]);
   // Scénarios : mêmes lignes brutes que le tableau de bord, plus les leviers de coût
@@ -127,7 +127,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       ? fetchAll(supabase.from("wp_employees").select(colonnesPhoto).eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
       : Promise.resolve(null),
     dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, total_brut, cout_total_secu").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
+      ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 
@@ -199,6 +199,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
 
   // ---- Valorisation
   const coefficient = calculerCoefficientCharges([...salaryStats, ...statsCoefficient], filtres.actifs ? employeeCodes : undefined);
+  // Coefficient par cost center, lu dans la paie quand elle porte les charges patronales
+  const coefParCc = calculerCoefficientsParCostCenter([...salaryStats, ...statsCoefficient]);
   const courbeCouts = construireCourbeCouts({
     headcountData: courbe.headcountData,
     selectedYear,
@@ -206,6 +208,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     photoDuMois,
     photoReference: photoReference as SalarieCout[] | null,
     coef: coefficient.coef,
+    coefParCc,
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,
@@ -277,8 +280,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     sous_contrat_moyen: moyenne?.effectif_brut,
     apres_suspension_moyen: moyenne?.effectif_net,
     paye_moyen: moyenne?.effectif_apres_injustifiees,
-    realise: duMois.realise.mesure ? (duMois.realise.employeur >= duMois.realise.brut ? duMois.realise.employeur : duMois.realise.brut * coefficient.coef) : null,
-    realise_estime: duMois.realise.mesure && duMois.realise.employeur < duMois.realise.brut,
+    realise: duMois.realise.mesure ? (duMois.realise.employeurMesure ? duMois.realise.employeur : duMois.realise.brut * coefficient.coef) : null,
+    realise_estime: duMois.realise.mesure && !duMois.realise.employeurMesure,
     realise_brut: duMois.realise.mesure ? duMois.realise.brut : null,
     realise_lignes: duMois.realise.n,
     coefficient: coefficient.coef,
@@ -302,12 +305,13 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     const cc = e.centre_cout || "(sans cost center)";
     const ligne = parCostCenter.get(cc) ?? { n: 0, etp: 0, brutPleinTemps: 0, avecBrut: 0, cout: 0 };
     const brut = sourceDuMois.brutDe(e.code_salarie);
+    const coefCc = (e.centre_cout && coefParCc.get(e.centre_cout)?.coef) || coefficient.coef;
     ligne.n += 1;
     ligne.etp += etpDe(e);
     if (brut != null) {
       ligne.avecBrut += 1;
       ligne.brutPleinTemps += brut;
-      ligne.cout += brut * etpDe(e) * coefficient.coef;
+      ligne.cout += brut * etpDe(e) * coefCc;
     } else {
       ligne.cout += duMois.couts.coutMoyenEtp * etpDe(e);
     }
@@ -358,8 +362,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       )}
       {!coefficient.source && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Aucun mois de statistiques salariales ne porte de montants : le coefficient de charges patronales est la valeur par défaut ({coefficient.coef.toLocaleString("fr-FR", { minimumFractionDigits: 2 })}).
-          Importez des « Statistiques rapides » avec salaires pour le calculer sur le réalisé.
+          Aucun mois de statistiques salariales ne porte de charges patronales : le coefficient de charges est la valeur par défaut ({coefficient.coef.toLocaleString("fr-FR", { minimumFractionDigits: 2 })}).
+          Importez des « Statistiques rapides » complètes (colonnes CM/CP patronales, assurance accident, allocation familiale, santé au travail, mutualité) pour le calculer sur le réalisé.
         </div>
       )}
 
@@ -440,12 +444,73 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
         </Card>
       )}
 
+      {duMois.realise.mesure && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Paie réalisée — {moisLabel}</CardTitle>
+            <CardDescription>
+              {duMois.realise.n.toLocaleString("fr-FR")} lignes de statistiques salariales{filtres.actifs ? " du périmètre" : ""}.
+              {duMois.realise.employeurMesure
+                ? " Coût employeur = total brut + charges patronales, lues dans le fichier."
+                : " Le fichier importé ne porte pas les charges patronales : le coût employeur est estimé (brut × coefficient)."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+              {[
+                ["Brut base", duMois.realise.brutBase],
+                ["Suppléments", duMois.realise.supplements],
+                ["Total brut", duMois.realise.brut],
+                ["Cotisations totales (Total SECU)", duMois.realise.cotisationsTotales],
+                ["CM patronale", duMois.realise.charges.cm],
+                ["CP patronale", duMois.realise.charges.cp],
+                ["Assurance accident", duMois.realise.charges.accident],
+                ["Allocation familiale", duMois.realise.charges.allocation],
+                ["Santé au travail", duMois.realise.charges.sante],
+                ["Mutualité", duMois.realise.charges.mutualite],
+                ["Autres cotisations patronales", duMois.realise.charges.autres],
+                ["Charges patronales", duMois.realise.chargesPatronales],
+              ].map(([libelle, valeur]) => (
+                <div key={String(libelle)} className="rounded-md border px-3 py-2">
+                  <div className="text-xs text-muted-foreground">{libelle}</div>
+                  <div className="font-medium">{formatEuros(Number(valeur))}</div>
+                </div>
+              ))}
+              <div className="rounded-md border border-slate-400 bg-slate-50 px-3 py-2 md:col-span-2">
+                <div className="text-xs text-muted-foreground">Coût employeur réalisé{duMois.realise.employeurMesure ? "" : " (estimé)"}</div>
+                <div className="text-lg font-semibold">{formatEuros(stats.realise ?? 0)}</div>
+                {duMois.realise.employeurMesure && duMois.realise.brut > 0 && (
+                  <div className="text-xs text-muted-foreground">Coefficient réel du mois : {(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}</div>
+                )}
+              </div>
+              {stats.paye != null && stats.realise != null && (
+                <div className="rounded-md border px-3 py-2 md:col-span-2">
+                  <div className="text-xs text-muted-foreground">Écart réalisé − payé contractuel</div>
+                  <div className="text-lg font-semibold">{stats.realise - stats.paye >= 0 ? "+" : "−"}{formatEuros(Math.abs(stats.realise - stats.paye))}</div>
+                  <div className="text-xs text-muted-foreground">suppléments, heures supplémentaires, prorata des entrées et sorties, régularisations</div>
+                </div>
+              )}
+            </div>
+            {coefParCc.size > 0 && (
+              <div className="mt-4">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Coefficient de charges par cost center (paie)</p>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {[...coefParCc.entries()].sort((a, b) => b[1].brut - a[1].brut).map(([cc, c]) => (
+                    <span key={cc} className="rounded-md border px-2 py-1">{cc} : <span className="font-medium">{c.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}</span> <span className="text-muted-foreground">({c.n})</span></span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {!aucunSalaire && lignesCostCenter.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Coût employeur par cost center — {moisLabel}</CardTitle>
             <CardDescription>
-              Salariés sous contrat en fin de mois. Coût = brut plein temps × taux d&apos;occupation × coefficient {coefficient.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })} ; un salarié sans brut est compté au coût moyen par ETP du périmètre.
+              Salariés sous contrat en fin de mois. Coût = brut plein temps × taux d&apos;occupation × coefficient de charges ({coefficient.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })} par défaut, ou celui du cost center lu dans la paie) ; un salarié sans brut est compté au coût moyen par ETP du périmètre.
             </CardDescription>
           </CardHeader>
           <CardContent>

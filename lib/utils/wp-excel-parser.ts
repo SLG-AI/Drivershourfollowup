@@ -259,6 +259,12 @@ export function parseRosterRH(buffer: ArrayBuffer): WpParseResult {
 // 2. Salary Stats parser (StatRapides)
 // ============================================================
 
+/** Comme `findCol`, mais SANS repli partiel : une colonne absente reste absente. */
+function findColStrict(headers: string[], ...keywords: string[]): number {
+  const normalized = Array.from(headers, (h) => normalizeText(h || ""));
+  return normalized.findIndex((h) => keywords.every((kw) => h.includes(kw)));
+}
+
 export interface SalaryStatsRow {
   code_salarie: string;
   nom: string;
@@ -277,7 +283,26 @@ export interface SalaryStatsRow {
   supplements: number;
   total_brut: number;
   brut_base: number;
+  /** « Total SECU » : total des cotisations salariales ET patronales, pas un coût employeur. */
   cout_total_secu: number;
+  /** Rattachement porté par la paie elle-même. */
+  centre_cout: string;
+  carriere: string;
+  regime: string;
+  /** Cotisations salariales (retenues sur le brut). */
+  cm_salariale: number;
+  cp_salariale: number;
+  cot_sal_autres: number;
+  assurance_dependance: number;
+  /** Cotisations patronales : coût employeur = total_brut + charges_patronales. */
+  cm_patronale: number;
+  cp_patronale: number;
+  assurance_accident: number;
+  allocation_familiale: number;
+  sante_travail: number;
+  mutualite: number;
+  cot_pat_autres: number;
+  charges_patronales: number;
 }
 
 export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
@@ -339,6 +364,22 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
   const colTotalBrut = findCol(h, "total", "brut");
   const colBrutBase = findCol(h, "brut", "base");
   const colTotalSecu = findCol(h, "total", "secu");
+  // Rattachement et cotisations : recherche stricte, une colonne absente vaut 0
+  const colCentreCout = findColStrict(h, "centre", "cout");
+  const colCarriere = findColStrict(h, "carriere");
+  const colRegime = findColStrict(h, "regime");
+  const colCmSal = findColStrict(h, "cm", "salariale");
+  const colCpSal = findColStrict(h, "cp", "salariale");
+  const colCotSalAutres = findColStrict(h, "cot", "sal", "autres");
+  const colDependance = findColStrict(h, "assurance", "dependance");
+  const colCmPat = findColStrict(h, "cm", "patronale");
+  const colCpPat = findColStrict(h, "cp", "patronale");
+  const colAccident = findColStrict(h, "assurance", "accident");
+  const colAllocFam = findColStrict(h, "allocation", "familiale");
+  const colSanteTravail = findColStrict(h, "sante", "travail");
+  const colMutualite = findColStrict(h, "mutualite");
+  const colCotPatAutres = findColStrict(h, "cot", "pat", "autres");
+  const lire = (col: number, row: unknown[]) => (col >= 0 ? parseNumeric(row[col]) : 0);
 
   if (colCode === -1) {
     return { fileType: "salary_stats", data: [], rowCount: 0, errors: ["Colonne 'Code salarié' non trouvée."], warnings, detectedYear, detectedMonth };
@@ -391,6 +432,23 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
       total_brut: colTotalBrut >= 0 ? parseNumeric(row[colTotalBrut]) : 0,
       brut_base: colBrutBase >= 0 ? parseNumeric(row[colBrutBase]) : 0,
       cout_total_secu: colTotalSecu >= 0 ? parseNumeric(row[colTotalSecu]) : 0,
+      centre_cout: colCentreCout >= 0 ? String(row[colCentreCout] || "") : "",
+      carriere: colCarriere >= 0 ? String(row[colCarriere] || "") : "",
+      regime: colRegime >= 0 ? String(row[colRegime] || "") : "",
+      cm_salariale: lire(colCmSal, row),
+      cp_salariale: lire(colCpSal, row),
+      cot_sal_autres: lire(colCotSalAutres, row),
+      assurance_dependance: lire(colDependance, row),
+      cm_patronale: lire(colCmPat, row),
+      cp_patronale: lire(colCpPat, row),
+      assurance_accident: lire(colAccident, row),
+      allocation_familiale: lire(colAllocFam, row),
+      sante_travail: lire(colSanteTravail, row),
+      mutualite: lire(colMutualite, row),
+      cot_pat_autres: lire(colCotPatAutres, row),
+      charges_patronales:
+        lire(colCmPat, row) + lire(colCpPat, row) + lire(colAccident, row) + lire(colAllocFam, row) +
+        lire(colSanteTravail, row) + lire(colMutualite, row) + lire(colCotPatAutres, row),
     });
   }
 

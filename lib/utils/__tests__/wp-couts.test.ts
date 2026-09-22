@@ -46,7 +46,7 @@ describe("brutPleinTempsDe", () => {
 describe("ligneAvecMontants / photoAvecMontants", () => {
   it("détecte un montant sur n'importe quelle colonne en euros", () => {
     expect(ligneAvecMontants(ligne({ code_salarie: "A", mois: 1, annee: 2026 }))).toBe(false);
-    expect(ligneAvecMontants(ligne({ code_salarie: "A", mois: 1, annee: 2026, total_brut: 0, cout_total_secu: "0" }))).toBe(false);
+    expect(ligneAvecMontants(ligne({ code_salarie: "A", mois: 1, annee: 2026, total_brut: 0, charges_patronales: 0 }))).toBe(false);
     expect(ligneAvecMontants(ligne({ code_salarie: "A", mois: 1, annee: 2026, supplements: 12 }))).toBe(true);
   });
 
@@ -58,15 +58,15 @@ describe("ligneAvecMontants / photoAvecMontants", () => {
 
 describe("realiseDuMois", () => {
   const stats: LigneStatSalariale[] = [
-    ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 3000, brut_base: 2800, supplements: 200, cout_total_secu: 3400 }),
-    ligne({ code_salarie: "B", mois: 6, annee: 2026, total_brut: "1000", brut_base: 1000, supplements: 0, cout_total_secu: 1130 }),
-    ligne({ code_salarie: "A", mois: 5, annee: 2026, total_brut: 9999, cout_total_secu: 9999 }),
-    ligne({ code_salarie: "A", mois: 6, annee: 2025, total_brut: 9999, cout_total_secu: 9999 }),
+    ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 3000, brut_base: 2800, supplements: 200, charges_patronales: 400 }),
+    ligne({ code_salarie: "B", mois: 6, annee: 2026, total_brut: "1000", brut_base: 1000, supplements: 0, charges_patronales: 130 }),
+    ligne({ code_salarie: "A", mois: 5, annee: 2026, total_brut: 9999, charges_patronales: 0 }),
+    ligne({ code_salarie: "A", mois: 6, annee: 2025, total_brut: 9999, charges_patronales: 0 }),
   ];
 
   it("additionne les colonnes du mois et de l'année demandés seulement", () => {
     const r = realiseDuMois(stats, 6, 2026);
-    expect(r).toEqual({ brut: 4000, brutBase: 3800, supplements: 200, employeur: 4530, n: 2, mesure: true });
+    expect(r).toMatchObject({ brut: 4000, brutBase: 3800, supplements: 200, employeur: 4530, chargesPatronales: 530, n: 2, mesure: true, employeurMesure: true });
   });
 
   it("se restreint au périmètre de codes", () => {
@@ -77,7 +77,7 @@ describe("realiseDuMois", () => {
 
   it("ne mesure rien quand toutes les lignes sont à 0", () => {
     const r = realiseDuMois(
-      [ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 0, cout_total_secu: 0 })],
+      [ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 0, charges_patronales: 0 })],
       6,
       2026
     );
@@ -90,13 +90,13 @@ describe("realiseDuMois", () => {
 describe("calculerCoefficientCharges", () => {
   const stats: LigneStatSalariale[] = [
     // Mai : coef 1,20 sur A, 1,10 sur B
-    ligne({ code_salarie: "A", mois: 5, annee: 2026, total_brut: 1000, cout_total_secu: 1200 }),
-    ligne({ code_salarie: "B", mois: 5, annee: 2026, total_brut: 1000, cout_total_secu: 1100 }),
+    ligne({ code_salarie: "A", mois: 5, annee: 2026, total_brut: 1000, charges_patronales: 200 }),
+    ligne({ code_salarie: "B", mois: 5, annee: 2026, total_brut: 1000, charges_patronales: 100 }),
     // Juin : A seulement, coef 1,30
-    ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 1000, cout_total_secu: 1300 }),
+    ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 1000, charges_patronales: 300 }),
     // Juillet : fichier sans salaire (lignes à 0) → ignoré
-    ligne({ code_salarie: "A", mois: 7, annee: 2026, total_brut: 0, cout_total_secu: 0 }),
-    ligne({ code_salarie: "B", mois: 7, annee: 2026, total_brut: 0, cout_total_secu: 0 }),
+    ligne({ code_salarie: "A", mois: 7, annee: 2026, total_brut: 0, charges_patronales: 0 }),
+    ligne({ code_salarie: "B", mois: 7, annee: 2026, total_brut: 0, charges_patronales: 0 }),
   ];
 
   it("prend le DERNIER mois qui a des montants, pas le dernier fichier", () => {
@@ -121,8 +121,8 @@ describe("calculerCoefficientCharges", () => {
 
   it("ordonne les mois par année puis par mois", () => {
     const r = calculerCoefficientCharges([
-      ligne({ code_salarie: "A", mois: 12, annee: 2025, total_brut: 1000, cout_total_secu: 1500 }),
-      ligne({ code_salarie: "A", mois: 1, annee: 2026, total_brut: 1000, cout_total_secu: 1100 }),
+      ligne({ code_salarie: "A", mois: 12, annee: 2025, total_brut: 1000, charges_patronales: 500 }),
+      ligne({ code_salarie: "A", mois: 1, annee: 2026, total_brut: 1000, charges_patronales: 100 }),
     ]);
     expect(r.coef).toBeCloseTo(1.1, 10);
     expect(r.source?.annee).toBe(2026);
@@ -131,13 +131,13 @@ describe("calculerCoefficientCharges", () => {
   it("rend le défaut avec une source nulle quand rien n'est mesurable", () => {
     expect(calculerCoefficientCharges([])).toEqual({ coef: COEF_CHARGES_DEFAUT, source: null });
     expect(calculerCoefficientCharges([], undefined, 1.2)).toEqual({ coef: 1.2, source: null });
-    const sansSalaire = [ligne({ code_salarie: "A", mois: 7, annee: 2026, total_brut: 0, cout_total_secu: 0 })];
+    const sansSalaire = [ligne({ code_salarie: "A", mois: 7, annee: 2026, total_brut: 0, charges_patronales: 0 })];
     expect(calculerCoefficientCharges(sansSalaire).source).toBeNull();
   });
 
   it("ne divise pas par zéro quand le brut est nul mais les charges non", () => {
     const r = calculerCoefficientCharges([
-      ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 0, cout_total_secu: 500 }),
+      ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 0, charges_patronales: 500 }),
     ]);
     expect(r.coef).toBe(COEF_CHARGES_DEFAUT);
     expect(r.source).toBeNull();

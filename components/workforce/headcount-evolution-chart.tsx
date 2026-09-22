@@ -44,7 +44,7 @@ export interface HeadcountDataPoint {
   reporte?: Reporte;
   /** Taux d'absence effectivement appliqués au mois (mesurés ou repris), en % : nécessaires à la page Coûts. */
   taux_appliques?: { cns: number | null; inj: number | null; mct: number | null };
-  /** Page Coûts : paie réalisée du mois (Total SECU), absente sur un mois sans montants. */
+  /** Page Coûts : paie réalisée du mois (brut + charges patronales), absente sur un mois sans montants. */
   realise?: number;
   target?: number;
   scenario_brut?: number;

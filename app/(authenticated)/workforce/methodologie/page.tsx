@@ -105,13 +105,13 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
           .in("annee", Array.from(new Set([selectedYear, moisPrecedent.annee])))
           .in("type", ["sortie", "sortie_temporaire"])
       ),
-      fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee, total_brut, brut_base, supplements, cout_total_secu").eq("annee", selectedYear)),
+      fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee, centre_cout, total_brut, brut_base, supplements, cout_total_secu, charges_patronales").eq("annee", selectedYear)),
     ]);
   // Coûts : photo de référence salariale (dernière avec brut indice) et dernier
   // mois de statistiques salariales avec montants, comme sur la page Coûts.
   const [periodeReference, dernierMoisStats] = await Promise.all([
     supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
-    supabase.from("wp_salary_stats").select("mois, annee").gt("total_brut", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
   ]);
   const periodeRef = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
   const [photoReference, statsCoefficient] = await Promise.all([
@@ -119,7 +119,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       ? fetchAll(supabase.from("wp_employees").select("code_salarie, brut_indice, taux_occupation").eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
       : Promise.resolve(null),
     dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, total_brut, cout_total_secu").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
+      ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 

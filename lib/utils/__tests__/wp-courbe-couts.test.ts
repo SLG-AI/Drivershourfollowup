@@ -30,7 +30,7 @@ describe("construireCourbeCouts", () => {
     headcountData: etp.headcountData, selectedYear: 2026, filtresActifs: false,
     photoDuMois: () => [A, B], photoReference: [A, B], coef: COEF,
     absences, mctHorsWeekEnd: mct, absencesInjustifiees: inj,
-    stats: [{ code_salarie: "A", mois: 8, annee: 2026, total_brut: 4200, cout_total_secu: 4746 }, { code_salarie: "B", mois: 7, annee: 2026, total_brut: 0, cout_total_secu: 0 }],
+    stats: [{ code_salarie: "A", mois: 8, annee: 2026, total_brut: 4200, charges_patronales: 546 }, { code_salarie: "B", mois: 7, annee: 2026, total_brut: 0, cout_total_secu: 0 }],
   });
   const k = BRUT * COEF;
 

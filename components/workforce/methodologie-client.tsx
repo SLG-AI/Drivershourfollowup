@@ -1222,13 +1222,13 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "coefficient-charges",
         titre: "Coefficient de charges patronales",
-        definition: "Le rapport entre le coût employeur (Total SECU) et le salaire brut, lu sur la paie réelle.",
+        definition: "Le rapport entre le coût employeur (brut + charges patronales) et le salaire brut, lu sur la paie réelle.",
         valeur: coefTexte,
-        formule: "coefficient = Σ Total SECU / Σ Total brut, sur le dernier mois de statistiques salariales qui porte des montants",
+        formule: "coefficient = Σ (Total brut + charges patronales) / Σ Total brut, sur le dernier mois de statistiques salariales qui porte les charges patronales",
         operandes: c?.coefficientSource
           ? [
               { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
-              { label: "Total SECU", valeur: euros(c.coefficientSource.employeur) },
+              { label: "Coût employeur", valeur: euros(c.coefficientSource.employeur) },
               { label: "Coefficient", valeur: nf(c.coefficient, 3) },
             ]
           : undefined,
@@ -1237,7 +1237,9 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
             titre: "Périmètre puis entreprise, puis défaut",
             points: [
               "Le ratio est d'abord cherché sur le périmètre filtré (les charges varient avec la structure des salaires), sinon sur toute l'entreprise, sinon la valeur par défaut 1,15 (taux de charges patronales de 15 %) est appliquée et signalée.",
-              "Un fichier « sans salaire » (colonnes présentes, montants vides) ne compte pas : ses lignes valent 0 et n'entrent pas dans le ratio.",
+              "Les charges patronales sont la somme des colonnes CM et CP patronales, assurance accident, allocation familiale, santé au travail, mutualité et autres cotisations patronales du fichier. La colonne « Total SECU » n'est PAS un coût employeur : c'est le total des cotisations salariales et patronales (≈ 27 % du brut), elle ne sert pas au coefficient.",
+              "Un fichier « sans salaire » (colonnes présentes, montants vides) ne compte pas : ses lignes valent 0 et n'entrent pas dans le ratio. Un fichier avec montants mais sans les colonnes patronales ne le fait pas non plus : le coût employeur y est alors estimé (brut × coefficient) et signalé.",
+              "Quand la paie porte le centre de coût, un coefficient est aussi calculé par cost center et appliqué aux salariés de ce cost center dans la chaîne des paliers.",
               "La purge de rétention (3 ans) peut faire retomber le coefficient sur le défaut : sa source est toujours affichée.",
             ],
           },
@@ -1339,15 +1341,15 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       },
       {
         cle: "cout-realise",
-        titre: "Réalisé du mois (Total SECU)",
-        definition: "La paie effective du mois telle que les statistiques salariales la donnent : coût employeur total, toutes absences déjà déduites, heures supplémentaires comprises.",
+        titre: "Réalisé du mois (coût employeur de la paie)",
+        definition: "La paie effective du mois telle que les statistiques salariales la donnent : total brut + charges patronales, toutes absences déjà déduites, suppléments et heures supplémentaires compris.",
         valeur: c ? (c.realise.mesure ? euros(c.realise.employeur) : "aucun montant importé") : undefined,
         valeurNote: c && !c.realise.mesure && c.realise.n > 0 ? `${nf(c.realise.n, 0)} lignes présentes mais sans salaire` : undefined,
-        formule: "réalisé = Σ Total SECU des lignes du mois (périmètre filtré : salariés de la photo)",
+        formule: "réalisé = Σ (Total brut + charges patronales) des lignes du mois (périmètre filtré : salariés de la photo) ; sans charges patronales importées : Σ Total brut × coefficient, marqué estimé",
         operandes: c?.realise.mesure
           ? [
               { label: "Total brut", valeur: euros(c.realise.brut) },
-              { label: "Total SECU", valeur: euros(c.realise.employeur) },
+              { label: "Coût employeur", valeur: euros(c.realise.employeur) },
               { label: "Lignes", valeur: nf(c.realise.n, 0) },
             ]
           : undefined,
@@ -1360,7 +1362,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
             ],
           },
         ],
-        source: "Table wp_salary_stats (Total brut, Brut base, Suppléments, Total SECU).",
+        source: "Table wp_salary_stats (Total brut, Brut base, Suppléments, cotisations patronales par nature, centre de coût).",
       },
       {
         cle: "cout-moyen-etp",

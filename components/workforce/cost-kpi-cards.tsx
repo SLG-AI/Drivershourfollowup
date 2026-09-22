@@ -19,7 +19,7 @@ export interface CoutsStats {
   sous_contrat_moyen?: number;
   apres_suspension_moyen?: number;
   paye_moyen?: number;
-  /** Paie réalisée du mois (Total SECU), null quand le fichier n'a pas de montants. */
+  /** Paie réalisée du mois (brut + charges patronales), null quand le fichier n'a pas de montants. */
   realise: number | null;
   /** Le réalisé employeur est estimé (brut réel × coefficient) faute de charges patronales dans le fichier. */
   realise_estime?: boolean;
@@ -88,7 +88,7 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       icon: Thermometer, iconColor: "text-pink-600", iconBg: "bg-pink-50",
     },
     {
-      title: "Réalisé du mois (Total SECU)",
+      title: "Réalisé du mois (paie)",
       ancre: "cout-realise",
       value: stats.realise != null ? euros(stats.realise) : "—",
       description:
