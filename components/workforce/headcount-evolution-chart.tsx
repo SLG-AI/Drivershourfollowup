@@ -352,12 +352,12 @@ export function HeadcountEvolutionChart({
     );
   }
 
-  // Une série mesurée s'efface quand un scénario est affiché (le pointillé prend
-  // le relais) ; une série de scénario n'existe que dans ce cas ; la cible toujours.
+  // Les séries mesurées restent tracées sur les mois réels quand un scénario
+  // est affiché (le pointillé du scénario prend le relais à partir du premier
+  // mois projeté) ; une série de scénario n'existe que dans ce cas.
   const aDesValeurs = (key: string) => chartData.some((d) => d[key] != null);
-  const availableSeries = series.filter((s) =>
-    s.isScenario ? showScenario && aDesValeurs(s.key) : s.key === "target" ? aDesValeurs(s.key) : !showScenario && aDesValeurs(s.key)
-  );
+  const availableSeries = series.filter((s) => (s.isScenario ? showScenario : true) && aDesValeurs(s.key));
+  const libelle = (s: SeriesDef) => (s.isScenario ? `${s.label} — scénario` : s.label);
 
   const toggleSeries = (key: string) => {
     setHiddenSeries((prev) => {
@@ -541,7 +541,7 @@ export function HeadcountEvolutionChart({
                     borderBottom: s.dashed ? `2px dashed ${active ? "rgba(255,255,255,0.8)" : s.color}` : undefined,
                   }}
                 />
-                {s.label}
+                {libelle(s)}
               </button>
             );
           })}
@@ -583,7 +583,7 @@ export function HeadcountEvolutionChart({
                       const delta = parent != null ? val - parent : null;
                       return (
                         <div key={key} style={{ color: serie.color, padding: "2px 0" }}>
-                          {serie.label} : {formatValue(val)}
+                          {libelle(serie)} : {formatValue(val)}
                           {delta != null && <span style={{ fontSize: "0.75em", color: "#999" }}> ({delta >= 0 ? "+" : "−"}{formatValue(Math.abs(delta))})</span>}
                           {reporte && <span style={{ fontSize: "0.75em", color: "#999", fontStyle: "italic" }}> reporté</span>}
                         </div>
