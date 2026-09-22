@@ -34,7 +34,7 @@ import { etpDe, etpDisponibleDe, type LigneCns, type LigneHeures, type SalariePa
 import { fractionSuspendueEmploye } from "./wp-suspension";
 
 /** Coefficient de charges patronales luxembourgeois retenu faute de statistiques salariales. */
-export const COEF_CHARGES_DEFAUT = 1.13;
+export const COEF_CHARGES_DEFAUT = 1.15;
 
 /** Salarié d'une photographie de roster, colonnes utiles aux coûts (en plus de celles des paliers). */
 export interface SalarieCout extends SalariePaliers {

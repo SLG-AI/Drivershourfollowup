@@ -1235,7 +1235,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
           {
             titre: "Périmètre puis entreprise, puis défaut",
             points: [
-              "Le ratio est d'abord cherché sur le périmètre filtré (les charges varient avec la structure des salaires), sinon sur toute l'entreprise, sinon la valeur par défaut 1,13 est appliquée et signalée.",
+              "Le ratio est d'abord cherché sur le périmètre filtré (les charges varient avec la structure des salaires), sinon sur toute l'entreprise, sinon la valeur par défaut 1,15 (taux de charges patronales de 15 %) est appliquée et signalée.",
               "Un fichier « sans salaire » (colonnes présentes, montants vides) ne compte pas : ses lignes valent 0 et n'entrent pas dans le ratio.",
               "La purge de rétention (3 ans) peut faire retomber le coefficient sur le défaut : sa source est toujours affichée.",
             ],
