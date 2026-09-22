@@ -840,7 +840,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               titre: "Ce qui est exclu, et pourquoi",
               points: [
                 "Les fins de mission — le terme prévu d'un CDD — ne sont pas du turnover : on mesure les départs subis ou choisis, pas des contrats arrivés à leur terme. Arbitrage du 15 septembre 2026.",
-                "Sont exclues aussi bien les sorties dont le motif est « Fin de mission » que celles des salariés dont le type de contrat est un CDD.",
+                "Seul le motif décide : un CDD rompu avant son terme (démission, licenciement, résiliation d'un commun accord) est un départ, il compte dans le turnover. Arbitrage du 22 septembre 2026, qui aligne le tableau de bord sur l'analyse historique.",
                 "Les suspensions de contrat ne sont pas des sorties : elles n'entrent pas dans ce taux.",
               ],
             },

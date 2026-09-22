@@ -1473,14 +1473,12 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // suivant). Sans photo précédente, repli sur les sorties datées de la photo
   // affichée prenant effet ce mois (sorties prévues seulement).
   // ============================================================
-  const typeContratParCode = new Map<string, string>();
-  [...employeesPrecedents, ...allEmployees].forEach((e) => typeContratParCode.set(e.code_salarie, e.type_contrat || ""));
-  const estFinDeCdd = (code: string, motif: string | null | undefined) =>
-    estFinDeMission(motif) || (typeContratParCode.get(code) || "").toUpperCase() === "CDD";
+  // Hors turnover : les seules fins de mission (voir estSortieHorsTurnover)
+  const estFinDeCdd = (motif: string | null | undefined) => estFinDeMission(motif);
   let sortiesMoisEtp: number;
   if (mouvements) {
     sortiesMoisEtp = mouvements.sortiesDefinitives
-      .filter((i) => !estFinDeCdd(i.code_salarie, i.motif))
+      .filter((i) => !estFinDeCdd(i.motif))
       .reduce((sum, i) => sum + i.etp, 0);
   } else {
     sortiesMoisEtp = allEmployees

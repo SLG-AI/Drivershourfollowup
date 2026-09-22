@@ -168,19 +168,17 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     ? computeRosterMovements(rosterPrec, roster, selectedMonth, selectedYear, sortiesConstatees)
     : null;
 
-  const typeContratParCode = new Map<string, string>();
-  [...rosterPrec, ...roster].forEach((e) => typeContratParCode.set(e.code_salarie, e.type_contrat || ""));
-  const estFinDeCdd = (code: string, motif: string | null | undefined) =>
-    estFinDeMission(motif) || (typeContratParCode.get(code) || "").toUpperCase() === "CDD";
+  // Hors turnover : les seules fins de mission (voir estSortieHorsTurnover)
+  const estFinDeCdd = (motif: string | null | undefined) => estFinDeMission(motif);
 
   let sortiesMoisEtp: number;
   let sortiesMoisHorsTurnoverEtp = 0;
   if (mouvements) {
     sortiesMoisEtp = mouvements.sortiesDefinitives
-      .filter((i) => !estFinDeCdd(i.code_salarie, i.motif))
+      .filter((i) => !estFinDeCdd(i.motif))
       .reduce((sum, i) => sum + i.etp, 0);
     sortiesMoisHorsTurnoverEtp = mouvements.sortiesDefinitives
-      .filter((i) => estFinDeCdd(i.code_salarie, i.motif))
+      .filter((i) => estFinDeCdd(i.motif))
       .reduce((sum, i) => sum + i.etp, 0);
   } else {
     sortiesMoisEtp = roster
