@@ -18,9 +18,11 @@ export interface DepartureItem {
   nom_salarie?: string | null;
   vehicle_type: string;
   description_equipe: string;
-  date_sortie: string;
+  /** Absente pour un transfert de périmètre : la date exacte n'est pas connue, seulement le mois. */
+  date_sortie: string | null;
+  /** Motif de sortie ; pour un transfert, l'affectation avant → après. */
   motif: string;
-  type: "definitive" | "temporaire";
+  type: "definitive" | "temporaire" | "transfert";
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +118,9 @@ function DepartureRows({ items }: { items: DepartureItem[] }) {
             <Badge variant="outline" className="text-xs">{d.vehicle_type}</Badge>
           </TableCell>
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
-          <TableCell className="text-sm">{formatDate(d.date_sortie)}</TableCell>
+          <TableCell className="text-sm">
+            {d.type === "transfert" ? <span className="text-muted-foreground">{d.motif}</span> : d.date_sortie ? formatDate(d.date_sortie) : "—"}
+          </TableCell>
         </TableRow>
       ))}
     </>
@@ -163,15 +167,17 @@ function CategorySection({
   icon,
   items,
   subcategories,
+  hint,
 }: {
   label: string;
   color: string;
   icon: string;
   items: DepartureItem[];
-  subcategories: Record<string, { label: string; color: string; motifs: string[] }>;
+  subcategories: Record<string, { label: string; color: string; motifs: string[] }> | null;
+  hint?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const groups = groupBySubcategory(items, subcategories);
+  const groups = subcategories ? groupBySubcategory(items, subcategories) : null;
 
   if (items.length === 0) return null;
 
@@ -193,11 +199,13 @@ function CategorySection({
             <Badge variant="secondary" className="text-xs ml-1">
               {items.length}
             </Badge>
+            {hint && <span className="text-xs text-muted-foreground ml-2">{hint}</span>}
           </div>
         </TableCell>
       </TableRow>
-      {open &&
-        groups.map((g) => <SubcategorySection key={g.key} group={g} />)}
+      {open && groups
+        ? groups.map((g) => <SubcategorySection key={g.key} group={g} />)
+        : open && <DepartureRows items={items} />}
     </>
   );
 }
@@ -208,15 +216,18 @@ function CategorySection({
 
 export function DepartureTable({ departures }: { departures: DepartureItem[] }) {
   // Classer par motif : si le motif est un congé structurel → temporaire, sinon → définitif
-  const definitifs = departures.filter((d) => !MOTIFS_TEMPORAIRES.has(d.motif));
-  const temporaires = departures.filter((d) => MOTIFS_TEMPORAIRES.has(d.motif));
+  // Les transferts de périmètre sont listés à part : ils ne quittent pas l'entreprise
+  const transferts = departures.filter((d) => d.type === "transfert");
+  const sorties = departures.filter((d) => d.type !== "transfert");
+  const definitifs = sorties.filter((d) => !MOTIFS_TEMPORAIRES.has(d.motif));
+  const temporaires = sorties.filter((d) => MOTIFS_TEMPORAIRES.has(d.motif));
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <TrendingDown className="h-4 w-4" />
-          Départs identifiés ({departures.length})
+          Départs identifiés ({sorties.length})
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -249,6 +260,14 @@ export function DepartureTable({ departures }: { departures: DepartureItem[] }) 
                   icon="🟡"
                   items={temporaires}
                   subcategories={SUBCATEGORIES_TEMPORAIRE}
+                />
+                <CategorySection
+                  label="Sortis du périmètre"
+                  color="text-teal-700"
+                  icon="↩️"
+                  items={transferts}
+                  subcategories={null}
+                  hint="mutation à venir, révélée par un roster plus récent — toujours dans l'entreprise"
                 />
               </TableBody>
             </Table>

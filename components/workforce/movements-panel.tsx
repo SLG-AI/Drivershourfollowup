@@ -173,11 +173,12 @@ export function MovementsPanel({
   moisPrecedentLabel: string;
   moisLabel: string;
 }) {
-  const arrivees = movements.nouveaux.length + movements.retours.length;
+  const arrivees = movements.nouveaux.length + movements.retours.length + movements.transfertsEntrants.length;
   const sorties =
     movements.sortiesDefinitives.length +
     movements.sortiesTemporaires.length +
-    movements.disparusSansDate.length;
+    movements.disparusSansDate.length +
+    movements.transfertsSortants.length;
   const solde = arrivees - sorties;
   const total = arrivees + sorties + movements.changementsTemps.length;
   const { sousContrat: etpSousContrat, net: etpNet } = soldeEtp(movements);
@@ -224,6 +225,15 @@ export function MovementsPanel({
                 items={movements.nouveaux}
               />
               <CategorySection
+                label="Entrés dans le périmètre"
+                etp={etpCategorie(movements.transfertsEntrants, 1)}
+                color="text-teal-700"
+                icon="↪️"
+                items={movements.transfertsEntrants}
+                hint="affectation avant → après : déjà dans l'entreprise"
+                masquerSiVide
+              />
+              <CategorySection
                 label="Retours de suspension"
                 etp={etpCategorie(movements.retours, 1)}
                 color="text-blue-700"
@@ -243,6 +253,15 @@ export function MovementsPanel({
                 color="text-amber-700"
                 icon="🟡"
                 items={movements.sortiesTemporaires}
+              />
+              <CategorySection
+                label="Sortis du périmètre"
+                etp={etpCategorie(movements.transfertsSortants, -1)}
+                color="text-teal-700"
+                icon="↩️"
+                items={movements.transfertsSortants}
+                hint="affectation avant → après : toujours dans l'entreprise"
+                masquerSiVide
               />
               <CategorySection
                 label="Disparus du roster avant leur date de sortie prévue"
@@ -267,10 +286,10 @@ export function MovementsPanel({
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-sm">
           <span className="text-muted-foreground">
-            Arrivées {signe(arrivees)} pers. ({formatEtp(etpCategorie([...movements.nouveaux, ...movements.retours], 1))})
+            Arrivées {signe(arrivees)} pers. ({formatEtp(etpCategorie([...movements.nouveaux, ...movements.retours, ...movements.transfertsEntrants], 1))})
           </span>
           <span className="text-muted-foreground">
-            Sorties −{sorties} pers. ({formatEtp(etpCategorie([...movements.sortiesDefinitives, ...movements.sortiesTemporaires, ...movements.disparusSansDate], -1))})
+            Sorties −{sorties} pers. ({formatEtp(etpCategorie([...movements.sortiesDefinitives, ...movements.sortiesTemporaires, ...movements.disparusSansDate, ...movements.transfertsSortants], -1))})
           </span>
           <span className={`font-semibold ${solde < 0 ? "text-red-700" : solde > 0 ? "text-green-700" : ""}`}>
             Solde net {signe(solde)} pers.
@@ -283,7 +302,7 @@ export function MovementsPanel({
           </span>
         </div>
         <div className="mt-1 text-right text-xs text-muted-foreground">
-          Sous contrat = nouveaux − sorties définitives − disparus + temps de travail, à rapprocher du 1er KPI.
+          Sous contrat = nouveaux − sorties définitives − disparus + temps de travail{(movements.transfertsEntrants.length > 0 || movements.transfertsSortants.length > 0) && " ± transferts de périmètre"}, à rapprocher du 1er KPI.
           Après suspensions = idem + retours − suspensions
           {sortiesDejaSuspendues.length > 0 && (
             <>, hors {sortiesDejaSuspendues.length} sortie{sortiesDejaSuspendues.length > 1 ? "s" : ""} de salarié{sortiesDejaSuspendues.length > 1 ? "s" : ""} déjà en suspension ({formatEtp(sortiesDejaSuspendues.reduce((s, i) => s + (i.etpSuspenduAvant ?? 0), 0))})</>

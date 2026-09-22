@@ -3,7 +3,7 @@ import { fetchAll } from "@/lib/supabase/fetch-all";
 import { listRosterPeriods, rangPeriode, resolveRosterPeriod } from "@/lib/utils/roster-period";
 import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
-import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
+import { computeRosterMovements, reclassifierSortiesTemporaires, type MovementItem } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
 import { computeEffectifMoyen, paliersEnMoyenne } from "@/lib/utils/wp-effectif-moyen";
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
@@ -154,7 +154,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     fetchAll(
       supabase
         .from("wp_employees")
-        .select("code_salarie, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat")
+        .select("code_salarie, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, nom_salarie, vehicle_type")
         .eq("annee", selectedYear)
     ),
     anneeFuture ? fetchAll(supabase.from("wp_absences").select("code_salarie, mois, pct_absenteisme, hrs_maladie").eq("annee", selectedYear - 1)).then(plafonnerTauxCns) : Promise.resolve([] as Record<string, unknown>[]),
@@ -306,8 +306,35 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   };
   const sortiesConstatees = sortiesConstateesSur(selectedMonth, selectedYear, moisPrecedent);
   const mouvements = moisPrecedentDisponible
-    ? computeRosterMovements(employeesPrecedents, allEmployees, selectedMonth, selectedYear, sortiesConstatees)
+    ? computeRosterMovements(employeesPrecedents, allEmployees, selectedMonth, selectedYear, sortiesConstatees, {
+        // Photos complètes : un muté vers un autre cost center n'est pas un disparu
+        prev: employeesMoisPrecedent,
+        curr: employees,
+      })
     : null;
+
+  // Transferts de périmètre POSTÉRIEURS au mois affiché : seule une photo de
+  // roster plus récente peut les révéler. On compare chaque paire de photos
+  // exactes consécutives après le mois affiché, comme le panneau Mouvements
+  // le fait pour le mois lui-même. Sur la dernière photo de l'année : rien.
+  const transfertsFuturs = (() => {
+    const sortants: MovementItem[] = [];
+    const entrants: MovementItem[] = [];
+    for (let m = selectedMonth + 1; m <= 12; m++) {
+      const photoM = photoPourLeMois(photosParRang, m, selectedYear);
+      const precM: MoisAnnee = { mois: m - 1, annee: selectedYear };
+      if (!photoM.exacte || !photoPourLeMois(photosParRang, precM.mois, precM.annee).exacte) continue;
+      const mv = computeRosterMovements(
+        photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, selectedYear,
+        sortiesConstateesSur(m, selectedYear, precM),
+        { prev: photoPourLeMois(photosParRang, precM.mois, precM.annee).lignes, curr: photoM.lignes }
+      );
+      const libelle = `${MONTH_LABELS[m]} ${selectedYear}`;
+      mv.transfertsSortants.forEach((i) => sortants.push({ ...i, motif: `${libelle} — ${i.motif}` }));
+      mv.transfertsEntrants.forEach((i) => entrants.push({ ...i, motif: `${libelle} — ${i.motif}` }));
+    }
+    return { sortants, entrants };
+  })();
 
   // ============================================================
   // Helper: employees active at a given date
@@ -1551,6 +1578,19 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       motif: e.description_motif_sortie || "Non spécifié",
       type: e.est_sortie_temporaire ? "temporaire" as const : "definitive" as const,
     }));
+  // Transferts À VENIR hors du périmètre : ceux du mois affiché sont dans le
+  // panneau Mouvements, les cartes n'annoncent que les mois suivants.
+  transfertsFuturs.sortants.forEach((i) => {
+    departureItems.push({
+      code_salarie: i.code_salarie,
+      nom_salarie: i.nom_salarie,
+      vehicle_type: i.vehicle_type,
+      description_equipe: i.description_equipe,
+      date_sortie: null,
+      motif: i.motif,
+      type: "transfert" as const,
+    });
+  });
 
   // ============================================================
   // Arrivals list
@@ -1601,6 +1641,18 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         type: "retour" as const,
       })),
   ];
+  // Transferts À VENIR vers le périmètre (même règle que ci-dessus)
+  transfertsFuturs.entrants.forEach((i) => {
+    arrivalItems.push({
+      code_salarie: i.code_salarie,
+      nom_salarie: i.nom_salarie,
+      vehicle_type: i.vehicle_type,
+      description_equipe: i.description_equipe,
+      date: null,
+      motif: i.motif,
+      type: "transfert" as const,
+    });
+  });
 
   // ============================================================
   // Gap analysis data

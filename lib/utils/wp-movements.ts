@@ -27,6 +27,9 @@ export interface MovementEmployee {
   date_fin_sortie_temporaire?: string | null;
   description_motif_sortie?: string | null;
   taux_occupation?: number | null;
+  /** Affectation, pour nommer l'origine ou la destination d'un transfert. */
+  centre_cout?: string | null;
+  description_service?: string | null;
 }
 
 export interface MovementItem {
@@ -68,6 +71,14 @@ export interface RosterMovements {
   disparusSansDate: MovementItem[];
   /** Présents dans les deux photos avec un taux d'occupation différent. */
   changementsTemps: MovementItem[];
+  /**
+   * Transferts : apparus ou disparus du PÉRIMÈTRE filtré (cost center, dépôt,
+   * équipe…) mais présents dans les deux photos complètes — toujours dans
+   * l'entreprise. `motif` porte l'affectation avant → après (cost center · service · équipe).
+   * Vides sans photos complètes, ou sans filtre.
+   */
+  transfertsEntrants: MovementItem[];
+  transfertsSortants: MovementItem[];
 }
 
 // Règle de reclassification déplacée dans wp-suspension.ts (le moteur de
@@ -148,7 +159,13 @@ export function computeRosterMovements(
    * disparaît du roster alors que la photo précédente ne connaît que la date
    * prévue ; la source constatée apporte la date réelle et, si elle l'a, le motif.
    */
-  sortiesConstatees: Map<string, SortieConstatee> = new Map()
+  sortiesConstatees: Map<string, SortieConstatee> = new Map(),
+  /**
+   * Photos COMPLÈTES (avant filtre de périmètre) des deux mois. Sans elles, un
+   * salarié muté vers un autre cost center passe pour un disparu du roster,
+   * et un salarié muté vers le périmètre pour un nouvel engagé.
+   */
+  photosCompletes?: { prev: MovementEmployee[]; curr: MovementEmployee[] }
 ): RosterMovements {
   const M = rang(annee, mois);
   const finMoisPrecedent = mois === 1 ? lastDayOfMonth(annee - 1, 12) : lastDayOfMonth(annee, mois - 1);
@@ -244,19 +261,51 @@ export function computeRosterMovements(
     }
   }
 
+  // Transferts : un « nouveau » connu de la photo complète précédente vient
+  // d'ailleurs dans l'entreprise ; un « disparu » encore présent dans la photo
+  // complète du mois est parti ailleurs. Ils changent bien l'effectif du
+  // périmètre, mais ne sont ni embauches ni départs.
+  const transfertsEntrants: MovementItem[] = [];
+  const transfertsSortants: MovementItem[] = [];
+  let nouveauxRetenus = nouveaux;
+  let disparusRetenus = disparusSansDate;
+  if (photosCompletes) {
+    const prevComplet = new Map(photosCompletes.prev.map((e) => [e.code_salarie, e]));
+    const currComplet = new Map(photosCompletes.curr.map((e) => [e.code_salarie, e]));
+    // Service et équipe portent souvent le même libellé (« Bus Training ») : on ne le répète pas
+    const affectation = (e: MovementEmployee) =>
+      [...new Set([e.centre_cout, e.description_service, e.description_equipe].filter(Boolean))].join(" · ") || "affectation inconnue";
+    nouveauxRetenus = nouveaux.filter((i) => {
+      const p = prevComplet.get(i.code_salarie);
+      if (!p) return true;
+      const apres = currByCode.get(i.code_salarie) ?? currComplet.get(i.code_salarie) ?? p;
+      transfertsEntrants.push({ ...i, date: null, motif: `${affectation(p)} → ${affectation(apres)}` });
+      return false;
+    });
+    disparusRetenus = disparusSansDate.filter((i) => {
+      const c = currComplet.get(i.code_salarie);
+      if (!c) return true;
+      const avant = prevByCode.get(i.code_salarie) ?? prevComplet.get(i.code_salarie) ?? c;
+      transfertsSortants.push({ ...i, date: null, motif: `${affectation(avant)} → ${affectation(c)}` });
+      return false;
+    });
+  }
+
   return {
-    nouveaux: nouveaux.sort(byDate),
+    nouveaux: nouveauxRetenus.sort(byDate),
     sortiesDefinitives: sortiesDefinitives.sort(byDate),
     sortiesTemporaires: sortiesTemporaires.sort(byDate),
     retours: retours.sort(byDate),
-    disparusSansDate: disparusSansDate.sort(byDate),
+    disparusSansDate: disparusRetenus.sort(byDate),
+    transfertsEntrants,
+    transfertsSortants,
     // Baisses d'abord (les plus fortes en tête), puis hausses.
     changementsTemps: changementsTemps.sort((a, b) => (a.deltaEtp ?? 0) - (b.deltaEtp ?? 0)),
   };
 }
 
 export interface SoldeEtp {
-  /** Variation de l'effectif SOUS CONTRAT : nouveaux − sorties définitives − disparus + changements de temps. */
+  /** Variation de l'effectif SOUS CONTRAT : nouveaux + transferts entrants − sorties définitives − disparus − transferts sortants + changements de temps. */
   sousContrat: number;
   /**
    * Variation de l'effectif NET (après suspensions) : le solde sous contrat,
@@ -271,13 +320,13 @@ export interface SoldeEtp {
 export function soldeEtp(m: RosterMovements): SoldeEtp {
   const somme = (items: MovementItem[]) => items.reduce((s, i) => s + i.etp, 0);
   const arrondi = (n: number) => Math.round(n * 100) / 100;
-  const sortiesSousContrat = somme(m.sortiesDefinitives) + somme(m.disparusSansDate);
+  const sortiesSousContrat = somme(m.sortiesDefinitives) + somme(m.disparusSansDate) + somme(m.transfertsSortants ?? []);
   const sortiesDejaSuspendues = [...m.sortiesDefinitives, ...m.disparusSansDate].reduce(
     (s, i) => s + (i.etpSuspenduAvant ?? 0),
     0
   );
   const temps = m.changementsTemps.reduce((s, i) => s + (i.deltaEtp ?? 0), 0);
-  const sousContrat = somme(m.nouveaux) - sortiesSousContrat + temps;
+  const sousContrat = somme(m.nouveaux) + somme(m.transfertsEntrants ?? []) - sortiesSousContrat + temps;
   const net = sousContrat + sortiesDejaSuspendues + somme(m.retours) - somme(m.sortiesTemporaires);
   return { sousContrat: arrondi(sousContrat), net: arrondi(net) };
 }

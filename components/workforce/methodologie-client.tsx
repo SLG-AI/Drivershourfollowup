@@ -900,6 +900,8 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "L'export SIRH ne reconduit pas les salariés déjà sortis à sa date. Lire les dates de sortie dans la seule photo du mois affiché fait donc purement et simplement disparaître les sortis du mois.",
                 "La comparaison de deux photos consécutives est la seule source fiable : qui est apparu, qui a disparu, qui est passé en suspension, qui en est revenu.",
                 "Les deux photos subissent les mêmes filtres et la même reclassification, sans quoi un salarié hors périmètre passerait pour un nouvel engagé ou un sorti.",
+                "Sous filtre, un salarié muté vers un autre cost center, dépôt ou équipe disparaît du périmètre sans quitter l'entreprise. Les photos complètes permettent de le reconnaître : il est classé « Sorti du périmètre » (ou « Entré dans le périmètre » dans l'autre sens), avec son affectation de destination ou d'origine, plutôt que parmi les disparus ou les nouveaux engagés. Ces transferts pèsent sur le solde du périmètre, mais ne sont ni des départs ni des embauches.",
+                "Même règle de temps que pour les embauches et les retours : le panneau Mouvements montre les transferts survenus entre les deux photos ; les cartes « Départs identifiés » et « Arrivées identifiées » n'annoncent que ceux des mois suivants, tels qu'un roster plus récent les révèle. Sur la dernière photo de l'année, elles n'en montrent donc aucun.",
               ],
             },
             {

@@ -18,9 +18,11 @@ export interface ArrivalItem {
   nom_salarie?: string | null;
   vehicle_type: string;
   description_equipe: string;
-  date: string; // date d'entrée, ou date de reprise (lendemain de la fin de suspension)
+  /** Date d'entrée, ou de reprise (lendemain de la fin de suspension) ; absente pour un transfert de périmètre. */
+  date: string | null;
+  /** Motif ; pour un transfert, l'affectation avant → après. */
   motif: string;
-  type: "nouveau" | "retour";
+  type: "nouveau" | "retour" | "transfert";
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +101,9 @@ function ArrivalRows({ items }: { items: ArrivalItem[] }) {
             <Badge variant="outline" className="text-xs">{d.vehicle_type}</Badge>
           </TableCell>
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
-          <TableCell className="text-sm">{formatDate(d.date)}</TableCell>
+          <TableCell className="text-sm">
+            {d.type === "transfert" ? <span className="text-muted-foreground">{d.motif}</span> : d.date ? formatDate(d.date) : "—"}
+          </TableCell>
         </TableRow>
       ))}
     </>
@@ -146,12 +150,14 @@ function CategorySection({
   icon,
   items,
   subcategories,
+  hint,
 }: {
   label: string;
   color: string;
   icon: string;
   items: ArrivalItem[];
   subcategories: Record<string, { label: string; color: string; motifs: string[] }> | null;
+  hint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const groups = subcategories ? groupBySubcategory(items, subcategories) : null;
@@ -176,6 +182,7 @@ function CategorySection({
             <Badge variant="secondary" className="text-xs ml-1">
               {items.length}
             </Badge>
+            {hint && <span className="text-xs text-muted-foreground ml-2">{hint}</span>}
           </div>
         </TableCell>
       </TableRow>
@@ -193,13 +200,16 @@ function CategorySection({
 export function ArrivalTable({ arrivals }: { arrivals: ArrivalItem[] }) {
   const nouveaux = arrivals.filter((a) => a.type === "nouveau");
   const retours = arrivals.filter((a) => a.type === "retour");
+  // Les transferts de périmètre sont listés à part : ils étaient déjà dans l'entreprise
+  const transferts = arrivals.filter((a) => a.type === "transfert");
+  const nbArrivees = nouveaux.length + retours.length;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <TrendingUp className="h-4 w-4" />
-          Arrivées identifiées ({arrivals.length})
+          Arrivées identifiées ({nbArrivees})
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -232,6 +242,14 @@ export function ArrivalTable({ arrivals }: { arrivals: ArrivalItem[] }) {
                   icon="🔵"
                   items={retours}
                   subcategories={SUBCATEGORIES_RETOUR}
+                />
+                <CategorySection
+                  label="Entrés dans le périmètre"
+                  color="text-teal-700"
+                  icon="↪️"
+                  items={transferts}
+                  subcategories={null}
+                  hint="mutation à venir, révélée par un roster plus récent — déjà dans l'entreprise"
                 />
               </TableBody>
             </Table>

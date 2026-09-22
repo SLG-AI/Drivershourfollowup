@@ -165,7 +165,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     });
 
   const mouvements = moisPrecedentDisponible
-    ? computeRosterMovements(rosterPrec, roster, selectedMonth, selectedYear, sortiesConstatees)
+    ? computeRosterMovements(rosterPrec, roster, selectedMonth, selectedYear, sortiesConstatees, { prev: employeesPrec, curr: employees })
     : null;
 
   // Hors turnover : les seules fins de mission (voir estSortieHorsTurnover)
