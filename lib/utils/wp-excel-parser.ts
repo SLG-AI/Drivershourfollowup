@@ -1,4 +1,10 @@
 import { estMotifParentalInconnu } from "./wp-suspension";
+import {
+  controlerBrutIndice,
+  controlerMontantsSalariaux,
+  messagesControleBrutIndice,
+  messagesControleMontantsSalariaux,
+} from "./wp-controle-montants";
 import * as XLSX from "xlsx";
 
 // ============================================================
@@ -76,6 +82,12 @@ export interface WpParseResult {
   rowCount: number;
   errors: string[];
   warnings: string[];
+  /**
+   * Contrôles de cohérence du fichier (fichier « sans salaire »…). À part des
+   * `warnings` informatifs pour que l'écran d'import les mette en évidence
+   * dans son bloc « Contrôles du fichier ». Consultatifs : l'import reste possible.
+   */
+  controles?: string[];
   detectedMonth?: number;
   detectedYear?: number;
 }
@@ -236,7 +248,11 @@ export function parseRosterRH(buffer: ArrayBuffer): WpParseResult {
     warnings.push(`${busCount} BUS, ${camCount} CAM détectés.`);
   }
 
-  return { fileType: "roster_rh", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings };
+  // Roster « without sal » : la colonne Brut indice est là mais vide partout.
+  // Une cellule vide devient 0 sans bruit ; on le dit avant l'import.
+  const controles = messagesControleBrutIndice(controlerBrutIndice(data, colBrut >= 0));
+
+  return { fileType: "roster_rh", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, controles };
 }
 
 // ============================================================
@@ -389,7 +405,12 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
     errors.push("Aucune donnée salariale trouvée.");
   }
 
-  return { fileType: "salary_stats", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, detectedMonth, detectedYear };
+  // Export « sans salaire » : les colonnes € sont là mais vides. Sans ce
+  // contrôle, le mois s'importait avec toutes ses lignes à 0 € en silence.
+  const colonnesMontants = [colTotalBrut, colBrutBase, colSupplements, colTotalSecu].some((c) => c >= 0);
+  const controles = messagesControleMontantsSalariaux(controlerMontantsSalariaux(data, colonnesMontants));
+
+  return { fileType: "salary_stats", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, controles, detectedMonth, detectedYear };
 }
 
 // ============================================================
