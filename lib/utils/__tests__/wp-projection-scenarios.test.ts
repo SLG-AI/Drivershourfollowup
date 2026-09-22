@@ -46,6 +46,8 @@ function entrees(extra: Partial<EntreesProjection> = {}): EntreesProjection {
     etapesProjection: [{ annee: 2026, mois: 10 }, { annee: 2026, mois: 11 }, { annee: 2026, mois: 12 }],
     departProjection: { brut: 10, net: 9 },
     lastKnownCnsRate: null,
+    lastKnownInjRate: null,
+    lastKnownMctRate: null,
     headcountData,
     ...extra,
   };

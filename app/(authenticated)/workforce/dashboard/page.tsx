@@ -646,6 +646,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     etapesProjection,
     departProjection,
     lastKnownCnsRate,
+    lastKnownInjRate,
+    lastKnownMctRate,
     // Muté pour scenario_apres_conges, comme avant
     headcountData,
   });

@@ -1137,6 +1137,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "Elle part du dernier mois réel connu, puis enchaîne les mois un par un jusqu'à décembre de l'année affichée — en traversant les années si nécessaire, au lieu de repartir de la dernière photographie.",
                 "Chaque mois applique, dans l'ordre : les arrivées prévues, les départs connus et le taux de turnover, les départs et retours de congé, puis les taux d'absence.",
                 "Pour une année future, les taux d'absence sont amorcés sur les derniers mois connus de l'année précédente, calculés exactement comme les mois réels.",
+                "La projection déroule la même chaîne que les mois réels : après CNS (dernier taux connu), après absences injustifiées (dernier taux connu, le scénario n'en modélise pas), après MCT. Le taux MCT est celui du scénario ; un scénario qui n'en renseigne aucun (tous les mois à 0) reprend le dernier taux MCT connu, comme la courbe sans scénario.",
               ],
             },
             {

@@ -50,6 +50,7 @@ export interface HeadcountDataPoint {
   scenario_brut?: number;
   scenario_net?: number;
   scenario_reel?: number;
+  scenario_apres_injustifiees?: number;
   scenario_apres_mct?: number;
   scenario_apres_conges?: number;
 }
@@ -67,6 +68,7 @@ export interface ScenarioProjectionData {
     scenario_brut: number;
     scenario_net: number;
     scenario_reel: number;
+    scenario_apres_injustifiees?: number;
     scenario_apres_mct: number;
     scenario_apres_conges?: number;
   }[];
@@ -109,7 +111,8 @@ export const ALL_SERIES: SeriesDef[] = [
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true, parent: "scenario_brut" },
   { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true, parent: "scenario_net" },
-  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_reel" },
+  { key: "scenario_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)", dashed: true, isScenario: true, parent: "scenario_reel" },
+  { key: "scenario_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_apres_injustifiees" },
   { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true, parent: "scenario_apres_mct" },
 ];
 
@@ -295,6 +298,7 @@ export function HeadcountEvolutionChart({
         scenario_brut: merged.effectif_brut,
         scenario_net: merged.effectif_net,
         scenario_reel: merged.effectif_reel,
+        scenario_apres_injustifiees: merged.effectif_apres_injustifiees,
         scenario_apres_mct: merged.effectif_apres_mct ?? merged.effectif_reel,
       };
     }
@@ -311,6 +315,7 @@ export function HeadcountEvolutionChart({
       scenario_brut: monthData.scenario_brut,
       scenario_net: monthData.scenario_net,
       scenario_reel: monthData.scenario_reel,
+      scenario_apres_injustifiees: monthData.scenario_apres_injustifiees,
       scenario_apres_mct: monthData.scenario_apres_mct,
       scenario_apres_conges: monthData.scenario_apres_conges,
     };

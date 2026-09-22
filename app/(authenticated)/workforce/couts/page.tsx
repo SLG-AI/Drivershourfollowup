@@ -221,7 +221,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     scenarioOptions, selectedScenarioIds, turnoverSrcId, absSrcId, leaveSrcId,
     rows: { params: scParams, turnoverParams: scTurnover, leaveParams: scLeave, departures: scDepartures, arrivals: scArrivals, tempExits: scTempExits, details: scDetails },
     selectedYear, selectedMonth, allEmployees, getActiveEmployeesAt,
-    etapesProjection: courbe.etapesProjection, departProjection: courbe.departProjection, lastKnownCnsRate: courbe.tauxRepris.cns?.taux ?? null,
+    etapesProjection: courbe.etapesProjection, departProjection: courbe.departProjection, lastKnownCnsRate: courbe.tauxRepris.cns?.taux ?? null, lastKnownInjRate: courbe.tauxRepris.inj?.taux ?? null, lastKnownMctRate: courbe.tauxRepris.mct?.taux ?? null,
     headcountData: courbe.headcountData,
   });
   // Leviers des scénarios sélectionnés, additionnés (hausses, primes) ; le
@@ -252,7 +252,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       scenario_id: "__combined__",
       months: valorisation.mois.filter((m) => m.annee === selectedYear).map((m) => ({
         month_index: m.mois, scenario_brut: m.scenario_brut, scenario_net: m.scenario_net, scenario_reel: m.scenario_reel,
-        scenario_apres_mct: m.scenario_apres_mct, scenario_apres_conges: m.scenario_apres_conges,
+        scenario_apres_injustifiees: m.scenario_apres_injustifiees, scenario_apres_mct: m.scenario_apres_mct, scenario_apres_conges: m.scenario_apres_conges,
       })),
     }];
   }

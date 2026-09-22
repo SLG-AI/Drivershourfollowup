@@ -85,6 +85,10 @@ export interface EntreesProjection {
   departProjection: { brut: number; net: number };
   /** Dernier taux CNS connu (%), null si aucun. */
   lastKnownCnsRate: number | null;
+  /** Dernier taux d'absences injustifiées connu (%), repris comme sans scénario ; null sans fichier. */
+  lastKnownInjRate: number | null;
+  /** Dernier taux MCT connu (%) : repris quand le scénario ne renseigne aucun taux (tous à 0) ; null sans fichier. */
+  lastKnownMctRate: number | null;
   /** Courbe de l'année affichée : MUTÉE pour `scenario_apres_conges`, comme avant. */
   headcountData: HeadcountDataPoint[];
 }
@@ -113,11 +117,14 @@ export interface JournalMoisProjection {
   tempExitsEtp: number;
   cnsRate: number;
   absRate: number;
+  /** Taux d'injustifiées repris (%), null si inconnu. */
+  injRate: number | null;
   /** ETP de congés du mois (pool réparti), seulement pour l'année affichée. */
   leaveFte?: number;
   scenario_brut: number;
   scenario_net: number;
   scenario_reel: number;
+  scenario_apres_injustifiees?: number;
   scenario_apres_mct: number;
 }
 
@@ -156,7 +163,7 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
   const {
     scenarioOptions, selectedScenarioIds, turnoverSrcId, absSrcId, leaveSrcId,
     selectedYear, selectedMonth, allEmployees, getActiveEmployeesAt,
-    etapesProjection, departProjection, lastKnownCnsRate, headcountData,
+    etapesProjection, departProjection, lastKnownCnsRate, lastKnownInjRate, lastKnownMctRate, headcountData,
   } = e;
   const getEtp = (s: SalarieProjection) => etpDe(s);
 
@@ -255,6 +262,11 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
           ccRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
         }
       });
+      // Un scénario sans taux MCT renseigné (aucun mois > 0) reprend le dernier
+      // taux connu, comme la courbe sans scénario ; à défaut l'ancien 5 %.
+      const defautMct = lastKnownMctRate ?? 5;
+      const sansTauxMct = ![...globalRateByMonth.values(), ...ccRateByMonthCc.values()].some((r) => r > 0);
+      if (sansTauxMct) { globalRateByMonth.clear(); ccRateByMonthCc.clear(); }
       // Compute weighted average rate per month using active employees
       const absRateByMonth = new Map<number, number>();
       for (let m = 1; m <= 12; m++) {
@@ -264,12 +276,12 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
         if (totalEtp > 0 && ccRateByMonthCc.size > 0) {
           const weightedRate = activeAtM.reduce((sum, s) => {
             const ccKey = `${m}:${s.centre_cout}`;
-            const rate = ccRateByMonthCc.get(ccKey) ?? globalRateByMonth.get(m) ?? 5;
+            const rate = ccRateByMonthCc.get(ccKey) ?? globalRateByMonth.get(m) ?? defautMct;
             return sum + getEtp(s) * rate;
           }, 0);
           absRateByMonth.set(m, weightedRate / totalEtp);
         } else {
-          absRateByMonth.set(m, globalRateByMonth.get(m) ?? 5);
+          absRateByMonth.set(m, globalRateByMonth.get(m) ?? defautMct);
         }
       }
 
@@ -368,8 +380,11 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
         const scenarioCnsEtp = scenarioNet * (cnsRate / 100);
         const scenarioReel = scenarioNet - scenarioCnsEtp;
 
+        // Payé projeté = réel − dernier taux d'injustifiées connu (comme sans scénario)
+        const scenarioInjEtp = lastKnownInjRate != null ? scenarioNet * (lastKnownInjRate / 100) : 0;
+        const scenarioPaye = scenarioReel - scenarioInjEtp;
         // Le taux d'absentéisme du scénario impacte le MCT
-        const absRate = absRateByMonth.get(m) ?? 5;
+        const absRate = absRateByMonth.get(m) ?? defautMct;
         const scenarioMctFte = scenarioNet * (absRate / 100);
 
         // Seuls les mois de l'année affichée sont rendus ; les mois antérieurs
@@ -380,7 +395,8 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
           scenario_brut: Math.round(runningBrut * 10) / 10,
           scenario_net: Math.max(0, Math.round(scenarioNet * 10) / 10),
           scenario_reel: Math.max(0, Math.round(scenarioReel * 10) / 10),
-          scenario_apres_mct: Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10),
+          scenario_apres_injustifiees: lastKnownInjRate != null ? Math.max(0, Math.round(scenarioPaye * 10) / 10) : undefined,
+          scenario_apres_mct: Math.max(0, Math.round((scenarioPaye - scenarioMctFte) * 10) / 10),
         });
       }
 
@@ -494,6 +510,12 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
             combinedCcAbsRateByMonthCc.set(`${mois}:${p.centre_cout}`, rate);
           }
         });
+        // Même règle que par scénario : aucun taux MCT renseigné ⇒ dernier taux connu
+        const defautMctCombine = lastKnownMctRate ?? 5;
+        if (![...combinedGlobalAbsRateByMonth.values(), ...combinedCcAbsRateByMonthCc.values()].some((r) => r > 0)) {
+          combinedGlobalAbsRateByMonth.clear();
+          combinedCcAbsRateByMonthCc.clear();
+        }
         const combinedAbsRateByMonth = new Map<number, number>();
         for (let m = 1; m <= 12; m++) {
           const monthEnd = lastDayOfMonth(selectedYear, m);
@@ -502,12 +524,12 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
           if (totalEtp > 0 && combinedCcAbsRateByMonthCc.size > 0) {
             const weightedRate = activeAtM.reduce((sum, s) => {
               const ccKey = `${m}:${s.centre_cout}`;
-              const rate = combinedCcAbsRateByMonthCc.get(ccKey) ?? combinedGlobalAbsRateByMonth.get(m) ?? 5;
+              const rate = combinedCcAbsRateByMonthCc.get(ccKey) ?? combinedGlobalAbsRateByMonth.get(m) ?? defautMctCombine;
               return sum + getEtp(s) * rate;
             }, 0);
             combinedAbsRateByMonth.set(m, weightedRate / totalEtp);
           } else {
-            combinedAbsRateByMonth.set(m, combinedGlobalAbsRateByMonth.get(m) ?? 5);
+            combinedAbsRateByMonth.set(m, combinedGlobalAbsRateByMonth.get(m) ?? defautMctCombine);
           }
         }
 
@@ -670,13 +692,17 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
           const scenarioCnsEtp = scenarioNet * (cnsRate / 100);
           const scenarioReel = scenarioNet - scenarioCnsEtp;
 
-          const absRate = combinedAbsRateByMonth.get(m) ?? 5;
+          // Payé projeté = réel − dernier taux d'injustifiées connu (comme sans scénario)
+          const scenarioInjEtp = lastKnownInjRate != null ? scenarioNet * (lastKnownInjRate / 100) : 0;
+          const scenarioPaye = scenarioReel - scenarioInjEtp;
+          const absRate = combinedAbsRateByMonth.get(m) ?? defautMctCombine;
           const scenarioMctFte = scenarioNet * (absRate / 100);
 
           const scenarioBrutR = Math.round(runningBrut * 10) / 10;
           const scenarioNetR = Math.max(0, Math.round(scenarioNet * 10) / 10);
           const scenarioReelR = Math.max(0, Math.round(scenarioReel * 10) / 10);
-          const scenarioApresMctR = Math.max(0, Math.round((scenarioReel - scenarioMctFte) * 10) / 10);
+          const scenarioPayeR = lastKnownInjRate != null ? Math.max(0, Math.round(scenarioPaye * 10) / 10) : undefined;
+          const scenarioApresMctR = Math.max(0, Math.round((scenarioPaye - scenarioMctFte) * 10) / 10);
 
           // Journal : tous les mois projetés, y compris ceux qui ne sont pas
           // tracés (fin de l'année en cours d'une année future).
@@ -699,9 +725,11 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
             tempExitsEtp: runningTempExitsEtp,
             cnsRate,
             absRate,
+            injRate: lastKnownInjRate,
             scenario_brut: scenarioBrutR,
             scenario_net: scenarioNetR,
             scenario_reel: scenarioReelR,
+            scenario_apres_injustifiees: scenarioPayeR,
             scenario_apres_mct: scenarioApresMctR,
           });
 
@@ -713,6 +741,7 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
             scenario_brut: scenarioBrutR,
             scenario_net: scenarioNetR,
             scenario_reel: scenarioReelR,
+            scenario_apres_injustifiees: scenarioPayeR,
             scenario_apres_mct: scenarioApresMctR,
           });
 
@@ -757,7 +786,8 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
           if (journalMois) journalMois.leaveFte = leaveFteMonth;
           const hd = headcountData[m - 1];
           if (hd) {
-            const base = hd.base_scenario_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
+            // Base des mois réels : le disponible mesuré (injustifiées comprises, comme la projection)
+            const base = hd.effectif_apres_mct ?? hd.base_scenario_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
             if (base != null) {
               hd.scenario_apres_conges = Math.max(0, Math.round((base - leaveFteMonth) * 10) / 10);
             }

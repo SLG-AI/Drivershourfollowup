@@ -63,6 +63,7 @@ export interface MoisValorise {
   scenario_brut: number;
   scenario_net: number;
   scenario_reel: number;
+  scenario_apres_injustifiees?: number;
   scenario_apres_mct: number;
   scenario_apres_conges?: number;
 }
@@ -157,7 +158,9 @@ export function valoriserProjection(journal: JournalMoisProjection[], e: Entrees
     const primes = primesDuMois(e.leviers, null, m, Math.max(0, j.scenario_net));
     const net = Math.max(0, masse - j.tempExitsEtp * coutEtp);
     const reel = net * (1 - j.cnsRate / 100);
-    const apresMct = reel - net * (j.absRate / 100);
+    // Payé = réel − injustifiées (taux repris) ; disponible = payé − MCT
+    const apresInj = j.injRate != null ? reel - net * (j.injRate / 100) : undefined;
+    const apresMct = (apresInj ?? reel) - net * (j.absRate / 100);
     mois.push({
       annee: j.annee,
       mois: j.mois,
@@ -167,6 +170,7 @@ export function valoriserProjection(journal: JournalMoisProjection[], e: Entrees
       scenario_brut: arrondi(masse + primes),
       scenario_net: arrondi(net + primes),
       scenario_reel: arrondi(reel + primes),
+      scenario_apres_injustifiees: apresInj != null ? arrondi(apresInj + primes) : undefined,
       scenario_apres_mct: arrondi(apresMct + primes),
       scenario_apres_conges: j.leaveFte != null ? arrondi(apresMct - j.leaveFte * coutEtp + primes) : undefined,
     });

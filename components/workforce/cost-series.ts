@@ -16,7 +16,8 @@ export const SERIES_COUTS: SeriesDef[] = [
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true, parent: "scenario_brut" },
   { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true, parent: "scenario_net" },
-  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_reel" },
+  { key: "scenario_apres_injustifiees", label: "Payé (après injustifiées)", color: "hsl(45, 93%, 47%)", dashed: true, isScenario: true, parent: "scenario_reel" },
+  { key: "scenario_apres_mct", label: "Disponible (après MCT)", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_apres_injustifiees" },
   { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true, parent: "scenario_apres_mct" },
 ];
 

@@ -22,7 +22,7 @@ function journal(mois: number, extra: Partial<JournalMoisProjection> = {}): Jour
   return {
     annee: 2026, mois, runningBrutAvant: 2, turnoverLosses: 0, departsHyp: 0, dataExits: 0, departsRetenus: 0,
     dataExitsCodes: [], dataArrivalsCodes: [], arriveesHyp: [], arrivalsEtp: 0, dataArrivals: 0, finsCddHyp: [], cddDepartures: 0,
-    retours: 0, tempExitsEtp: 0, cnsRate: 0, absRate: 0, scenario_brut: 2, scenario_net: 2, scenario_reel: 2, scenario_apres_mct: 2,
+    retours: 0, tempExitsEtp: 0, cnsRate: 0, absRate: 0, injRate: null, scenario_brut: 2, scenario_net: 2, scenario_reel: 2, scenario_apres_mct: 2,
     ...extra,
   };
 }
