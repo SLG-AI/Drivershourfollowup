@@ -577,6 +577,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "Le bouton « Fin de mois / Moyenne » de la courbe d'évolution applique ce calcul aux douze mois, chacun lu dans sa propre photographie.",
                 "Sous contrat et net sont des moyennes journalières. Les paliers suivants (réel, payé, disponible) appliquent à l'effectif net moyen les taux d'absence du mois, qui sont déjà des moyennes : le point du mois affiché donne donc les mêmes chiffres que les lignes violettes des cartes, à l'arrondi près.",
                 "Les sortis absents de la photographie ne sont repris que lorsque le mois et le précédent ont chacun leur photo. Les scénarios restent projetés en fin de mois : la vue Moyenne est suspendue tant qu'un scénario est affiché.",
+                "Sur chaque ligne, le trait plein couvre les mois mesurés et le pointillé les mois reportés : photo de roster reconduite d'un autre mois, ou taux d'absence repris du dernier mois connu. Un palier hérite du report de ses entrées, si bien que le pointillé peut commencer plus tôt sur les lignes du bas. L'infobulle marque ces valeurs « reporté ».",
               ],
             },
           ],

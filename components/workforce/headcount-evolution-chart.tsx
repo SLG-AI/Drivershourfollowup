@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -39,6 +39,8 @@ export interface HeadcountDataPoint {
   effectif_apres_injustifiees?: number;
   projected_apres_injustifiees?: number;
   is_projection: boolean;
+  /** Par ligne, la valeur du mois est REPORTÉE (photo reconduite ou taux repris) : tracée en pointillé. */
+  reporte?: { brut?: boolean; net?: boolean; reel?: boolean; injustifiees?: boolean; mct?: boolean };
   target?: number;
   scenario_brut?: number;
   scenario_net?: number;
@@ -73,13 +75,24 @@ interface SeriesDef {
   isScenario?: boolean;
 }
 
+/** Séries mesurées, tracées en deux traits : plein (mesuré) et pointillé (reporté). */
+const CLE_REPORT: Record<string, "brut" | "net" | "reel" | "injustifiees" | "mct"> = {
+  effectif_brut: "brut",
+  effectif_net: "net",
+  effectif_reel: "reel",
+  effectif_apres_injustifiees: "injustifiees",
+  effectif_apres_mct: "mct",
+};
+const mesureKey = (key: string) => `mesure_${key}`;
+const reportKey = (key: string) => `report_${key}`;
+
 const ALL_SERIES: SeriesDef[] = [
   { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)" },
   { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)" },
   { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)" },
   // Ordre de la chaîne : réel −injustifiées→ payé −MCT→ disponible (wp-paliers.ts)
   { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)" },
-  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", dashed: true },
+  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)" },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
@@ -220,14 +233,14 @@ export function HeadcountEvolutionChart({
   const moyenneDisponible = data.some((d) => d.moyenne != null);
   const vueMoyenne = vue === "moyenne" && !showScenario && moyenneDisponible;
 
-  const chartData = data.map((d, idx) => {
+  const chartDataFusionne = data.map((d, idx) => {
     // Merge projected_* into effectif_* for a single continuous line
     let merged = vueMoyenne && d.moyenne ? { ...d, ...d.moyenne } : d;
-    if (d.projected_apres_mct != null && d.effectif_apres_mct == null) {
-      merged = { ...merged, effectif_apres_mct: d.projected_apres_mct };
+    if (merged.projected_apres_mct != null && merged.effectif_apres_mct == null) {
+      merged = { ...merged, effectif_apres_mct: merged.projected_apres_mct };
     }
-    if (d.projected_apres_injustifiees != null && d.effectif_apres_injustifiees == null) {
-      merged = { ...merged, effectif_apres_injustifiees: d.projected_apres_injustifiees };
+    if (merged.projected_apres_injustifiees != null && merged.effectif_apres_injustifiees == null) {
+      merged = { ...merged, effectif_apres_injustifiees: merged.projected_apres_injustifiees };
     }
     if (!showScenario || !selectedProjection) return merged;
     const monthIndex = idx + 1;
@@ -265,6 +278,29 @@ export function HeadcountEvolutionChart({
       scenario_apres_conges: monthData.scenario_apres_conges,
     };
   });
+
+  // Chaque ligne mesurée se trace en deux traits : plein sur les mois mesurés,
+  // pointillé sur les mois reportés (`reporte`). La valeur fusionnée reste
+  // sous sa clé d'origine (échelle, infobulle) ; les traits lisent
+  // `mesure_*` / `report_*`, raccordés par un point commun à chaque bascule.
+  const chartData: Record<string, unknown>[] = chartDataFusionne.map((d) => {
+    const row: Record<string, unknown> = { ...d };
+    for (const [key, flag] of Object.entries(CLE_REPORT)) {
+      const valeur = row[key] as number | undefined;
+      const estReporte = d.reporte?.[flag] === true;
+      row[mesureKey(key)] = estReporte ? undefined : valeur;
+      row[reportKey(key)] = estReporte ? valeur : undefined;
+    }
+    return row;
+  });
+  for (const key of Object.keys(CLE_REPORT)) {
+    const m = mesureKey(key), r = reportKey(key);
+    for (let i = 0; i + 1 < chartData.length; i++) {
+      const a = chartData[i], b = chartData[i + 1];
+      if (a[m] != null && b[m] == null && b[r] != null) a[r] = a[m];
+      if (a[r] != null && a[m] == null && b[m] != null) b[r] = b[m];
+    }
+  }
 
   if (data.length === 0) {
     return (
@@ -506,26 +542,13 @@ export function HeadcountEvolutionChart({
               domain={[yMin, yMax]}
             />
             <Tooltip
-              contentStyle={{
-                borderRadius: "8px",
-                border: "1px solid var(--border)",
-                backgroundColor: "var(--background)",
-              }}
-              itemSorter={(item) => {
-                const order: Record<string, number> = {
-                  effectif_brut: 0, effectif_net: 1, effectif_reel: 2,
-                  effectif_apres_injustifiees: 3, effectif_apres_mct: 4, target: 5,
-                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8, scenario_apres_mct: 9, scenario_apres_conges: 10,
-                };
-                return order[String(item.dataKey)] ?? 99;
-              }}
-              labelFormatter={() => ""}
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              formatter={(value: any, name: any, _props: any, _index: any, payload: any) => {
-                const label = labelMap[String(name)] || String(name);
-                const val = value ?? 0;
-                const key = String(name);
-
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const row = payload[0].payload as Record<string, unknown>;
+                const ordre = [
+                  "effectif_brut", "effectif_net", "effectif_reel", "effectif_apres_injustifiees", "effectif_apres_mct", "target",
+                  "scenario_brut", "scenario_net", "scenario_reel", "scenario_apres_mct", "scenario_apres_conges",
+                ];
                 const deltaParent: Record<string, string> = {
                   effectif_net: "effectif_brut",
                   effectif_reel: "effectif_net",
@@ -537,38 +560,55 @@ export function HeadcountEvolutionChart({
                   scenario_apres_mct: "scenario_reel",
                   scenario_apres_conges: "scenario_apres_mct",
                 };
-
-                // Série parente masquée : on remonte la chaîne jusqu'à une série affichée
-                let parentKey: string | undefined = deltaParent[key];
-                while (parentKey && !payload.some((p: { dataKey: string }) => p.dataKey === parentKey)) parentKey = deltaParent[parentKey];
-                if (parentKey) {
-                  const parent = payload.find((p: { dataKey: string; value: number }) => p.dataKey === parentKey);
-                  if (parent?.value != null) {
-                    const delta = val - parent.value;
-                    const sign = delta >= 0 ? "+" : "";
-                    return [<span key={key}>{val} <span style={{ fontSize: "0.75em", color: "#999" }}>({sign}{Math.round(delta * 10) / 10})</span></span>, label];
-                  }
-                }
-                return [val, label];
+                const visibles = ordre.filter((k) => visibleSeries.some((s) => s.key === k) && row[k] != null);
+                return (
+                  <div style={{ borderRadius: "8px", border: "1px solid var(--border)", backgroundColor: "var(--background)", padding: "8px 12px", fontSize: 12 }}>
+                    {visibles.map((key) => {
+                      const serie = ALL_SERIES.find((s) => s.key === key)!;
+                      const val = row[key] as number;
+                      const flag = CLE_REPORT[key];
+                      const reporte = flag != null && row.reporte != null && (row.reporte as Record<string, boolean>)[flag] === true;
+                      // Série parente masquée : on remonte la chaîne jusqu'à une série affichée
+                      let parentKey: string | undefined = deltaParent[key];
+                      while (parentKey && !visibles.includes(parentKey)) parentKey = deltaParent[parentKey];
+                      const parent = parentKey ? (row[parentKey] as number) : null;
+                      const delta = parent != null ? Math.round((val - parent) * 10) / 10 : null;
+                      return (
+                        <div key={key} style={{ color: serie.color, padding: "2px 0" }}>
+                          {serie.label} : {val}
+                          {delta != null && <span style={{ fontSize: "0.75em", color: "#999" }}> ({delta >= 0 ? "+" : ""}{delta})</span>}
+                          {reporte && <span style={{ fontSize: "0.75em", color: "#999", fontStyle: "italic" }}> reporté</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
               }}
             />
             <Legend
               content={() => null}
             />
 
-            {visibleSeries.map((s) => (
-              <Line
-                key={s.key}
-                type="monotone"
-                dataKey={s.key}
-                stroke={s.color}
-                strokeWidth={2}
-                strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
-                dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
-                activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined}
-                connectNulls={s.dashed === true}
-              />
-            ))}
+            {visibleSeries.map((s) =>
+              CLE_REPORT[s.key] ? (
+                // Mesuré en trait plein, reporté en pointillé (même couleur, même pastille)
+                <Fragment key={s.key}>
+                  <Line type="monotone" dataKey={mesureKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} dot={{ r: 3 }} activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined} isAnimationActive={false} />
+                  <Line type="monotone" dataKey={reportKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} strokeDasharray="8 4" dot={{ r: 3, fill: "var(--background)" }} activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined} isAnimationActive={false} />
+                </Fragment>
+              ) : (
+                <Line
+                  key={s.key}
+                  type="monotone"
+                  dataKey={s.key}
+                  stroke={s.color}
+                  strokeWidth={2}
+                  strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
+                  dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
+                  connectNulls={s.dashed === true}
+                />
+              )
+            )}
 
             {projectionStartIndex > 0 && (
               <ReferenceLine

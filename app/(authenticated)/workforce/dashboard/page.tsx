@@ -775,19 +775,17 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
       projected_apres_injustifiees: projectedApresInjustifiees,
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
+      // Valeurs REPORTÉES (tracées en pointillé) : photo reconduite d'un autre
+      // mois, ou taux d'absence repris du dernier mois connu. Un palier hérite
+      // du report de ses entrées.
+      reporte: (() => {
+        const brut = !photoM.exacte;
+        const reel = brut || !hasAbsenceData;
+        const injustifiees = reel || monthInj.length === 0;
+        const mct = injustifiees || monthMct.length === 0;
+        return { brut, net: brut, reel, injustifiees, mct };
+      })(),
     });
-  }
-
-  // Jonction pour la projection MCT : ajouter le point projeté sur le dernier mois avec données réelles
-  const lastMctRealIdx = headcountData.reduce((last, d, i) => d.effectif_apres_mct != null ? i : last, -1);
-  if (lastMctRealIdx >= 0 && headcountData.some((d) => d.projected_apres_mct != null)) {
-    headcountData[lastMctRealIdx].projected_apres_mct = headcountData[lastMctRealIdx].effectif_apres_mct;
-  }
-
-  // Même jonction pour la projection des absences injustifiées
-  const lastInjRealIdx = headcountData.reduce((last, d, i) => d.effectif_apres_injustifiees != null ? i : last, -1);
-  if (lastInjRealIdx >= 0 && headcountData.some((d) => d.projected_apres_injustifiees != null)) {
-    headcountData[lastInjRealIdx].projected_apres_injustifiees = headcountData[lastInjRealIdx].effectif_apres_injustifiees;
   }
 
   // Vue « Moyenne » de la courbe : chaque point de fin de mois, une fois les
