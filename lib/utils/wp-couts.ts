@@ -163,7 +163,11 @@ export function calculerCoefficientCharges(
     if (!dernier) continue;
     const brut = dernier.lignes.reduce((s, l) => s + nombre(l.total_brut), 0);
     const employeur = dernier.lignes.reduce((s, l) => s + nombre(l.cout_total_secu), 0);
-    if (brut <= 0) continue;
+    // Garde : un coût employeur ne peut pas être inférieur au brut. La colonne
+    // « Total SECU » des Statistiques rapides s'est révélée être le total des
+    // cotisations (≈ 27 % du brut), pas le coût employeur : tant que le fichier
+    // ne fournit pas les charges patronales, on garde le coefficient par défaut.
+    if (brut <= 0 || employeur < brut) continue;
     return {
       coef: employeur / brut,
       source: { mois: dernier.mois, annee: dernier.annee, n: dernier.lignes.length, brut, employeur, perimetre },

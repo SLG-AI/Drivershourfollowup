@@ -21,6 +21,9 @@ export interface CoutsStats {
   paye_moyen?: number;
   /** Paie réalisée du mois (Total SECU), null quand le fichier n'a pas de montants. */
   realise: number | null;
+  /** Le réalisé employeur est estimé (brut réel × coefficient) faute de charges patronales dans le fichier. */
+  realise_estime?: boolean;
+  realise_brut?: number | null;
   realise_lignes: number;
   coefficient: number;
   /** « calculé sur Mars 2026 (1 380 lignes, périmètre) » ou null si valeur par défaut. */
@@ -93,7 +96,12 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
           ? `${stats.realise_lignes.toLocaleString("fr-FR")} lignes de paie${ecart != null ? ` · écart vs payé contractuel ${ecart >= 0 ? "+" : "−"}${euros(Math.abs(ecart))}${ecartPct != null ? ` (${ecartPct >= 0 ? "+" : "−"}${pct(Math.abs(ecartPct))})` : ""}` : ""}`
           : `Aucun montant importé pour ${stats.mois_label}`,
       average: null,
-      note: stats.realise == null && stats.realise_lignes > 0 ? `${stats.realise_lignes} lignes présentes mais sans salaire (fichier « sans salaire »)` : null,
+      note:
+        stats.realise == null && stats.realise_lignes > 0
+          ? `${stats.realise_lignes} lignes présentes mais sans salaire (fichier « sans salaire »)`
+          : stats.realise_estime && stats.realise_brut != null
+            ? `Estimé : brut réel ${euros(stats.realise_brut)} × coefficient — le fichier ne porte pas encore les charges patronales`
+            : null,
       icon: Receipt, iconColor: "text-slate-600", iconBg: "bg-slate-100",
     },
     {

@@ -277,7 +277,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     sous_contrat_moyen: moyenne?.effectif_brut,
     apres_suspension_moyen: moyenne?.effectif_net,
     paye_moyen: moyenne?.effectif_apres_injustifiees,
-    realise: duMois.realise.mesure ? duMois.realise.employeur : null,
+    realise: duMois.realise.mesure ? (duMois.realise.employeur >= duMois.realise.brut ? duMois.realise.employeur : duMois.realise.brut * coefficient.coef) : null,
+    realise_estime: duMois.realise.mesure && duMois.realise.employeur < duMois.realise.brut,
+    realise_brut: duMois.realise.mesure ? duMois.realise.brut : null,
     realise_lignes: duMois.realise.n,
     coefficient: coefficient.coef,
     coefficient_source: coefficient.source

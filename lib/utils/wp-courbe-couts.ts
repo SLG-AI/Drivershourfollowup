@@ -104,7 +104,9 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       effectif_reel: arrondi(apresCns),
       effectif_apres_injustifiees: arrondi(apresInj),
       effectif_apres_mct: arrondi(apresMct),
-      realise: realise.mesure ? Math.round(realise.employeur) : undefined,
+      // Réalisé employeur : la colonne importée si elle est bien un coût
+      // employeur (≥ brut), sinon le brut réel × coefficient (voir wp-couts.ts)
+      realise: realise.mesure ? Math.round(realise.employeur >= realise.brut ? realise.employeur : realise.brut * e.coef) : undefined,
       is_projection: etp.is_projection,
       reporte,
       taux_appliques: etp.taux_appliques,
