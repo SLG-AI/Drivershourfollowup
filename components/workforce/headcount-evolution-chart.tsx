@@ -356,7 +356,16 @@ export function HeadcountEvolutionChart({
   // est affiché (le pointillé du scénario prend le relais à partir du premier
   // mois projeté) ; une série de scénario n'existe que dans ce cas.
   const aDesValeurs = (key: string) => chartData.some((d) => d[key] != null);
-  const availableSeries = series.filter((s) => (s.isScenario ? showScenario : true) && aDesValeurs(s.key));
+  // Sans taux de congés, « après congés » se confond avec « après MCT » et le
+  // recouvrirait : la série n'est proposée que si elle s'en écarte quelque part.
+  // Comparaison sur les mois PROJETÉS, les seuls où les deux viennent de la
+  // même projection (sur le mois de raccord, « après MCT » vaut la mesure).
+  const congesDistincts = chartData.some(
+    (d) => d.is_projection === true && d.scenario_apres_conges != null && d.scenario_apres_mct != null && d.scenario_apres_conges !== d.scenario_apres_mct
+  );
+  const availableSeries = series.filter(
+    (s) => (s.isScenario ? showScenario : true) && aDesValeurs(s.key) && (s.key !== "scenario_apres_conges" || congesDistincts)
+  );
   const libelle = (s: SeriesDef) => (s.isScenario ? `${s.label} — scénario` : s.label);
 
   const toggleSeries = (key: string) => {
