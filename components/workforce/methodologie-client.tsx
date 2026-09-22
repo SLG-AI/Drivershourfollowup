@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Printer, AlertTriangle, Info } from "lucide-react";
 import type { PaliersMois } from "@/lib/utils/wp-paliers";
+import type { CoutsMois } from "@/lib/utils/wp-couts";
 
 const MOIS_LABELS: Record<number, string> = {
   1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
@@ -41,6 +42,16 @@ export interface DonneesMethodologie {
     tauxAnnualise: number;
     sourceMouvements: boolean;
   };
+  /** La chaîne des paliers en euros (page Coûts). */
+  couts?: {
+    paliers: CoutsMois;
+    coefficient: number;
+    coefficientSource: { mois: number; annee: number; n: number; brut: number; employeur: number; perimetre: "filtre" | "entreprise" } | null;
+    salairesReportes: boolean;
+    periodeReference: { mois: number; annee: number } | null;
+    aucunSalaire: boolean;
+    realise: { employeur: number; brut: number; n: number; mesure: boolean };
+  };
 }
 
 interface Props {
@@ -59,6 +70,7 @@ const nf = (n: number, d = 1) =>
 const etp = (n: number) => `${nf(n)} ETP`;
 const pct = (n: number, d = 1) => `${nf(n, d)} %`;
 const heures = (n: number) => `${nf(n, 0)} h`;
+const euros = (n: number) => `${nf(n, 0)} €`;
 const dateFr = (iso: string) => {
   const [a, m, j] = iso.split("-");
   return `${j}/${m}/${a}`;
@@ -800,7 +812,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               titre: "Effectif disponible",
               points: [
                 "Le complément du taux global appliqué à l'effectif après suspension donne l'effectif réellement disponible : le dernier palier de la chaîne.",
-                p ? `Sur ${libelleMois} : ${etp(p.apresInjustifiees)} disponibles sur ${etp(p.sousContrat)} sous contrat.` : "",
+                p ? `Sur ${libelleMois} : ${etp(p.apresMct)} disponibles sur ${etp(p.sousContrat)} sous contrat.` : "",
               ].filter(Boolean),
             },
             {
@@ -940,6 +952,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
         },
       ],
     },
+    sectionCouts(d, libelleMois),
     {
       cle: "sec-historique",
       titre: "Analyse historique",
@@ -1182,3 +1195,221 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
     },
   ];
 }
+
+// ============================================================
+// Section « Les coûts » : la chaîne des paliers en euros (page Coûts)
+// ============================================================
+
+const MOIS_LONG = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+
+function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Section {
+  const c = d?.couts;
+  const p = c?.paliers;
+  const coefTexte = c
+    ? c.coefficientSource
+      ? `${nf(c.coefficient, 3)}, calculé sur ${MOIS_LONG[c.coefficientSource.mois]} ${c.coefficientSource.annee} (${nf(c.coefficientSource.n, 0)} lignes, ${c.coefficientSource.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
+      : `${nf(c.coefficient, 2)}, valeur par défaut faute de statistiques salariales avec montants`
+    : undefined;
+  const reference = c?.periodeReference ? `${MOIS_LONG[c.periodeReference.mois]} ${c.periodeReference.annee}` : null;
+
+  return {
+    cle: "sec-couts",
+    titre: "Les coûts",
+    chapeau:
+      "La même chaîne de paliers, en euros de coût employeur : ce que coûterait l'effectif sous contrat, ce qui n'est pas payé, ce qui l'est. Deux sources : le brut indice du roster pour le contractuel, les statistiques salariales pour le réalisé.",
+    indicateurs: [
+      {
+        cle: "coefficient-charges",
+        titre: "Coefficient de charges patronales",
+        definition: "Le rapport entre le coût employeur (Total SECU) et le salaire brut, lu sur la paie réelle.",
+        valeur: coefTexte,
+        formule: "coefficient = Σ Total SECU / Σ Total brut, sur le dernier mois de statistiques salariales qui porte des montants",
+        operandes: c?.coefficientSource
+          ? [
+              { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
+              { label: "Total SECU", valeur: euros(c.coefficientSource.employeur) },
+              { label: "Coefficient", valeur: nf(c.coefficient, 3) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Périmètre puis entreprise, puis défaut",
+            points: [
+              "Le ratio est d'abord cherché sur le périmètre filtré (les charges varient avec la structure des salaires), sinon sur toute l'entreprise, sinon la valeur par défaut 1,13 est appliquée et signalée.",
+              "Un fichier « sans salaire » (colonnes présentes, montants vides) ne compte pas : ses lignes valent 0 et n'entrent pas dans le ratio.",
+              "La purge de rétention (3 ans) peut faire retomber le coefficient sur le défaut : sa source est toujours affichée.",
+            ],
+          },
+        ],
+        source: "lib/utils/wp-couts.ts (calculerCoefficientCharges).",
+      },
+      {
+        cle: "cout-sous-contrat",
+        titre: "Coût employeur sous contrat",
+        definition: "Ce que coûterait, sur le mois, l'ensemble des salariés sous contrat : brut indice × taux d'occupation × coefficient de charges.",
+        valeur: p ? euros(p.sousContrat) : undefined,
+        valeurNote: c?.salairesReportes && reference ? `salaires lus dans le roster de ${reference}` : undefined,
+        formule: "coût sous contrat = Σ actifs (brut indice plein temps × taux d'occupation / 100 × coefficient)",
+        operandes: p
+          ? [
+              { label: "Coût moyen par ETP", valeur: euros(p.coutMoyenEtp) },
+              { label: "Coefficient", valeur: nf(p.coef, 3) },
+              { label: "Sous contrat", valeur: euros(p.sousContrat) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Le brut indice est un plein temps",
+            points: [
+              "Le roster porte le brut mensuel à l'indice PLEIN TEMPS, quel que soit le taux d'occupation (vérifié : un mi-temps y porte le même brut qu'un temps plein). Le coût mensuel le multiplie donc par le taux.",
+              "Un roster « sans salaire » (Brut indice vide) emprunte le brut de chaque salarié à la dernière photo qui en porte ; le mois est alors reporté et tracé en pointillé. Un salarié sans brut nulle part est compté au coût moyen par ETP du périmètre.",
+              p && p.reporte.codesManquants > 0 ? `Sur ${libelleMois} : ${p.reporte.codesManquants} salarié(s) sans brut connu.` : "",
+            ].filter(Boolean),
+          },
+        ],
+        source: "wp_employees.brut_indice ; lib/utils/wp-couts.ts (calculerCoutsPaliers).",
+      },
+      {
+        cle: "cout-apres-suspension",
+        titre: "Coût après suspension de contrat",
+        definition: "Le coût sous contrat moins celui des contrats suspendus, qui ne sont pas payés.",
+        valeur: p ? euros(p.apresSuspension) : undefined,
+        formule: "après suspension = sous contrat − Σ suspendus (coût × fraction suspendue)",
+        operandes: p
+          ? [
+              { label: "Sous contrat", valeur: euros(p.sousContrat) },
+              { label: "Suspendu", valeur: euros(p.coutSuspendu) },
+              { label: "Après suspension", valeur: euros(p.apresSuspension) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Mêmes règles que les ETP",
+            points: [
+              "Un congé parental à temps partiel ne retire que la moitié du coût, comme il ne retire que la moitié de l'ETP. C'est le même drapeau et la même fraction (wp-suspension.ts).",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "cout-paye",
+        titre: "Coût payé (après CNS et absences injustifiées)",
+        definition: "Ce que l'employeur paie réellement : le coût après suspension, moins les absences CNS et les absences injustifiées, non rémunérées.",
+        valeur: p ? euros(p.apresInjustifiees) : undefined,
+        formule: "payé = après suspension − CNS − injustifiées",
+        operandes: p
+          ? [
+              { label: "CNS", valeur: euros(p.coutPerduCns) },
+              { label: "Injustifiées", valeur: euros(p.coutPerduInjustifiees) },
+              { label: "Payé", valeur: euros(p.apresInjustifiees) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Salarié par salarié quand le fichier existe",
+            points: [
+              "Sur un mois qui a son fichier d'absences, chaque absence est valorisée au coût du salarié concerné : une absence CNS pèse son pourcentage d'absence × son coût disponible ; une absence en heures pèse ses heures / heures travaillables × son coût plein temps. Un absent bien payé coûte plus qu'un absent au salaire minimum.",
+              "Sur un mois sans fichier, le taux repris (le même que la courbe des effectifs) s'applique au coût net : le point est reporté.",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "cout-mct",
+        titre: "Coût des absences payées (MCT)",
+        definition: "Les maladies non prises en charge sont payées par l'employeur : leur coût sort du disponible sans sortir du payé.",
+        valeur: p ? euros(p.coutPerduMct) : undefined,
+        formule: "disponible = payé − MCT",
+        operandes: p
+          ? [
+              { label: "Payé", valeur: euros(p.apresInjustifiees) },
+              { label: "MCT", valeur: euros(p.coutPerduMct) },
+              { label: "Disponible", valeur: euros(p.apresMct) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Pourquoi ce palier vient après le payé",
+            points: [
+              "C'est l'ordre de la chaîne des effectifs : un salarié en MCT reste payé (la mutuelle rembourse ensuite en partie). Le disponible en euros est donc une lecture de capacité, pas un décaissement.",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "cout-realise",
+        titre: "Réalisé du mois (Total SECU)",
+        definition: "La paie effective du mois telle que les statistiques salariales la donnent : coût employeur total, toutes absences déjà déduites, heures supplémentaires comprises.",
+        valeur: c ? (c.realise.mesure ? euros(c.realise.employeur) : "aucun montant importé") : undefined,
+        valeurNote: c && !c.realise.mesure && c.realise.n > 0 ? `${nf(c.realise.n, 0)} lignes présentes mais sans salaire` : undefined,
+        formule: "réalisé = Σ Total SECU des lignes du mois (périmètre filtré : salariés de la photo)",
+        operandes: c?.realise.mesure
+          ? [
+              { label: "Total brut", valeur: euros(c.realise.brut) },
+              { label: "Total SECU", valeur: euros(c.realise.employeur) },
+              { label: "Lignes", valeur: nf(c.realise.n, 0) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Une 6e courbe, pas un palier",
+            points: [
+              "Le réalisé ne se découpe pas en paliers : il intègre déjà toutes les absences, les suppléments et les heures supplémentaires. Il est tracé à part, en gris, sur les seuls mois qui portent des montants.",
+              "L'écart entre réalisé et payé contractuel se lit sur la carte : il mesure ce que le contractuel ne modélise pas (suppléments, heures supplémentaires, chômage partiel, régularisations).",
+            ],
+          },
+        ],
+        source: "Table wp_salary_stats (Total brut, Brut base, Suppléments, Total SECU).",
+      },
+      {
+        cle: "cout-moyen-etp",
+        titre: "Coût moyen par ETP",
+        definition: "Le coût employeur d'un équivalent temps plein, sur le périmètre et le mois affichés.",
+        valeur: p ? euros(p.coutMoyenEtp) : undefined,
+        formule: "coût moyen par ETP = coût sous contrat / Σ ETP sous contrat",
+        details: [
+          {
+            titre: "Le coût moyen qui valorise une hypothèse de scénario",
+            points: [
+              "Une embauche, un départ ou une suspension d'hypothèse n'a pas de salaire : elle est valorisée au coût moyen des salariés comparables, par une chaîne de repli à sept niveaux — même cost center et même profil (fonction + CDI/CDD), même dépôt et même profil, toute l'entreprise et même profil, puis même cost center et même fonction, toute l'entreprise et même fonction, toute l'entreprise, enfin le coût moyen du périmètre.",
+              "Le niveau atteint est affiché avec l'hypothèse : un chauffeur de bus n'est jamais valorisé au tarif d'un chef de service.",
+            ],
+          },
+        ],
+        source: "lib/utils/wp-cout-moyen.ts.",
+      },
+      {
+        cle: "masse-annuelle",
+        titre: "Masse salariale annuelle sous contrat",
+        definition: "La somme des douze coûts mensuels sous contrat, mois mesurés et mois reportés confondus.",
+        details: [
+          {
+            titre: "Lecture",
+            points: [
+              "Chaque mois se lit dans sa photo de roster, reconduite à défaut ; un mois reporté est signalé. Ce n'est pas un budget : les mois à venir prolongent le dernier connu, sans hausse ni scénario, sauf sur la courbe quand un scénario est affiché.",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "leviers-cout",
+        titre: "Leviers de coût d'un scénario",
+        definition: "Un scénario porte, en plus de ses hypothèses d'effectifs, des leviers qui modifient les salaires ou les charges à partir d'un mois donné.",
+        details: [
+          {
+            titre: "Les cinq leviers",
+            points: [
+              "Indexation et augmentation générale : +X % sur les bruts à partir d'un mois d'effet ; plusieurs tranches se cumulent en se multipliant. Les tranches antérieures au premier mois projeté sont ignorées : le brut de la photo les porte déjà.",
+              "Salaire social minimum : un nouveau seuil plein temps à partir d'un mois ; chaque salarié dont le brut plein temps est sous ce seuil est relevé au seuil (× son taux d'occupation). Un seuil est lui-même relevé par les indexations postérieures à son effet.",
+              "Coefficient de charges forcé : remplace le coefficient calculé à partir de son mois d'effet.",
+              "Primes et suppléments ponctuels : un montant global, ou par ETP payé, sur un mois donné, ajouté à tous les paliers du mois (une prime est payée quelle que soit l'absence).",
+              "Chaque levier est global ou propre à un cost center. Quand plusieurs scénarios sont combinés, les hausses et primes s'additionnent ; le seuil et le coefficient viennent du scénario choisi comme source « Coûts », comme les taux de turnover, d'absentéisme et de congés.",
+            ],
+          },
+        ],
+        source: "Table wp_scenario_cost_params ; lib/utils/wp-leviers-cout.ts.",
+      },
+    ],
+  };
+}
+

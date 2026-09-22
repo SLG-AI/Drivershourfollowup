@@ -22,6 +22,7 @@ import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } 
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
+import { calculerCoefficientCharges, calculerCoutsPaliers, construireSourceSalaires, realiseDuMois, type SalarieCout } from "@/lib/utils/wp-couts";
 
 interface Props {
   searchParams: Promise<{
@@ -102,8 +103,23 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
           .in("annee", Array.from(new Set([selectedYear, moisPrecedent.annee])))
           .in("type", ["sortie", "sortie_temporaire"])
       ),
-      fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee").eq("annee", selectedYear)),
+      fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee, total_brut, brut_base, supplements, cout_total_secu").eq("annee", selectedYear)),
     ]);
+  // Coûts : photo de référence salariale (dernière avec brut indice) et dernier
+  // mois de statistiques salariales avec montants, comme sur la page Coûts.
+  const [periodeReference, dernierMoisStats] = await Promise.all([
+    supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("wp_salary_stats").select("mois, annee").gt("total_brut", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  const periodeRef = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
+  const [photoReference, statsCoefficient] = await Promise.all([
+    periodeRef
+      ? fetchAll(supabase.from("wp_employees").select("code_salarie, brut_indice, taux_occupation").eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
+      : Promise.resolve(null),
+    dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
+      ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, total_brut, cout_total_secu").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
+      : Promise.resolve([] as Record<string, unknown>[]),
+  ]);
 
   // Mêmes filtres et même reclassification que le tableau de bord, sinon les
   // chiffres de cette page ne seraient pas ceux qu'on cherche à expliquer.
@@ -205,6 +221,22 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
 
   const tauxTurnoverMensuel = effectifMoyen.brut > 0 ? (sortiesMoisEtp / effectifMoyen.brut) * 100 : 0;
 
+  // ============================================================
+  // Coûts : la même chaîne en euros (page Coûts)
+  // ============================================================
+  const coefficient = calculerCoefficientCharges([...salaryStats, ...statsCoefficient], filtres.actifs ? codesRoster : undefined);
+  const sourceSalaires = construireSourceSalaires(roster as unknown as SalarieCout[], photoReference as SalarieCout[] | null);
+  const coutsPaliers = calculerCoutsPaliers(
+    roster as unknown as SalarieCout[],
+    cns,
+    mct,
+    injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
+    selectedMonth,
+    selectedYear,
+    { coef: coefficient.coef, source: sourceSalaires }
+  );
+  const realise = realiseDuMois(salaryStats, selectedMonth, selectedYear, filtres.actifs ? codesRoster : undefined);
+
   const donnees: DonneesMethodologie = {
     refDate,
     paliers,
@@ -224,6 +256,17 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       tauxMensuel: tauxTurnoverMensuel,
       tauxAnnualise: tauxTurnoverMensuel * 12,
       sourceMouvements: mouvements !== null,
+    },
+    couts: {
+      paliers: coutsPaliers,
+      coefficient: coefficient.coef,
+      coefficientSource: coefficient.source
+        ? { mois: coefficient.source.mois, annee: coefficient.source.annee, n: coefficient.source.n, brut: coefficient.source.brut, employeur: coefficient.source.employeur, perimetre: coefficient.source.perimetre }
+        : null,
+      salairesReportes: sourceSalaires.reporte,
+      periodeReference: periodeRef,
+      aucunSalaire: photoReference == null,
+      realise: { employeur: realise.employeur, brut: realise.brut, n: realise.n, mesure: realise.mesure },
     },
   };
 
