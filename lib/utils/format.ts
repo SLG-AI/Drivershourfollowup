@@ -2,11 +2,9 @@ export function formatHours(value: number): string {
   return value.toFixed(2).replace(".", ",") + "h";
 }
 
-export function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("fr-FR", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value) + "h";
+/** Montant en euros, à l'euro près : « 1 234 567 € ». */
+export function formatEuros(value: number): string {
+  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
 }
 
 export function formatNumber(value: number): string {

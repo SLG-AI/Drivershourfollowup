@@ -40,7 +40,11 @@ export interface HeadcountDataPoint {
   projected_apres_injustifiees?: number;
   is_projection: boolean;
   /** Par ligne, la valeur du mois est REPORTÉE (photo reconduite ou taux repris) : tracée en pointillé. */
-  reporte?: { brut?: boolean; net?: boolean; reel?: boolean; injustifiees?: boolean; mct?: boolean };
+  reporte?: Reporte;
+  /** Taux d'absence effectivement appliqués au mois (mesurés ou repris), en % : nécessaires à la page Coûts. */
+  taux_appliques?: { cns: number | null; inj: number | null; mct: number | null };
+  /** Page Coûts : paie réalisée du mois (Total SECU), absente sur un mois sans montants. */
+  realise?: number;
   target?: number;
   scenario_brut?: number;
   scenario_net?: number;
@@ -67,39 +71,49 @@ export interface ScenarioProjectionData {
   }[];
 }
 
-interface SeriesDef {
+/** Drapeaux de report d'un point : une clé par ligne mesurée (+ `cout` pour la page Coûts). */
+export interface Reporte {
+  brut?: boolean; net?: boolean; reel?: boolean; injustifiees?: boolean; mct?: boolean; cout?: boolean;
+}
+
+export interface SeriesDef {
   key: string;
   label: string;
   color: string;
   dashed?: boolean;
   isScenario?: boolean;
+  /**
+   * Série MESURÉE : tracée en deux traits, plein sur les mois mesurés et
+   * pointillé sur les mois où ce drapeau de `reporte` est levé.
+   */
+  reportFlag?: keyof Reporte;
+  /** Série dont l'infobulle affiche l'écart : le palier précédent de la chaîne. */
+  parent?: string;
+  /** Une série mesurée mais trouée (ex. paie réalisée) : pas de raccord entre les trous. */
+  connectNulls?: boolean;
 }
 
-/** Séries mesurées, tracées en deux traits : plein (mesuré) et pointillé (reporté). */
-const CLE_REPORT: Record<string, "brut" | "net" | "reel" | "injustifiees" | "mct"> = {
-  effectif_brut: "brut",
-  effectif_net: "net",
-  effectif_reel: "reel",
-  effectif_apres_injustifiees: "injustifiees",
-  effectif_apres_mct: "mct",
-};
 const mesureKey = (key: string) => `mesure_${key}`;
 const reportKey = (key: string) => `report_${key}`;
 
-const ALL_SERIES: SeriesDef[] = [
-  { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)" },
-  { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)" },
-  { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)" },
+/** Les 5 paliers d'effectif, la cible et les séries de scénario. Les clés servent aussi, en euros, à la page Coûts. */
+export const ALL_SERIES: SeriesDef[] = [
+  { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", reportFlag: "brut" },
+  { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)", reportFlag: "net", parent: "effectif_brut" },
+  { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)", reportFlag: "reel", parent: "effectif_net" },
   // Ordre de la chaîne : réel −injustifiées→ payé −MCT→ disponible (wp-paliers.ts)
-  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)" },
-  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)" },
+  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)", reportFlag: "injustifiees", parent: "effectif_reel" },
+  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", reportFlag: "mct", parent: "effectif_apres_injustifiees" },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
-  { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
-  { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
-  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true },
-  { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true },
+  { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true, parent: "scenario_brut" },
+  { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true, parent: "scenario_net" },
+  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_reel" },
+  { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true, parent: "scenario_apres_mct" },
 ];
+
+/** Valeur telle que la courbe ETP l'affiche : au dixième. */
+const formatDefaut = (n: number) => String(Math.round(n * 10) / 10);
 
 interface Props {
   data: HeadcountDataPoint[];
@@ -111,6 +125,16 @@ interface Props {
   initialAbsSrc?: string | null;
   initialLeaveSrc?: string | null;
   combinedProjection?: ScenarioProjectionData | null;
+  /** Séries à tracer, dans l'ordre de la chaîne (défaut : les effectifs). */
+  series?: SeriesDef[];
+  /** Formatage d'une valeur (infobulle, écarts). Défaut : au dixième, sans unité. */
+  formatValue?: (n: number) => string;
+  /** Pas d'arrondi des bornes de l'axe Y. Défaut 10 (effectifs) ; en euros, un pas à l'échelle des montants. */
+  axeStep?: number;
+  /** Série de la réglette de zoom. */
+  brushDataKey?: string;
+  /** Message quand `data` est vide. */
+  libelleVide?: string;
 }
 
 export function HeadcountEvolutionChart({
@@ -123,9 +147,20 @@ export function HeadcountEvolutionChart({
   initialAbsSrc = null,
   initialLeaveSrc = null,
   combinedProjection = null,
+  series = ALL_SERIES,
+  formatValue = formatDefaut,
+  axeStep = 10,
+  brushDataKey = "effectif_brut",
+  libelleVide = "Importez des données pour visualiser l'évolution des effectifs.",
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Visibilité des séries (pastilles) — toutes visibles par défaut. Déclaré ici,
+  // avant tout retour conditionnel : les hooks doivent s'exécuter dans le même ordre.
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  // Dérivés des séries : quelle ligne se dédouble en mesuré/reporté, et la chaîne des écarts
+  const cleReport = new Map(series.filter((s) => s.reportFlag).map((s) => [s.key, s.reportFlag!]));
+  const deltaParent = new Map(series.filter((s) => s.parent).map((s) => [s.key, s.parent!]));
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(initialSelectedScenarios));
   const [turnoverSrc, setTurnoverSrc] = useState<string | null>(initialTurnoverSrc);
@@ -285,7 +320,7 @@ export function HeadcountEvolutionChart({
   // `mesure_*` / `report_*`, raccordés par un point commun à chaque bascule.
   const chartData: Record<string, unknown>[] = chartDataFusionne.map((d) => {
     const row: Record<string, unknown> = { ...d };
-    for (const [key, flag] of Object.entries(CLE_REPORT)) {
+    for (const [key, flag] of cleReport) {
       const valeur = row[key] as number | undefined;
       const estReporte = d.reporte?.[flag] === true;
       row[mesureKey(key)] = estReporte ? undefined : valeur;
@@ -293,7 +328,7 @@ export function HeadcountEvolutionChart({
     }
     return row;
   });
-  for (const key of Object.keys(CLE_REPORT)) {
+  for (const key of cleReport.keys()) {
     const m = mesureKey(key), r = reportKey(key);
     for (let i = 0; i + 1 < chartData.length; i++) {
       const a = chartData[i], b = chartData[i + 1];
@@ -309,32 +344,18 @@ export function HeadcountEvolutionChart({
           <CardTitle className="text-base">{title}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground text-center py-8">
-            Importez des données pour visualiser l&apos;évolution des effectifs.
-          </p>
+          <p className="text-sm text-muted-foreground text-center py-8">{libelleVide}</p>
         </CardContent>
       </Card>
     );
   }
 
-  const hasData: Record<string, boolean> = {
-    effectif_brut: !showScenario,
-    effectif_net: !showScenario,
-    effectif_reel: !showScenario && chartData.some((d) => d.effectif_reel != null),
-    effectif_apres_mct: !showScenario && chartData.some((d) => d.effectif_apres_mct != null),
-    effectif_apres_injustifiees: !showScenario && chartData.some((d) => d.effectif_apres_injustifiees != null),
-    target: chartData.some((d) => d.target != null),
-    scenario_brut: showScenario && chartData.some((d) => d.scenario_brut != null),
-    scenario_net: showScenario && chartData.some((d) => d.scenario_net != null),
-    scenario_reel: showScenario && chartData.some((d) => d.scenario_reel != null),
-    scenario_apres_mct: showScenario && chartData.some((d) => d.scenario_apres_mct != null),
-    scenario_apres_conges: showScenario && chartData.some((d) => d.scenario_apres_conges != null),
-  };
-
-  const availableSeries = ALL_SERIES.filter((s) => hasData[s.key]);
-
-  // Visibility state — all visible by default
-  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  // Une série mesurée s'efface quand un scénario est affiché (le pointillé prend
+  // le relais) ; une série de scénario n'existe que dans ce cas ; la cible toujours.
+  const aDesValeurs = (key: string) => chartData.some((d) => d[key] != null);
+  const availableSeries = series.filter((s) =>
+    s.isScenario ? showScenario && aDesValeurs(s.key) : s.key === "target" ? aDesValeurs(s.key) : !showScenario && aDesValeurs(s.key)
+  );
 
   const toggleSeries = (key: string) => {
     setHiddenSeries((prev) => {
@@ -355,12 +376,9 @@ export function HeadcountEvolutionChart({
   const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0;
   const dataMax = allValues.length > 0 ? Math.max(...allValues) : 100;
   const range = dataMax - dataMin || 1;
-  const padding = Math.max(range * 0.15, 5);
-  const yMin = Math.max(0, Math.floor((dataMin - padding) / 10) * 10);
-  const yMax = Math.ceil((dataMax + padding) / 10) * 10;
-
-  const labelMap: Record<string, string> = {};
-  ALL_SERIES.forEach((s) => { labelMap[s.key] = s.label; });
+  const padding = Math.max(range * 0.15, axeStep / 2);
+  const yMin = Math.max(0, Math.floor((dataMin - padding) / axeStep) * axeStep);
+  const yMax = Math.ceil((dataMax + padding) / axeStep) * axeStep;
 
   // Helper to get scenario name by id
   const getScenarioName = (id: string | null) => scenarios.find((s) => s.id === id)?.name ?? "—";
@@ -540,43 +558,31 @@ export function HeadcountEvolutionChart({
               tick={{ fontSize: 12 }}
               className="text-muted-foreground"
               domain={[yMin, yMax]}
+              tickFormatter={(v: number) => formatValue(v)}
+              width={axeStep >= 1000 ? 80 : 60}
             />
             <Tooltip
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const row = payload[0].payload as Record<string, unknown>;
-                const ordre = [
-                  "effectif_brut", "effectif_net", "effectif_reel", "effectif_apres_injustifiees", "effectif_apres_mct", "target",
-                  "scenario_brut", "scenario_net", "scenario_reel", "scenario_apres_mct", "scenario_apres_conges",
-                ];
-                const deltaParent: Record<string, string> = {
-                  effectif_net: "effectif_brut",
-                  effectif_reel: "effectif_net",
-                  // Chaîne : réel −injustifiées→ payé −MCT→ disponible
-                  effectif_apres_injustifiees: "effectif_reel",
-                  effectif_apres_mct: "effectif_apres_injustifiees",
-                  scenario_net: "scenario_brut",
-                  scenario_reel: "scenario_net",
-                  scenario_apres_mct: "scenario_reel",
-                  scenario_apres_conges: "scenario_apres_mct",
-                };
-                const visibles = ordre.filter((k) => visibleSeries.some((s) => s.key === k) && row[k] != null);
+                // L'ordre des séries est celui de la chaîne ; les écarts suivent `parent`
+                const visibles = series.map((s) => s.key).filter((k) => visibleSeries.some((s) => s.key === k) && row[k] != null);
                 return (
                   <div style={{ borderRadius: "8px", border: "1px solid var(--border)", backgroundColor: "var(--background)", padding: "8px 12px", fontSize: 12 }}>
                     {visibles.map((key) => {
-                      const serie = ALL_SERIES.find((s) => s.key === key)!;
+                      const serie = series.find((s) => s.key === key)!;
                       const val = row[key] as number;
-                      const flag = CLE_REPORT[key];
+                      const flag = cleReport.get(key);
                       const reporte = flag != null && row.reporte != null && (row.reporte as Record<string, boolean>)[flag] === true;
                       // Série parente masquée : on remonte la chaîne jusqu'à une série affichée
-                      let parentKey: string | undefined = deltaParent[key];
-                      while (parentKey && !visibles.includes(parentKey)) parentKey = deltaParent[parentKey];
+                      let parentKey: string | undefined = deltaParent.get(key);
+                      while (parentKey && !visibles.includes(parentKey)) parentKey = deltaParent.get(parentKey);
                       const parent = parentKey ? (row[parentKey] as number) : null;
-                      const delta = parent != null ? Math.round((val - parent) * 10) / 10 : null;
+                      const delta = parent != null ? val - parent : null;
                       return (
                         <div key={key} style={{ color: serie.color, padding: "2px 0" }}>
-                          {serie.label} : {val}
-                          {delta != null && <span style={{ fontSize: "0.75em", color: "#999" }}> ({delta >= 0 ? "+" : ""}{delta})</span>}
+                          {serie.label} : {formatValue(val)}
+                          {delta != null && <span style={{ fontSize: "0.75em", color: "#999" }}> ({delta >= 0 ? "+" : "−"}{formatValue(Math.abs(delta))})</span>}
                           {reporte && <span style={{ fontSize: "0.75em", color: "#999", fontStyle: "italic" }}> reporté</span>}
                         </div>
                       );
@@ -590,11 +596,11 @@ export function HeadcountEvolutionChart({
             />
 
             {visibleSeries.map((s) =>
-              CLE_REPORT[s.key] ? (
+              cleReport.has(s.key) ? (
                 // Mesuré en trait plein, reporté en pointillé (même couleur, même pastille)
                 <Fragment key={s.key}>
-                  <Line type="monotone" dataKey={mesureKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} dot={{ r: 3 }} activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined} isAnimationActive={false} />
-                  <Line type="monotone" dataKey={reportKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} strokeDasharray="8 4" dot={{ r: 3, fill: "var(--background)" }} activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined} isAnimationActive={false} />
+                  <Line type="monotone" dataKey={mesureKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} dot={{ r: 3 }} activeDot={s.key === brushDataKey ? { r: 5 } : undefined} isAnimationActive={false} />
+                  <Line type="monotone" dataKey={reportKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} strokeDasharray="8 4" dot={{ r: 3, fill: "var(--background)" }} activeDot={s.key === brushDataKey ? { r: 5 } : undefined} isAnimationActive={false} />
                 </Fragment>
               ) : (
                 <Line
@@ -605,7 +611,8 @@ export function HeadcountEvolutionChart({
                   strokeWidth={2}
                   strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
                   dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
-                  connectNulls={s.dashed === true}
+                  connectNulls={s.connectNulls ?? s.dashed === true}
+                  isAnimationActive={false}
                 />
               )
             )}
@@ -629,7 +636,7 @@ export function HeadcountEvolutionChart({
               endIndex={chartData.length - 1}
             >
               <LineChart data={chartData}>
-                <Line type="monotone" dataKey="effectif_brut" stroke="#93c5fd" strokeWidth={1} dot={false} />
+                <Line type="monotone" dataKey={brushDataKey} stroke="#93c5fd" strokeWidth={1} dot={false} />
               </LineChart>
             </Brush>
           </LineChart>
