@@ -48,8 +48,9 @@ interface Props {
   signe?: boolean;
 }
 
-const euros = (n: number) => (n < 0 ? `−${formatEuros(Math.abs(n))}` : formatEuros(n));
-const eurosSignes = (n: number) => (n >= 0 ? `+${formatEuros(n)}` : `−${formatEuros(Math.abs(n))}`);
+// Un montant qui s'arrondit à zéro s'affiche « 0 € », jamais « −0 € »
+const euros = (n: number) => (Math.abs(n) < 0.5 ? formatEuros(0) : n < 0 ? `−${formatEuros(Math.abs(n))}` : formatEuros(n));
+const eurosSignes = (n: number) => (Math.abs(n) < 0.5 ? formatEuros(0) : n >= 0 ? `+${formatEuros(n)}` : `−${formatEuros(Math.abs(n))}`);
 const pct = (p: number | null | undefined) =>
   p == null ? null : `${p < 0 ? "−" : ""}${Math.abs(p).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
 
