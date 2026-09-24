@@ -89,7 +89,7 @@ export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepo
   }));
 
   return (
-    <Card>
+    <Card id="decomposition-paie">
       <CardHeader>
         <CardTitle className="text-base">Décomposition de la paie — {moisLabel}</CardTitle>
         <CardDescription>

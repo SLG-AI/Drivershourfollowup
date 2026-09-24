@@ -9,6 +9,8 @@ import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
 import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, construireSourceSalaires, fusionnerSourcesPaie, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 import { NATURES, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
+import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
+import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
 import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
 import { valoriserProjection } from "@/lib/utils/wp-couts-scenario";
@@ -361,6 +363,98 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const paieParDepot = ventilerPar(lignesPaieDuMois, (l) => depotParCode.get(l.code_salarie), "(hors photo roster)");
   const paieParFonction = ventilerPar(lignesPaieDuMois, (l) => l.fonction, "(sans fonction)");
 
+  // ---- Détails des cases « Paie réalisée » (Liste des salaires seulement :
+  // les Statistiques rapides n'ont qu'un bloc « Suppléments » indivisible)
+  const realiseDuMois = duMois.realise;
+  const detailsPaie = realiseDuMois.source === "lignes" ? construireDetailsPaie() : null;
+  function construireDetailsPaie(): Record<"supplements" | "cm" | "charges" | "avantages" | "soldes" | "ecart", DetailCase | null> {
+    const brut = realiseDuMois.brut;
+    const part = (n: number) => (brut > 0 ? (n / brut) * 100 : null);
+    const somme = (cle: string, lignes: LignePaieDecomposable[] = lignesPaieDuMois) => lignes.reduce((acc, l) => acc + Number((l as unknown as Record<string, unknown>)[cle] || 0), 0);
+    const lienDecomposition = { href: "#decomposition-paie", libelle: "Voir la décomposition par dépôt et fonction" };
+
+    // Suppléments : les natures, par famille (le brut de base n'en fait pas partie)
+    const sectionsSupplements: DetailSection[] = FAMILLES.map((f) => {
+      const lignes = naturesDuMois.filter((n) => n.famille === f.id).map((n) => ({ libelle: n.libelle, montant: n.montant, part: part(n.montant) }));
+      const montant = lignes.reduce((acc, l) => acc + l.montant, 0);
+      return { titre: f.libelle, montant, part: part(montant), ouvert: f.id === "planning", lignes };
+    }).filter((sec) => sec.lignes.length > 0);
+    const supplements: DetailCase = {
+      sousTitre: `${(part(realiseDuMois.supplements) ?? 0).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} % du total brut · tout ce qui s'ajoute au brut de base`,
+      sections: sectionsSupplements,
+      note: "Part = montant / total brut du mois. Les régularisations sont des retenues (négatives).",
+      lien: lienDecomposition,
+    };
+
+    const cm: DetailCase = {
+      sousTitre: "Caisse maladie, part employeur",
+      sections: [{ titre: "Détail", ouvert: true, lignes: [
+        { libelle: "CM patronale soins", montant: somme("cm_patronale_soins") },
+        { libelle: "CM patronale espèces", montant: somme("cm_patronale_especes") },
+      ] }],
+    };
+
+    const ch = realiseDuMois.charges;
+    const charges: DetailCase = {
+      sousTitre: `${(brut > 0 ? (realiseDuMois.chargesPatronales / brut) * 100 : 0).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} % du total brut`,
+      sections: [{ titre: "Cotisations patronales", ouvert: true, lignes: [
+        { libelle: "CM patronale (soins + espèces)", montant: ch.cm, part: part(ch.cm) },
+        { libelle: "CP patronale", montant: ch.cp, part: part(ch.cp) },
+        { libelle: "Assurance accident", montant: ch.accident, part: part(ch.accident) },
+        { libelle: "Santé au travail", montant: ch.sante, part: part(ch.sante) },
+        { libelle: "Mutualité", montant: ch.mutualite, part: part(ch.mutualite) },
+        { libelle: "Autres cotisations patronales", montant: ch.autres, part: part(ch.autres) },
+      ] }],
+      note: "Les cotisations salariales, l'impôt et le net ne sont pas importés : ils ne changent pas ce que l'employeur décaisse.",
+    };
+
+    const naturesAvantages = naturesDuMois.filter((n) => n.famille === "avantages");
+    const avantages: DetailCase = {
+      sousTitre: "Valorisés dans le brut pour l'impôt, retirés du coût par la paie",
+      sections: [
+        { titre: "Natures d'avantages dans le brut", montant: naturesAvantages.reduce((acc, n) => acc + n.montant, 0), ouvert: true, lignes: naturesAvantages.map((n) => ({ libelle: n.libelle, montant: n.montant })) },
+        { titre: "Déduits du coût employeur par la paie", montant: realiseDuMois.avantagesNature, ouvert: true, lignes: [] },
+      ],
+      note: "Déduits = total brut + charges patronales − coût natures déduites. Un avantage peut figurer dans le brut sans être déduit (allocation en espèces).",
+    };
+
+    const np = lignesPaieDuMois.filter((l) => l.type_remuneration === "non_periodique");
+    const naturesNp = decomposerParNature(np);
+    const soldes: DetailCase = {
+      sousTitre: `${np.length} ligne${np.length > 1 ? "s" : ""} « Rémun. np » (période 13), rattachée${np.length > 1 ? "s" : ""} au mois de l'export`,
+      sections: [
+        { titre: "Par nature (brut)", montant: realiseDuMois.nonPeriodique.brut, ouvert: true, lignes: NATURES.filter((n) => Math.abs(naturesNp.get(n.cle) ?? 0) >= 0.005).map((n) => ({ libelle: n.libelle, montant: naturesNp.get(n.cle) ?? 0 })) },
+        { titre: "Charges patronales sur ces lignes", montant: somme("charges_patronales", np), lignes: [] },
+        { titre: "Coût employeur (compté dans le réalisé)", montant: realiseDuMois.nonPeriodique.employeur, lignes: [] },
+      ],
+      note: "Hors masse salariale courante et hors coefficient : décaissés ce mois, mais ne décrivent pas la paie d'un mois normal.",
+    };
+
+    // Écart réalisé − payé : réconciliation, natures chargées au coefficient réel du mois
+    let ecart: DetailCase | null = null;
+    if (stats.paye != null && stats.realise != null && brut > 0) {
+      const coefReel = realiseDuMois.employeur / brut;
+      const total = stats.realise - stats.paye;
+      const regul = naturesDuMois.filter((n) => n.famille === "regularisations").reduce((acc, n) => acc + n.montant, 0);
+      const soldesBrut = realiseDuMois.nonPeriodique.brut;
+      const supplementsCourants = realiseDuMois.supplements - soldesBrut - regul;
+      const lignesEcart = [
+        { libelle: "Suppléments du mois, chargés (natures × coefficient réel)", montant: supplementsCourants * coefReel },
+        { libelle: "Régularisations, chargées (retenues)", montant: regul * coefReel },
+        { libelle: "Soldes de sortie (coût employeur)", montant: realiseDuMois.nonPeriodique.employeur },
+      ];
+      const explique = lignesEcart.reduce((acc, l) => acc + l.montant, 0);
+      lignesEcart.push({ libelle: "Reste : prorata des entrées et sorties, écart brut indice / brut payé, avantages déduits", montant: total - explique });
+      ecart = {
+        sousTitre: `Réalisé ${formatEuros(stats.realise)} − payé contractuel ${formatEuros(stats.paye)}`,
+        sections: [{ titre: "D'où vient l'écart", montant: total, ouvert: true, lignes: lignesEcart }],
+        note: `Estimation : les natures de paie sont chargées au coefficient réel du mois (${coefReel.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}) ; le « reste » est obtenu par différence.`,
+      };
+    }
+
+    return { supplements, cm, charges, avantages, soldes, ecart };
+  }
+
   const maxValeur = Math.max(0, ...points.map((p) => p.effectif_brut));
   const filtresDesc = [
     filtres.societes.length > 0 ? filtres.societes.join(" + ") : null,
@@ -499,50 +593,49 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
-              {[
-                ["Brut base", duMois.realise.brutBase],
-                ["Suppléments", duMois.realise.supplements],
-                ["Total brut", duMois.realise.brut],
+              {([
+                { libelle: "Brut base", valeur: duMois.realise.brutBase },
+                { libelle: "Suppléments", valeur: duMois.realise.supplements, detail: detailsPaie?.supplements },
+                { libelle: "Total brut", valeur: duMois.realise.brut },
                 // Colonnes propres aux Statistiques rapides, absentes de la Liste des salaires
                 ...(duMois.realise.source === "lignes"
                   ? []
-                  : [["Cotisations totales (Total SECU)", duMois.realise.cotisationsTotales]]),
-                ["CM patronale", duMois.realise.charges.cm],
-                ["CP patronale", duMois.realise.charges.cp],
-                ["Assurance accident", duMois.realise.charges.accident],
-                ...(duMois.realise.source === "lignes" ? [] : [["Allocation familiale", duMois.realise.charges.allocation]]),
-                ["Santé au travail", duMois.realise.charges.sante],
-                ["Mutualité", duMois.realise.charges.mutualite],
-                ["Autres cotisations patronales", duMois.realise.charges.autres],
-                ["Charges patronales", duMois.realise.chargesPatronales],
+                  : [{ libelle: "Cotisations totales (Total SECU)", valeur: duMois.realise.cotisationsTotales }]),
+                { libelle: "CM patronale", valeur: duMois.realise.charges.cm, detail: detailsPaie?.cm },
+                { libelle: "CP patronale", valeur: duMois.realise.charges.cp },
+                { libelle: "Assurance accident", valeur: duMois.realise.charges.accident },
+                ...(duMois.realise.source === "lignes" ? [] : [{ libelle: "Allocation familiale", valeur: duMois.realise.charges.allocation }]),
+                { libelle: "Santé au travail", valeur: duMois.realise.charges.sante },
+                { libelle: "Mutualité", valeur: duMois.realise.charges.mutualite },
+                { libelle: "Autres cotisations patronales", valeur: duMois.realise.charges.autres },
+                { libelle: "Charges patronales", valeur: duMois.realise.chargesPatronales, detail: detailsPaie?.charges },
                 ...(duMois.realise.source === "lignes"
                   ? [
-                    ["Avantages en nature (déduits)", duMois.realise.avantagesNature],
-                    [`Soldes de sortie (${duMois.realise.nonPeriodique.n} ligne${duMois.realise.nonPeriodique.n > 1 ? "s" : ""} non périodique${duMois.realise.nonPeriodique.n > 1 ? "s" : ""})`, duMois.realise.nonPeriodique.employeur],
+                    { libelle: "Avantages en nature (déduits)", valeur: duMois.realise.avantagesNature, detail: detailsPaie?.avantages },
+                    { libelle: `Soldes de sortie (${duMois.realise.nonPeriodique.n} ligne${duMois.realise.nonPeriodique.n > 1 ? "s" : ""} non périodique${duMois.realise.nonPeriodique.n > 1 ? "s" : ""})`, valeur: duMois.realise.nonPeriodique.employeur, detail: detailsPaie?.soldes },
                   ]
                   : []),
-              ].map(([libelle, valeur]) => (
-                <div key={String(libelle)} className="rounded-md border px-3 py-2">
-                  <div className="text-xs text-muted-foreground">{libelle}</div>
-                  <div className="font-medium">{formatEuros(Number(valeur))}</div>
-                </div>
+              ] as { libelle: string; valeur: number; detail?: DetailCase | null }[]).map((c) => (
+                <PaieCase key={c.libelle} libelle={c.libelle} valeur={c.valeur} detail={c.detail ?? null} />
               ))}
-              <div className="rounded-md border border-slate-400 bg-slate-50 px-3 py-2 md:col-span-2">
-                <div className="text-xs text-muted-foreground">Coût employeur réalisé{duMois.realise.employeurMesure ? "" : " (estimé)"}</div>
-                <div className="text-lg font-semibold">{formatEuros(stats.realise ?? 0)}</div>
-                {duMois.realise.employeurMesure && duMois.realise.brut > 0 && (
-                  <div className="text-xs text-muted-foreground">
-                    Coefficient réel du mois : {(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}
-                    {duMois.realise.nonPeriodique.n > 0 ? ` · hors soldes de sortie : ${formatEuros(duMois.realise.employeur - duMois.realise.nonPeriodique.employeur)}` : ""}
-                  </div>
-                )}
-              </div>
+              <PaieCase
+                grande
+                accent
+                libelle={`Coût employeur réalisé${duMois.realise.employeurMesure ? "" : " (estimé)"}`}
+                valeur={stats.realise ?? 0}
+                note={duMois.realise.employeurMesure && duMois.realise.brut > 0
+                  ? `Coefficient réel du mois : ${(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}${duMois.realise.nonPeriodique.n > 0 ? ` · hors soldes de sortie : ${formatEuros(duMois.realise.employeur - duMois.realise.nonPeriodique.employeur)}` : ""}`
+                  : undefined}
+              />
               {stats.paye != null && stats.realise != null && (
-                <div className="rounded-md border px-3 py-2 md:col-span-2">
-                  <div className="text-xs text-muted-foreground">Écart réalisé − payé contractuel</div>
-                  <div className="text-lg font-semibold">{stats.realise - stats.paye >= 0 ? "+" : "−"}{formatEuros(Math.abs(stats.realise - stats.paye))}</div>
-                  <div className="text-xs text-muted-foreground">suppléments, heures supplémentaires, prorata des entrées et sorties, régularisations</div>
-                </div>
+                <PaieCase
+                  grande
+                  signe
+                  libelle="Écart réalisé − payé contractuel"
+                  valeur={stats.realise - stats.paye}
+                  note={detailsPaie?.ecart ? "cliquer pour la réconciliation" : "suppléments, heures supplémentaires, prorata des entrées et sorties, régularisations"}
+                  detail={detailsPaie?.ecart ?? null}
+                />
               )}
             </div>
             {coefParCc.size > 0 && (
