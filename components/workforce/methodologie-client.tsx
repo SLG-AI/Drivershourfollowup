@@ -1415,7 +1415,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
             titre: "Une 6e courbe, pas un palier",
             points: [
               "Le réalisé ne se découpe pas en paliers : il intègre déjà toutes les absences, les suppléments et les heures supplémentaires. Il est tracé à part, en gris, sur les seuls mois qui portent des montants.",
-              "L'écart entre réalisé et payé contractuel se lit sur la carte : il mesure ce que le contractuel ne modélise pas (suppléments, heures supplémentaires, chômage partiel, régularisations).",
+              "L'écart entre réalisé et payé contractuel se lit sur la carte, contre le payé MOYEN du mois (jour par jour, au prorata des entrées et sorties datées) : la paie est un flux du mois entier, pas une photo au 31. Il mesure ce que le contractuel ne modélise pas (suppléments variables, régularisations, soldes de sortie, écart brut indice / brut payé).",
             ],
           },
         ],

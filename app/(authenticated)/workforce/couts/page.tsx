@@ -439,9 +439,13 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
 
     // Écart réalisé − payé : réconciliation, natures chargées au coefficient réel du mois
     let ecart: DetailCase | null = null;
-    if (stats.paye != null && stats.realise != null && brut > 0) {
+    // La paie est un flux du mois entier : on la compare au payé MOYEN du mois
+    // (jour par jour, dates d'entrée et de sortie, sortants hors photo), pas au
+    // palier de fin de mois, quand la vue Moyenne l'a calculé.
+    const payeReference = stats.paye_moyen ?? stats.paye;
+    if (payeReference != null && stats.realise != null && brut > 0) {
       const coefReel = realiseDuMois.employeur / brut;
-      const total = stats.realise - stats.paye;
+      const total = stats.realise - payeReference;
       const regul = naturesDuMois.filter((n) => n.famille === "regularisations").reduce((acc, n) => acc + n.montant, 0);
       const soldesBrut = realiseDuMois.nonPeriodique.brut;
       // Le 13e mois proratisé et la prime de fonction sont déjà dans le contractuel (taux mesuré) : hors de l'écart
@@ -454,9 +458,14 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
         { libelle: "Soldes de sortie (coût employeur)", montant: realiseDuMois.nonPeriodique.employeur },
       ];
       const explique = lignesEcart.reduce((acc, l) => acc + l.montant, 0);
-      lignesEcart.push({ libelle: "Reste : prorata des entrées et sorties, écart brut indice / brut payé, compléments récurrents réels vs taux, avantages déduits", montant: total - explique });
+      lignesEcart.push({
+        libelle: stats.paye_moyen != null
+          ? "Reste : écart brut indice / brut payé, compléments récurrents réels vs taux, avantages déduits, entrées et sorties non datées"
+          : "Reste : prorata des entrées et sorties, écart brut indice / brut payé, compléments récurrents réels vs taux, avantages déduits",
+        montant: total - explique,
+      });
       ecart = {
-        sousTitre: `Réalisé ${formatEuros(stats.realise)} − payé contractuel ${formatEuros(stats.paye)}`,
+        sousTitre: `Réalisé ${formatEuros(stats.realise)} − payé contractuel ${formatEuros(payeReference)}${stats.paye_moyen != null ? " (moyenne du mois, au prorata des entrées et sorties)" : " (fin de mois)"}`,
         sections: [{ titre: "D'où vient l'écart", montant: total, ouvert: true, lignes: lignesEcart }],
         note: `Estimation : les natures de paie sont chargées au coefficient réel du mois (${coefReel.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}) ; le « reste » est obtenu par différence.`,
       };
@@ -637,12 +646,12 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                   ? `Coefficient réel du mois : ${(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}${duMois.realise.nonPeriodique.n > 0 ? ` · hors soldes de sortie : ${formatEuros(duMois.realise.employeur - duMois.realise.nonPeriodique.employeur)}` : ""}`
                   : undefined}
               />
-              {stats.paye != null && stats.realise != null && (
+              {(stats.paye_moyen ?? stats.paye) != null && stats.realise != null && (
                 <PaieCase
                   grande
                   signe
-                  libelle="Écart réalisé − payé contractuel"
-                  valeur={stats.realise - stats.paye}
+                  libelle={`Écart réalisé − payé contractuel${stats.paye_moyen != null ? " (moyenne du mois)" : ""}`}
+                  valeur={stats.realise - (stats.paye_moyen ?? stats.paye ?? 0)}
                   note={detailsPaie?.ecart ? "cliquer pour la réconciliation" : "suppléments, heures supplémentaires, prorata des entrées et sorties, régularisations"}
                   detail={detailsPaie?.ecart ?? null}
                 />

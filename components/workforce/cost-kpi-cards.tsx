@@ -52,8 +52,11 @@ const euros = (n: number | undefined | null) => (n == null ? "—" : formatEuros
 const pct = (n: number) => `${n.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
 
 export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; lienMethodologie: string }) {
-  const ecart = stats.realise != null && stats.paye != null ? stats.realise - stats.paye : null;
-  const ecartPct = ecart != null && stats.paye ? (ecart / stats.paye) * 100 : null;
+  // La paie est un flux du mois : l'écart se lit contre le payé MOYEN (prorata
+  // des entrées et sorties) quand il existe, sinon contre la fin de mois.
+  const payeReference = stats.paye_moyen ?? stats.paye;
+  const ecart = stats.realise != null && payeReference != null ? stats.realise - payeReference : null;
+  const ecartPct = ecart != null && payeReference ? (ecart / payeReference) * 100 : null;
 
   const cards = [
     {
@@ -100,7 +103,7 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       value: stats.realise != null ? euros(stats.realise) : "—",
       description:
         stats.realise != null
-          ? `${stats.realise_lignes.toLocaleString("fr-FR")} lignes de paie${ecart != null ? ` · écart vs payé contractuel ${ecart >= 0 ? "+" : "−"}${euros(Math.abs(ecart))}${ecartPct != null ? ` (${ecartPct >= 0 ? "+" : "−"}${pct(Math.abs(ecartPct))})` : ""}` : ""}`
+          ? `${stats.realise_lignes.toLocaleString("fr-FR")} lignes de paie${ecart != null ? ` · écart vs payé contractuel${stats.paye_moyen != null ? " moyen" : ""} ${ecart >= 0 ? "+" : "−"}${euros(Math.abs(ecart))}${ecartPct != null ? ` (${ecartPct >= 0 ? "+" : "−"}${pct(Math.abs(ecartPct))})` : ""}` : ""}`
           : `Aucun montant importé pour ${stats.mois_label}`,
       average: null,
       note:
