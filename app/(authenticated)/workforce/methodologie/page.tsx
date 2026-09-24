@@ -22,7 +22,7 @@ import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } 
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
-import { calculerCoefficientCharges, calculerCoutsPaliers, construireSourceSalaires, fusionnerSourcesPaie, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerCoutsPaliers, construireSourceSalaires, fusionnerSourcesPaie, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 
 interface Props {
   searchParams: Promise<{
@@ -234,6 +234,8 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
   // Coûts : la même chaîne en euros (page Coûts)
   // ============================================================
   const coefficient = calculerCoefficientCharges(paie, filtres.actifs ? codesRoster : undefined);
+  // Coefficient par cost center : le même que la page Coûts, sinon les paliers en euros divergent de quelques dizaines d'euros
+  const coefParCc = calculerCoefficientsParCostCenter(paie);
   const sourceSalaires = construireSourceSalaires(roster as unknown as SalarieCout[], photoReference as SalarieCout[] | null);
   const coutsPaliers = calculerCoutsPaliers(
     roster as unknown as SalarieCout[],
@@ -242,7 +244,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
     selectedMonth,
     selectedYear,
-    { coef: coefficient.coef, source: sourceSalaires }
+    { coef: coefficient.coef, source: sourceSalaires, coefParCc }
   );
   const realise = realiseDuMois(paie, selectedMonth, selectedYear, filtres.actifs ? codesRoster : undefined);
 

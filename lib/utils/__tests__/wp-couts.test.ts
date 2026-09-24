@@ -526,3 +526,28 @@ describe("fusionnerSourcesPaie — la Liste des salaires remplace les Statistiqu
     expect(parCc.get("CC2")?.coef).toBeCloseTo(6900 / 6250, 9);
   });
 });
+
+describe("calculerCoutsPaliers — opérandes de la valorisation des heures (méthodologie)", () => {
+  it("expose heures retenues, heures travaillables, ETP équivalents, coût moyen appliqué et lignes au repli", () => {
+    const photo = [
+      salarie({ code_salarie: "A", taux_occupation: 100, brut_indice: 4000 }),
+      salarie({ code_salarie: "B", taux_occupation: 100 }), // sans brut ⇒ repli
+    ];
+    const travaillables = getWorkableHoursInMonth(2026, 8);
+    const mct = [
+      { code_salarie: "A", mois: 8, duree_hrs: 16 },
+      { code_salarie: "B", mois: 8, duree_hrs: 8 },
+      { code_salarie: "A", mois: 7, duree_hrs: 99 }, // autre mois, ignorée
+    ];
+    const c = calculerCoutsPaliers(photo, [], mct, [], 8, 2026, { coef: 1.15, source: sourceDe(photo), coutEtpRepli: 2300 });
+    expect(c.heures.travaillables).toBe(travaillables);
+    expect(c.heures.mct.lignes).toBe(2);
+    expect(c.heures.mct.heures).toBe(24);
+    expect(c.heures.mct.etp).toBeCloseTo(24 / travaillables, 9);
+    expect(c.heures.mct.lignesAuRepli).toBe(1);
+    const attendu = (16 / travaillables) * 4000 * 1.15 + (8 / travaillables) * 2300;
+    expect(c.heures.mct.cout).toBe(Math.round(attendu));
+    expect(c.heures.mct.coutEtpApplique).toBeCloseTo(attendu / (24 / travaillables), 6);
+    expect(c.heures.injustifiees).toEqual({ lignes: 0, heures: 0, etp: 0, cout: 0, coutEtpApplique: 0, lignesAuRepli: 0 });
+  });
+});

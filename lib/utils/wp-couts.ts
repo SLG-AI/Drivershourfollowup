@@ -416,6 +416,14 @@ export interface CoutsMois {
   /** Coût employeur moyen d'un ETP sous contrat ce mois = sousContrat / Σ ETP des actifs (0 si aucun). */
   coutMoyenEtp: number;
 
+  /** Opérandes de la valorisation des absences en heures (MCT, injustifiées), pour la méthodologie. */
+  heures: {
+    /** Heures travaillables du mois : jours ouvrés × 8. */
+    travaillables: number;
+    mct: DetailHeuresValorisees;
+    injustifiees: DetailHeuresValorisees;
+  };
+
   etapes: EtapeCout[];
 
   reporte: {
@@ -424,6 +432,21 @@ export interface CoutsMois {
     /** Salariés actifs comptés au coût de repli faute de brut. */
     codesManquants: number;
   };
+}
+
+/** Comment un ensemble d'absences en heures a été valorisé. */
+export interface DetailHeuresValorisees {
+  /** Lignes retenues (du mois, périmètre appliqué). */
+  lignes: number;
+  heures: number;
+  /** heures / heures travaillables. */
+  etp: number;
+  /** Coût employeur retiré, en euros arrondis. */
+  cout: number;
+  /** Coût moyen d'un ETP effectivement appliqué = cout / etp (0 sans heures). */
+  coutEtpApplique: number;
+  /** Lignes valorisées au coût de repli (salarié sans brut connu). */
+  lignesAuRepli: number;
 }
 
 /**
@@ -509,6 +532,18 @@ export function calculerCoutsPaliers(
     heuresTravaillables > 0
       ? lignes.reduce((s, a) => s + (nombre(a.duree_hrs) / heuresTravaillables) * coutEtpDe(a.code_salarie), 0)
       : 0;
+  const detailHeures = (lignes: LigneHeures[], cout: number): DetailHeuresValorisees => {
+    const heures = lignes.reduce((s, a) => s + nombre(a.duree_hrs), 0);
+    const etp = heuresTravaillables > 0 ? heures / heuresTravaillables : 0;
+    return {
+      lignes: lignes.length,
+      heures,
+      etp,
+      cout: Math.round(cout),
+      coutEtpApplique: etp > 0 ? cout / etp : 0,
+      lignesAuRepli: lignes.filter((a) => brutChargeParCode.get(a.code_salarie) == null).length,
+    };
+  };
 
   // --- MCT : heures converties en ETP, restreintes aux actifs comme dans wp-paliers
   const mctDuMois = duMois(absencesMct).filter((a) => codes.size === 0 || codes.has(a.code_salarie));
@@ -543,6 +578,11 @@ export function calculerCoutsPaliers(
     coutPerduMct: euro(coutPerduMct),
     apresMct: euro(apresMct),
     coutMoyenEtp: euro(coutMoyenEtp),
+    heures: {
+      travaillables: heuresTravaillables,
+      mct: detailHeures(mctDuMois, coutPerduMct),
+      injustifiees: detailHeures(injDuMois, coutPerduInjustifiees),
+    },
     etapes: [
       { cle: "effectif-sous-contrat", libelle: "Effectif sous contrat", cout: euro(sousContrat), retire: 0, mesure: true },
       { cle: "effectif-apres-suspension", libelle: "Après suspension de contrat", cout: euro(apresSuspension), retire: euro(coutSuspendu), mesure: true },

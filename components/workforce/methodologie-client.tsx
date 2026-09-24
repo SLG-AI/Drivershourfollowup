@@ -1320,17 +1320,36 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-mct",
         titre: "Coût des absences payées (MCT)",
-        definition: "Les maladies non prises en charge sont payées par l'employeur : leur coût sort du disponible sans sortir du payé.",
+        definition: "Les maladies non prises en charge sont payées par l'employeur : leur coût sort du disponible sans sortir du payé. Chaque heure d'absence est valorisée au coût employeur d'un ETP du salarié concerné.",
         valeur: p ? euros(p.coutPerduMct) : undefined,
-        formule: "disponible = payé − MCT",
+        formule: "MCT = Σ (heures MCT du salarié / heures travaillables du mois) × brut plein temps du salarié × coefficient ; disponible = payé − MCT",
         operandes: p
           ? [
-              { label: "Payé", valeur: euros(p.apresInjustifiees) },
+              { label: "Heures MCT retenues", valeur: `${nf(p.heures.mct.heures, 1)} h (${nf(p.heures.mct.lignes, 0)} lignes)` },
+              { label: "Heures travaillables", valeur: `${nf(p.heures.travaillables, 0)} h` },
+              { label: "ETP équivalents", valeur: etp(p.heures.mct.etp) },
+              { label: "Coût moyen par ETP appliqué", valeur: p.heures.mct.etp > 0 ? euros(p.heures.mct.coutEtpApplique) : "—" },
               { label: "MCT", valeur: euros(p.coutPerduMct) },
+              { label: "Payé", valeur: euros(p.apresInjustifiees) },
               { label: "Disponible", valeur: euros(p.apresMct) },
             ]
           : undefined,
+        valeurNote: p && p.heures.mct.lignesAuRepli > 0 ? `${nf(p.heures.mct.lignesAuRepli, 0)} ligne${p.heures.mct.lignesAuRepli > 1 ? "s" : ""} valorisée${p.heures.mct.lignesAuRepli > 1 ? "s" : ""} au coût moyen par ETP du mois (salarié sans brut connu)` : undefined,
         details: [
+          {
+            titre: "Les heures retenues",
+            points: [
+              "Les lignes MCT du mois affiché, hors week-end (les heures travaillables ne comptent que du lundi au vendredi), restreintes aux salariés actifs en fin de mois dans la photo roster du périmètre. Un salarié en MCT sorti avant la fin du mois n'y figure pas.",
+              "Heures travaillables = jours ouvrés du mois (fériés luxembourgeois exclus) × 8 h. Une absence de 8 h vaut 1 / jours ouvrés d'ETP-mois.",
+            ],
+          },
+          {
+            titre: "Un coût par salarié, pas un taux moyen",
+            points: [
+              "Chaque fraction d'ETP est valorisée au brut plein temps du salarié (brut indice du roster) × coefficient de charges (celui de son cost center quand la paie le donne, sinon le global). Un absent bien payé pèse plus qu'un absent au salaire minimum ; le « coût moyen par ETP appliqué » ci-dessus est le résultat de cette pondération, pas une entrée.",
+              "Ce coût vient du contractuel (roster), pas de la paie réelle : la Liste des salaires ne porte pas les heures d'absence et ne change rien ici.",
+            ],
+          },
           {
             titre: "Pourquoi ce palier vient après le payé",
             points: [
