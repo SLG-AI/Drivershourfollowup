@@ -5,6 +5,7 @@ import {
   messagesControleBrutIndice,
   messagesControleMontantsSalariaux,
 } from "./wp-controle-montants";
+import { NATURES, natureDepuisEntete, sommeNatures } from "./wp-natures-paie";
 import * as XLSX from "xlsx";
 
 // ============================================================
@@ -74,7 +75,7 @@ function findCol(headers: string[], ...keywords: string[]): number {
 // Types
 // ============================================================
 
-export type WpFileType = "roster_rh" | "salary_stats" | "absences_cns" | "absences_mct" | "absences_injustifiees" | "mouvements";
+export type WpFileType = "roster_rh" | "salary_stats" | "salary_lines" | "absences_cns" | "absences_mct" | "absences_injustifiees" | "mouvements";
 
 export interface WpParseResult {
   fileType: WpFileType;
@@ -469,6 +470,251 @@ export function parseSalaryStats(buffer: ArrayBuffer): WpParseResult {
   const controles = messagesControleMontantsSalariaux(controlerMontantsSalariaux(data, colonnesMontants));
 
   return { fileType: "salary_stats", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, controles, detectedMonth, detectedYear };
+}
+
+// ============================================================
+// 2b. Liste des salaires parser (StatAvecCS)
+// ============================================================
+
+/**
+ * Une ligne de la « Liste des salaires » : un salarié, un mois, un type de
+ * rémunération. Le brut est décomposé par nature (clés `nat_*`, voir
+ * wp-natures-paie.ts) ; le coût employeur est celui que la paie calcule.
+ * Net, impôts, cotisations salariales, chèques repas, frais et solde à virer
+ * ne sont pas lus (décision utilisateur).
+ */
+export interface SalaryLineRow {
+  code_salarie: string;
+  mois: number;
+  annee: number;
+  /** « Salaire » ⇒ salaire ; « Rémun. np » (période 13) ⇒ non_periodique. */
+  type_remuneration: "salaire" | "non_periodique";
+  centre_cout: string;
+  fonction: string;
+  tache_pct: number;
+  brut_base: number;
+  total_brut: number;
+  cm_patronale_soins: number;
+  cm_patronale_especes: number;
+  cm_patronale: number;
+  cp_patronale: number;
+  assurance_accident: number;
+  sante_travail: number;
+  mutualite: number;
+  cot_pat_autres: number;
+  charges_patronales: number;
+  avantages_nature: number;
+  cout_employeur: number;
+  [nature: `nat_${string}`]: number;
+}
+
+/** Bandeau de l'export : « Liste des salaires », Année N, De mois X à mois Y. */
+function lireBandeauListeSalaires(metaRow: unknown[] | undefined): { annee?: number; moisDe?: number; moisA?: number } {
+  const r: { annee?: number; moisDe?: number; moisA?: number } = {};
+  if (!metaRow) return r;
+  for (let i = 0; i < metaRow.length; i++) {
+    const val = normalizeText(String(metaRow[i] || ""));
+    if (!val || i + 1 >= metaRow.length) continue;
+    if (val.includes("annee")) {
+      const y = parseNumeric(metaRow[i + 1]);
+      if (y > 2000) r.annee = y;
+    } else if (val.includes("mois") && val.includes("reference")) {
+      const m = parseNumeric(metaRow[i + 1]);
+      if (m >= 1 && m <= 12) {
+        if (val.startsWith("de ")) r.moisDe = m;
+        else if (val.startsWith("a ")) r.moisA = m;
+        else if (r.moisDe === undefined) r.moisDe = m;
+        else r.moisA = m;
+      }
+    }
+  }
+  return r;
+}
+
+export function parseSalaryLines(buffer: ArrayBuffer): WpParseResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const vide = (e: string[]): WpParseResult => ({ fileType: "salary_lines", data: [], rowCount: 0, errors: e, warnings });
+
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: "array" });
+  } catch {
+    return vide(["Impossible de lire le fichier Excel."]);
+  }
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
+
+  const bandeau = lireBandeauListeSalaires(rows[0] as unknown[] | undefined);
+  const detectedYear = bandeau.annee;
+  const detectedMonth = bandeau.moisDe;
+
+  const header = findHeaderRow(rows, ["code salarie"]);
+  if (!header) return { ...vide(["En-têtes non détectés."]), detectedYear, detectedMonth };
+  const h = header.headers;
+  const hn = Array.from(h, (x) => normalizeText(x || "").replace(/\s+/g, " "));
+
+  // Toutes les colonnes sont cherchées STRICTEMENT : avec une cinquantaine
+  // d'en-têtes, un repli sur un mot isolé (« brut », « base ») lirait la
+  // mauvaise colonne en silence.
+  const colCode = findColStrict(h, "code", "salarie");
+  const colPeriode = findColStrict(h, "periode");
+  const colCentreCout = findColStrict(h, "centre", "cout");
+  const colFonction = findColStrict(h, "fonction");
+  const colType = findColStrict(h, "sal/rnp");
+  const colTache = findColStrict(h, "tache");
+  const colBrutBase = hn.findIndex((x) => x === "brut base");
+  const colBrutNatures = hn.findIndex((x) => x === "brut base + natures");
+  const colTotalBrut = hn.findIndex((x) => x === "total brut");
+  const colCmSoins = findColStrict(h, "cm", "patr", "soins");
+  const colCmEspeces = findColStrict(h, "cm", "patr", "especes");
+  const colCpPat = findColStrict(h, "cp", "patronale");
+  const colAccident = findColStrict(h, "assurance", "accident");
+  const colSante = findColStrict(h, "sante", "travail");
+  const colMutualite = findColStrict(h, "mutualite");
+  const colCotPatAutres = findColStrict(h, "cot", "pat", "autres");
+  const colCout = findColStrict(h, "cout", "natures", "deduites");
+
+  if (colCode === -1) return { ...vide(["Colonne 'Code salarié' non trouvée."]), detectedYear, detectedMonth };
+  if (colBrutBase === -1 || colTotalBrut === -1) {
+    return { ...vide(["Colonnes 'Brut base' et 'Total brut' non trouvées : ce fichier n'est pas une Liste des salaires."]), detectedYear, detectedMonth };
+  }
+  if (colCout === -1) warnings.push("Colonne « Coût natures déduites » absente : le coût employeur sera brut + charges patronales.");
+
+  // Les natures sont les colonnes entre « Brut base » et « Brut base + natures »
+  // (à défaut « Total brut »), reconnues par leur code. Une colonne inconnue
+  // dans cet intervalle est signalée : elle entre dans le total brut du
+  // fichier mais dans aucune famille.
+  const finNatures = colBrutNatures >= 0 ? colBrutNatures : colTotalBrut;
+  const colonnesNatures: { col: number; cle: `nat_${string}` }[] = [];
+  const naturesInconnues: string[] = [];
+  const naturesVues = new Set<string>();
+  for (let c = colBrutBase + 1; c < finNatures; c++) {
+    if (!hn[c]) continue;
+    const nature = natureDepuisEntete(hn[c]);
+    if (!nature) {
+      naturesInconnues.push(h[c].trim());
+    } else if (naturesVues.has(nature.cle)) {
+      warnings.push(`Nature « ${h[c].trim()} » en double : seule la première colonne est lue.`);
+    } else {
+      naturesVues.add(nature.cle);
+      colonnesNatures.push({ col: c, cle: nature.cle });
+    }
+  }
+  if (naturesInconnues.length > 0) {
+    warnings.push(`Nature${naturesInconnues.length > 1 ? "s" : ""} de paie non classée${naturesInconnues.length > 1 ? "s" : ""}, ignorée${naturesInconnues.length > 1 ? "s" : ""} dans la décomposition : ${naturesInconnues.join(", ")}. À déclarer dans wp-natures-paie.ts.`);
+  }
+
+  const lire = (col: number, row: unknown[]) => (col >= 0 ? parseNumeric(row[col]) : 0);
+  const currentYear = new Date().getFullYear();
+  const annee = detectedYear || currentYear;
+  const data: SalaryLineRow[] = [];
+  let lignesTotal = 0;
+  let lignesSansMois = 0;
+  let nonPeriodiques = 0;
+  let ecartsBrut = 0;
+  let ecartsCout = 0;
+  const periodes = new Set<number>();
+
+  for (let i = header.index + 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[];
+    if (!row || row.length === 0) continue;
+    const codeSalarie = String(row[colCode] || "").trim();
+    if (!codeSalarie) continue;
+    // Ligne « Total général » en fin d'export
+    if (normalizeText(codeSalarie).startsWith("total")) {
+      lignesTotal++;
+      continue;
+    }
+
+    const typeLu = colType >= 0 ? normalizeText(String(row[colType] || "")) : "";
+    const periodeLue = colPeriode >= 0 ? parseNumeric(row[colPeriode]) : 0;
+    // Période 13 (ou « Rémun. np ») : rémunération non périodique, rattachée
+    // au mois de l'export.
+    const nonPeriodique = periodeLue === 13 || typeLu.includes("np");
+    let mois: number;
+    if (nonPeriodique) {
+      mois = detectedMonth ?? 0;
+    } else {
+      mois = periodeLue >= 1 && periodeLue <= 12 ? periodeLue : (detectedMonth ?? 0);
+    }
+    if (mois === 0) lignesSansMois++;
+    else periodes.add(mois);
+    if (nonPeriodique) nonPeriodiques++;
+
+    const ligne: SalaryLineRow = {
+      code_salarie: codeSalarie,
+      mois,
+      annee,
+      type_remuneration: nonPeriodique ? "non_periodique" : "salaire",
+      centre_cout: colCentreCout >= 0 ? String(row[colCentreCout] || "") : "",
+      fonction: colFonction >= 0 ? String(row[colFonction] || "") : "",
+      tache_pct: lire(colTache, row),
+      brut_base: lire(colBrutBase, row),
+      total_brut: lire(colTotalBrut, row),
+      cm_patronale_soins: lire(colCmSoins, row),
+      cm_patronale_especes: lire(colCmEspeces, row),
+      cm_patronale: 0,
+      cp_patronale: lire(colCpPat, row),
+      assurance_accident: lire(colAccident, row),
+      sante_travail: lire(colSante, row),
+      mutualite: lire(colMutualite, row),
+      cot_pat_autres: lire(colCotPatAutres, row),
+      charges_patronales: 0,
+      avantages_nature: 0,
+      cout_employeur: 0,
+    };
+    for (const n of NATURES) ligne[n.cle] = 0;
+    for (const { col, cle } of colonnesNatures) ligne[cle] = parseNumeric(row[col]);
+
+    ligne.cm_patronale = ligne.cm_patronale_soins + ligne.cm_patronale_especes;
+    ligne.charges_patronales =
+      ligne.cm_patronale + ligne.cp_patronale + ligne.assurance_accident + ligne.sante_travail + ligne.mutualite + ligne.cot_pat_autres;
+    const brutPlusCharges = ligne.total_brut + ligne.charges_patronales;
+    ligne.cout_employeur = colCout >= 0 ? lire(colCout, row) : brutPlusCharges;
+    // Le coût de la paie retire les avantages en nature (voiture…) du brut
+    // chargé ; l'écart est conservé pour que brut + charges − avantages = coût.
+    ligne.avantages_nature = Math.round((brutPlusCharges - ligne.cout_employeur) * 100) / 100;
+
+    // Contrôles de cohérence ligne à ligne
+    if (Math.abs(ligne.brut_base + sommeNatures(ligne) - ligne.total_brut) > 0.05) ecartsBrut++;
+    if (ligne.avantages_nature < -0.05) ecartsCout++;
+
+    data.push(ligne);
+  }
+
+  if (lignesTotal > 0) warnings.push(`${lignesTotal} ligne${lignesTotal > 1 ? "s" : ""} de total ignorée${lignesTotal > 1 ? "s" : ""}.`);
+  if (nonPeriodiques > 0) {
+    warnings.push(`${nonPeriodiques} ligne${nonPeriodiques > 1 ? "s" : ""} « Rémun. np » (rémunération non périodique, période 13) rattachée${nonPeriodiques > 1 ? "s" : ""} au mois de l'export, hors masse salariale courante.`);
+  }
+  if (lignesSansMois > 0) {
+    warnings.push(`${lignesSansMois} ligne${lignesSansMois > 1 ? "s" : ""} sans période valide : le mois choisi à l'écran leur sera appliqué.`);
+  }
+  if (periodes.size > 1) {
+    warnings.push(`Fichier multi-mois : ${[...periodes].sort((a, b) => a - b).join(", ")}. Chaque mois présent remplacera celui déjà importé.`);
+  }
+  if (data.length === 0) errors.push("Aucune ligne de paie trouvée.");
+
+  const controles: string[] = [];
+  if (ecartsBrut > 0) {
+    controles.push(`${ecartsBrut} ligne${ecartsBrut > 1 ? "s" : ""} dont brut de base + natures ≠ total brut${naturesInconnues.length > 0 ? " (natures non classées ?)" : ""}.`);
+  }
+  if (ecartsCout > 0) {
+    controles.push(`${ecartsCout} ligne${ecartsCout > 1 ? "s" : ""} dont le coût employeur dépasse brut + charges patronales.`);
+  }
+  const sansMontants = data.length > 0 && !data.some((l) => l.total_brut > 0 || l.brut_base > 0);
+  if (sansMontants) controles.push("Aucune ligne ne porte de montant : fichier « sans salaire » ?");
+
+  return {
+    fileType: "salary_lines",
+    data: data as unknown as Record<string, unknown>[],
+    rowCount: data.length,
+    errors,
+    warnings,
+    controles,
+    detectedMonth,
+    detectedYear,
+  };
 }
 
 // ============================================================
@@ -1193,6 +1439,9 @@ export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
   if (allText.includes("nb entree") || allText.includes("nb sortie")) {
     return "mouvements";
   }
+  if (allText.includes("liste des salaires")) {
+    return "salary_lines";
+  }
   if (allText.includes("statistiques rapides") || allText.includes("hrs base decsal") || allText.includes("etat du salaire")) {
     return "salary_stats";
   }
@@ -1218,6 +1467,8 @@ export function parseWpFile(buffer: ArrayBuffer, fileType: WpFileType): WpParseR
       return parseRosterRH(buffer);
     case "salary_stats":
       return parseSalaryStats(buffer);
+    case "salary_lines":
+      return parseSalaryLines(buffer);
     case "absences_cns":
       return parseAbsencesCNS(buffer);
     case "absences_mct":

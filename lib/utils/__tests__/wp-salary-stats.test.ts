@@ -94,3 +94,30 @@ describe("en-têtes avec cellules vides", () => {
     expect(r.data[0].mois).toBe(8);
   });
 });
+
+import { preparerLignesPaie } from "../wp-salary-import";
+
+describe("preparerLignesPaie — une période par ligne, toutes les périodes rendues", () => {
+  it("garde le mois de chaque ligne, applique le repli aux lignes sans période, rend chaque période présente une fois", () => {
+    const data = [
+      { code_salarie: "A", mois: 7, annee: 2026, total_brut: 1 },
+      { code_salarie: "B", mois: 8, annee: 2026, total_brut: 1 },
+      { code_salarie: "C", mois: 8, annee: 2026, total_brut: 1 },
+      { code_salarie: "D", mois: 0, annee: 2026, total_brut: 1 },
+      { code_salarie: "E", mois: 0, annee: 0, total_brut: 1 },
+    ];
+    const { lignes, ecartees, periodes } = preparerLignesPaie(data, "imp-9", 8, 2026);
+    expect(lignes).toHaveLength(5);
+    expect(ecartees).toBe(0);
+    expect(lignes.map((l) => l.mois)).toEqual([7, 8, 8, 8, 8]);
+    expect(lignes.every((l) => l.import_id === "imp-9")).toBe(true);
+    expect(periodes).toEqual([{ mois: 7, annee: 2026 }, { mois: 8, annee: 2026 }]);
+  });
+
+  it("écarte les lignes sans période ni repli", () => {
+    const { lignes, ecartees, periodes } = preparerLignesPaie([{ code_salarie: "A", mois: 0, annee: 0 }], "imp-9");
+    expect(lignes).toEqual([]);
+    expect(ecartees).toBe(1);
+    expect(periodes).toEqual([]);
+  });
+});

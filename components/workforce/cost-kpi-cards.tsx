@@ -108,9 +108,9 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       title: "Coefficient de charges patronales",
       ancre: "coefficient-charges",
       value: stats.coefficient.toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }),
-      description: stats.coefficient_source ?? "Valeur par défaut : aucun mois de statistiques salariales avec montants",
+      description: stats.coefficient_source ?? "Valeur par défaut : aucun mois de paie avec charges patronales",
       average: null,
-      note: stats.coefficient_source ? null : "À affiner en important des Statistiques rapides avec salaires",
+      note: stats.coefficient_source ? null : "À affiner en important une Liste des salaires",
       icon: Percent, iconColor: stats.coefficient_source ? "text-emerald-600" : "text-amber-600", iconBg: stats.coefficient_source ? "bg-emerald-50" : "bg-amber-50",
     },
     {

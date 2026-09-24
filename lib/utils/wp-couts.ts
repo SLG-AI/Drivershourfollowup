@@ -15,8 +15,9 @@
  * `brut_indice` est le brut MENSUEL À PLEIN TEMPS de l'indice (vérifié en
  * base : il n'est PAS proratisé par le taux d'occupation, d'où la
  * multiplication par `etpDe`). `coef` est le coefficient de charges
- * patronales, observé sur les statistiques salariales (Σ coût total sécu /
- * Σ brut) ou pris à la valeur par défaut faute de données.
+ * patronales, observé sur la paie réelle (Σ coût employeur / Σ brut, Liste des
+ * salaires ou Statistiques rapides) ou pris à la valeur par défaut faute de
+ * données.
  *
  * Deux sources d'imprécision sont rendues VISIBLES plutôt que masquées :
  *  - un mois dont la photo ne porte aucun salaire lit les bruts dans la
@@ -66,15 +67,86 @@ export interface LigneStatSalariale {
   mutualite?: unknown;
   cot_pat_autres?: unknown;
   centre_cout?: string | null;
+  /**
+   * Coût employeur tel que la paie le calcule (Liste des salaires : brut +
+   * charges − avantages en nature). Absent ou nul, le coût est brut + charges.
+   */
+  cout_employeur?: unknown;
+  /** Ligne « Rémun. np » de la Liste des salaires : décaissée ce mois, hors masse salariale courante. */
+  non_periodique?: boolean;
+  /** D'où vient la ligne : « lignes » (Liste des salaires) ou « stats » (Statistiques rapides). */
+  source?: "stats" | "lignes";
 }
 
 /** Une ligne dont les charges patronales sont connues : le coût employeur peut en être lu. */
 export function ligneAvecCharges(l: LigneStatSalariale): boolean {
   return nombre(l.charges_patronales) > 0;
 }
-/** Coût employeur d'une ligne = brut + charges patronales. */
+/** Coût employeur d'une ligne : celui de la paie s'il est porté, sinon brut + charges patronales. */
 export function coutEmployeurDeLaLigne(l: LigneStatSalariale): number {
-  return nombre(l.total_brut) + nombre(l.charges_patronales);
+  const paie = nombre(l.cout_employeur);
+  return paie > 0 ? paie : nombre(l.total_brut) + nombre(l.charges_patronales);
+}
+
+/** Ligne de wp_salary_lines, telle que la page la lit. */
+export interface LignePaieDetaillee {
+  code_salarie: string;
+  mois: number | string;
+  annee: number | string;
+  type_remuneration?: string | null;
+  centre_cout?: string | null;
+  fonction?: string | null;
+  brut_base?: unknown;
+  total_brut?: unknown;
+  charges_patronales?: unknown;
+  cm_patronale?: unknown;
+  cp_patronale?: unknown;
+  assurance_accident?: unknown;
+  sante_travail?: unknown;
+  mutualite?: unknown;
+  cot_pat_autres?: unknown;
+  cout_employeur?: unknown;
+  avantages_nature?: unknown;
+  [nature: `nat_${string}`]: unknown;
+}
+
+/** Une ligne de la Liste des salaires vue comme une ligne de statistiques salariales. */
+export function ligneStatDepuisPaie(l: LignePaieDetaillee): LigneStatSalariale {
+  return {
+    code_salarie: l.code_salarie,
+    mois: l.mois,
+    annee: l.annee,
+    total_brut: nombre(l.total_brut),
+    brut_base: nombre(l.brut_base),
+    supplements: nombre(l.total_brut) - nombre(l.brut_base),
+    charges_patronales: nombre(l.charges_patronales),
+    cm_patronale: nombre(l.cm_patronale),
+    cp_patronale: nombre(l.cp_patronale),
+    assurance_accident: nombre(l.assurance_accident),
+    allocation_familiale: 0,
+    sante_travail: nombre(l.sante_travail),
+    mutualite: nombre(l.mutualite),
+    cot_pat_autres: nombre(l.cot_pat_autres),
+    centre_cout: l.centre_cout ?? null,
+    cout_employeur: nombre(l.cout_employeur),
+    non_periodique: l.type_remuneration === "non_periodique",
+    source: "lignes",
+  };
+}
+
+/**
+ * Les deux exports de paie fondus en une seule liste : pour un mois que la
+ * Liste des salaires couvre, ses lignes REMPLACENT celles des Statistiques
+ * rapides (elle porte le coût employeur de la paie et le brut décomposé) ;
+ * les autres mois gardent les Statistiques rapides. Les heures et l'ETP,
+ * absents de la Liste des salaires, restent à lire dans wp_salary_stats.
+ */
+export function fusionnerSourcesPaie(stats: LigneStatSalariale[], lignes: LignePaieDetaillee[]): LigneStatSalariale[] {
+  const moisCouverts = new Set(lignes.map((l) => `${Number(l.annee)}-${Number(l.mois)}`));
+  return [
+    ...stats.filter((s) => !moisCouverts.has(`${Number(s.annee)}-${Number(s.mois)}`)).map((s) => ({ ...s, source: s.source ?? ("stats" as const) })),
+    ...lignes.map(ligneStatDepuisPaie),
+  ];
 }
 
 function nombre(v: unknown): number {
@@ -127,17 +199,28 @@ export function realiseDuMois(
   mesure: boolean;
   /** Au moins une ligne porte des charges patronales : le coût employeur est lu, pas estimé. */
   employeurMesure: boolean;
+  /** Rémunérations non périodiques (soldes de sortie) comprises dans `employeur` et `brut`, à lire à part. */
+  nonPeriodique: { brut: number; employeur: number; n: number };
+  /** Avantages en nature retirés du coût par la paie (Liste des salaires). */
+  avantagesNature: number;
+  /** « lignes » quand le mois vient de la Liste des salaires, « stats » des Statistiques rapides, null sans ligne. */
+  source: "lignes" | "stats" | null;
 } {
   const lignes = stats.filter(
     (l) => Number(l.mois) === mois && Number(l.annee) === annee && dansPerimetre(l, codes)
   );
-  const somme = (cle: keyof LigneStatSalariale) => lignes.reduce((s, l) => s + nombre(l[cle]), 0);
+  const somme = (cle: keyof LigneStatSalariale, parmi: LigneStatSalariale[] = lignes) => parmi.reduce((s, l) => s + nombre(l[cle]), 0);
+  const np = lignes.filter((l) => l.non_periodique === true);
+  const brut = somme("total_brut");
+  const chargesPatronales = somme("charges_patronales");
+  const employeur = lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
+  const depuisLignes = lignes.some((l) => l.source === "lignes");
   return {
-    brut: somme("total_brut"),
+    brut,
     brutBase: somme("brut_base"),
     supplements: somme("supplements"),
-    employeur: lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0),
-    chargesPatronales: somme("charges_patronales"),
+    employeur,
+    chargesPatronales,
     charges: {
       cm: somme("cm_patronale"), cp: somme("cp_patronale"), accident: somme("assurance_accident"),
       allocation: somme("allocation_familiale"), sante: somme("sante_travail"), mutualite: somme("mutualite"), autres: somme("cot_pat_autres"),
@@ -146,6 +229,9 @@ export function realiseDuMois(
     n: lignes.length,
     mesure: lignes.some(ligneAvecMontants),
     employeurMesure: lignes.some(ligneAvecCharges),
+    nonPeriodique: { brut: somme("total_brut", np), employeur: np.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0), n: np.length },
+    avantagesNature: depuisLignes ? Math.max(0, brut + chargesPatronales - employeur) : 0,
+    source: lignes.length === 0 ? null : depuisLignes ? "lignes" : "stats",
   };
 }
 
@@ -176,8 +262,8 @@ function dernierMois(lignes: LigneStatSalariale[]): { mois: number; annee: numbe
 }
 
 /**
- * Coefficient de charges patronales = Σ coût total sécu / Σ brut du DERNIER
- * mois qui porte des montants.
+ * Coefficient de charges patronales = Σ coût employeur / Σ brut du DERNIER
+ * mois qui porte des charges patronales.
  *
  * On préfère le périmètre demandé (`codes`) : les charges varient avec la
  * structure des salaires, un centre de coût de chauffeurs ne pèse pas comme
@@ -191,8 +277,10 @@ export function calculerCoefficientCharges(
   codes?: Set<string>,
   defaut: number = COEF_CHARGES_DEFAUT
 ): { coef: number; source: SourceCoefficient | null } {
-  // Seules les lignes dont les charges patronales sont connues donnent un coût employeur
-  const avecMontants = stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l));
+  // Seules les lignes dont les charges patronales sont connues donnent un coût
+  // employeur ; les rémunérations non périodiques (soldes de sortie) ne
+  // décrivent pas la paie courante et sont laissées de côté.
+  const avecMontants = stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l) && !l.non_periodique);
   const duPerimetre = codes === undefined ? [] : avecMontants.filter((l) => codes.has(l.code_salarie));
 
   const candidats: Array<{ lignes: LigneStatSalariale[]; perimetre: "filtre" | "entreprise" }> = [];
@@ -225,7 +313,7 @@ export function calculerCoefficientsParCostCenter(
   stats: LigneStatSalariale[]
 ): Map<string, { coef: number; n: number; brut: number; employeur: number }> {
   const resultat = new Map<string, { coef: number; n: number; brut: number; employeur: number }>();
-  const dernier = dernierMois(stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l) && !!l.centre_cout));
+  const dernier = dernierMois(stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l) && !l.non_periodique && !!l.centre_cout));
   if (!dernier) return resultat;
   const parCc = new Map<string, LigneStatSalariale[]>();
   dernier.lignes.forEach((l) => {

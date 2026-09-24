@@ -1209,7 +1209,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
   const coefTexte = c
     ? c.coefficientSource
       ? `${nf(c.coefficient, 3)}, calculé sur ${MOIS_LONG[c.coefficientSource.mois]} ${c.coefficientSource.annee} (${nf(c.coefficientSource.n, 0)} lignes, ${c.coefficientSource.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
-      : `${nf(c.coefficient, 2)}, valeur par défaut faute de statistiques salariales avec montants`
+      : `${nf(c.coefficient, 2)}, valeur par défaut faute de paie avec charges patronales`
     : undefined;
   const reference = c?.periodeReference ? `${MOIS_LONG[c.periodeReference.mois]} ${c.periodeReference.annee}` : null;
 
@@ -1217,14 +1217,14 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
     cle: "sec-couts",
     titre: "Les coûts",
     chapeau:
-      "La même chaîne de paliers, en euros de coût employeur : ce que coûterait l'effectif sous contrat, ce qui n'est pas payé, ce qui l'est. Deux sources : le brut indice du roster pour le contractuel, les statistiques salariales pour le réalisé.",
+      "La même chaîne de paliers, en euros de coût employeur : ce que coûterait l'effectif sous contrat, ce qui n'est pas payé, ce qui l'est. Deux sources : le brut indice du roster pour le contractuel, la paie (Liste des salaires, sinon Statistiques rapides) pour le réalisé.",
     indicateurs: [
       {
         cle: "coefficient-charges",
         titre: "Coefficient de charges patronales",
         definition: "Le rapport entre le coût employeur (brut + charges patronales) et le salaire brut, lu sur la paie réelle.",
         valeur: coefTexte,
-        formule: "coefficient = Σ (Total brut + charges patronales) / Σ Total brut, sur le dernier mois de statistiques salariales qui porte les charges patronales",
+        formule: "coefficient = Σ coût employeur / Σ Total brut, sur le dernier mois de paie qui porte les charges patronales (Liste des salaires : coût de la paie ; Statistiques rapides : total brut + charges patronales)",
         operandes: c?.coefficientSource
           ? [
               { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
@@ -1342,7 +1342,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-realise",
         titre: "Réalisé du mois (coût employeur de la paie)",
-        definition: "La paie effective du mois telle que les statistiques salariales la donnent : total brut + charges patronales, toutes absences déjà déduites, suppléments et heures supplémentaires compris.",
+        definition: "La paie effective du mois telle que la paie la donne : coût employeur (Liste des salaires : total brut + charges patronales − avantages en nature ; Statistiques rapides : total brut + charges patronales), toutes absences déjà déduites, suppléments et heures supplémentaires compris. Les rémunérations non périodiques (soldes de sortie) y sont comprises.",
         valeur: c ? (c.realise.mesure ? euros(c.realise.employeur) : "aucun montant importé") : undefined,
         valeurNote: c && !c.realise.mesure && c.realise.n > 0 ? `${nf(c.realise.n, 0)} lignes présentes mais sans salaire` : undefined,
         formule: "réalisé = Σ (Total brut + charges patronales) des lignes du mois (périmètre filtré : salariés de la photo) ; sans charges patronales importées : Σ Total brut × coefficient, marqué estimé",
@@ -1362,7 +1362,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
             ],
           },
         ],
-        source: "Table wp_salary_stats (Total brut, Brut base, Suppléments, cotisations patronales par nature, centre de coût).",
+        source: "Table wp_salary_lines (Liste des salaires : brut par nature, cotisations patronales, coût employeur) quand le mois y est, sinon wp_salary_stats (Statistiques rapides).",
       },
       {
         cle: "cout-moyen-etp",

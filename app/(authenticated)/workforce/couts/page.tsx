@@ -6,7 +6,9 @@ import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, construireSourceSalaires, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, construireSourceSalaires, fusionnerSourcesPaie, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { NATURES, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
+import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
 import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
 import { valoriserProjection } from "@/lib/utils/wp-couts-scenario";
@@ -85,7 +87,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const anneeFuture = selectedYear > now.getFullYear();
   const colonnesPhoto = "code_salarie, code_employeur, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, brut_indice";
 
-  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw] = await Promise.all([
+  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*").eq("mois", rosterPeriode?.mois ?? -1).eq("annee", rosterPeriode?.annee ?? -1)),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, date_sortie, centre_cout, hrs_supp, total_brut, brut_base, supplements, cout_total_secu, charges_patronales, cm_patronale, cp_patronale, assurance_accident, allocation_familiale, sante_travail, mutualite, cot_pat_autres").eq("annee", selectedYear)),
@@ -102,6 +104,10 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     // Dernier mois de statistiques salariales avec montants, pour le coefficient de charges
     supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
     fetchAll(supabase.from("wp_scenarios").select("id, name").order("created_at", { ascending: false })),
+    // Liste des salaires de l'année : brut par nature et coût employeur de la paie
+    fetchAll(supabase.from("wp_salary_lines").select("*").eq("annee", selectedYear)),
+    // Dernier mois de Liste des salaires avec charges, pour le coefficient
+    supabase.from("wp_salary_lines").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
   ]);
   // Scénarios : mêmes lignes brutes que le tableau de bord, plus les leviers de coût
   const scenarioOptions: ScenarioOption[] = allScenariosRaw.map((s) => ({ id: String(s.id), name: String(s.name) }));
@@ -122,14 +128,24 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     : [[], [], [], [], [], [], [], []];
 
   const periodeRef: MoisAnnee | null = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
-  const [photoReference, statsCoefficient] = await Promise.all([
+  const [photoReference, statsCoefficient, lignesCoefficient] = await Promise.all([
     periodeRef
       ? fetchAll(supabase.from("wp_employees").select(colonnesPhoto).eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
       : Promise.resolve(null),
     dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
+    dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cout_employeur").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+      : Promise.resolve([] as Record<string, unknown>[]),
   ]);
+  // Une seule liste de paie : la Liste des salaires remplace les Statistiques
+  // rapides sur les mois qu'elle couvre (coût employeur de la paie, brut
+  // décomposé) ; les autres mois gardent les Statistiques rapides.
+  const paie = fusionnerSourcesPaie(
+    [...salaryStats, ...statsCoefficient],
+    [...salaryLines, ...lignesCoefficient] as unknown as LignePaieDetaillee[]
+  );
 
   // ---- Filtres, reclassification, photos par mois : mêmes règles que le tableau de bord
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -198,9 +214,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   });
 
   // ---- Valorisation
-  const coefficient = calculerCoefficientCharges([...salaryStats, ...statsCoefficient], filtres.actifs ? employeeCodes : undefined);
+  const coefficient = calculerCoefficientCharges(paie, filtres.actifs ? employeeCodes : undefined);
   // Coefficient par cost center, lu dans la paie quand elle porte les charges patronales
-  const coefParCc = calculerCoefficientsParCostCenter([...salaryStats, ...statsCoefficient]);
+  const coefParCc = calculerCoefficientsParCostCenter(paie);
   const courbeCouts = construireCourbeCouts({
     headcountData: courbe.headcountData,
     selectedYear,
@@ -212,7 +228,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,
-    stats: salaryStats,
+    stats: paie,
   });
   const points = courbeCouts.map((p) => p.point);
   const duMois = courbeCouts[selectedMonth - 1];
@@ -321,6 +337,30 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     .map(([cc, l]) => ({ cc, ...l, brutMoyen: l.avecBrut > 0 ? l.brutPleinTemps / l.avecBrut : null, coutEtp: l.etp > 0 ? l.cout / l.etp : null }))
     .sort((a, b) => b.cout - a.cout);
 
+  // ---- Décomposition de la paie par famille de natures (Liste des salaires)
+  const lignesPaie = salaryLines as unknown as LignePaieDecomposable[];
+  const codesPerimetre = filtres.actifs ? employeeCodes : undefined;
+  const paieParMois = decomposerParMois(lignesPaie, selectedYear, codesPerimetre);
+  const lignesPaieDuMois = lignesPaie.filter((l) => Number(l.mois) === selectedMonth && (!codesPerimetre || codesPerimetre.has(l.code_salarie)));
+  const paieDuMois = lignesPaieDuMois.length > 0
+    ? {
+      familles: decomposerParFamille(lignesPaieDuMois),
+      brut: lignesPaieDuMois.reduce((s, l) => s + Number(l.total_brut || 0), 0),
+      n: lignesPaieDuMois.length,
+      nonPeriodiques: lignesPaieDuMois.filter((l) => l.type_remuneration === "non_periodique").length,
+    }
+    : null;
+  const montantsNatures = decomposerParNature(lignesPaieDuMois);
+  const naturesDuMois: NatureMontant[] = NATURES
+    .map((n) => ({ cle: n.cle, libelle: n.libelle, famille: n.famille, montant: montantsNatures.get(n.cle) ?? 0 }))
+    .filter((n) => Math.abs(n.montant) >= 0.005)
+    .sort((a, b) => Math.abs(b.montant) - Math.abs(a.montant));
+  // Dépôt : le service du roster du mois (la paie n'en porte pas)
+  const depotParCode = new Map<string, string>();
+  (photoDuMois(selectedMonth) as SalarieCout[]).forEach((e) => depotParCode.set(e.code_salarie, e.description_service || ""));
+  const paieParDepot = ventilerPar(lignesPaieDuMois, (l) => depotParCode.get(l.code_salarie), "(hors photo roster)");
+  const paieParFonction = ventilerPar(lignesPaieDuMois, (l) => l.fonction, "(sans fonction)");
+
   const maxValeur = Math.max(0, ...points.map((p) => p.effectif_brut));
   const filtresDesc = [
     filtres.societes.length > 0 ? filtres.societes.join(" + ") : null,
@@ -363,7 +403,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       {!coefficient.source && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           Aucun mois de statistiques salariales ne porte de charges patronales : le coefficient de charges est la valeur par défaut ({coefficient.coef.toLocaleString("fr-FR", { minimumFractionDigits: 2 })}).
-          Importez des « Statistiques rapides » complètes (colonnes CM/CP patronales, assurance accident, allocation familiale, santé au travail, mutualité) pour le calculer sur le réalisé.
+          Importez une « Liste des salaires » (ou des « Statistiques rapides » complètes, avec les cotisations patronales) pour le calculer sur le réalisé.
         </div>
       )}
 
@@ -449,10 +489,12 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
           <CardHeader>
             <CardTitle className="text-base">Paie réalisée — {moisLabel}</CardTitle>
             <CardDescription>
-              {duMois.realise.n.toLocaleString("fr-FR")} lignes de statistiques salariales{filtres.actifs ? " du périmètre" : ""}.
-              {duMois.realise.employeurMesure
-                ? " Coût employeur = total brut + charges patronales, lues dans le fichier."
-                : " Le fichier importé ne porte pas les charges patronales : le coût employeur est estimé (brut × coefficient)."}
+              {duMois.realise.n.toLocaleString("fr-FR")} lignes de {duMois.realise.source === "lignes" ? "la Liste des salaires" : "statistiques salariales"}{filtres.actifs ? " du périmètre" : ""}.
+              {duMois.realise.source === "lignes"
+                ? " Coût employeur = celui de la paie (total brut + charges patronales − avantages en nature)."
+                : duMois.realise.employeurMesure
+                  ? " Coût employeur = total brut + charges patronales, lues dans le fichier."
+                  : " Le fichier importé ne porte pas les charges patronales : le coût employeur est estimé (brut × coefficient)."}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -461,15 +503,24 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                 ["Brut base", duMois.realise.brutBase],
                 ["Suppléments", duMois.realise.supplements],
                 ["Total brut", duMois.realise.brut],
-                ["Cotisations totales (Total SECU)", duMois.realise.cotisationsTotales],
+                // Colonnes propres aux Statistiques rapides, absentes de la Liste des salaires
+                ...(duMois.realise.source === "lignes"
+                  ? []
+                  : [["Cotisations totales (Total SECU)", duMois.realise.cotisationsTotales]]),
                 ["CM patronale", duMois.realise.charges.cm],
                 ["CP patronale", duMois.realise.charges.cp],
                 ["Assurance accident", duMois.realise.charges.accident],
-                ["Allocation familiale", duMois.realise.charges.allocation],
+                ...(duMois.realise.source === "lignes" ? [] : [["Allocation familiale", duMois.realise.charges.allocation]]),
                 ["Santé au travail", duMois.realise.charges.sante],
                 ["Mutualité", duMois.realise.charges.mutualite],
                 ["Autres cotisations patronales", duMois.realise.charges.autres],
                 ["Charges patronales", duMois.realise.chargesPatronales],
+                ...(duMois.realise.source === "lignes"
+                  ? [
+                    ["Avantages en nature (déduits)", duMois.realise.avantagesNature],
+                    [`Soldes de sortie (${duMois.realise.nonPeriodique.n} ligne${duMois.realise.nonPeriodique.n > 1 ? "s" : ""} non périodique${duMois.realise.nonPeriodique.n > 1 ? "s" : ""})`, duMois.realise.nonPeriodique.employeur],
+                  ]
+                  : []),
               ].map(([libelle, valeur]) => (
                 <div key={String(libelle)} className="rounded-md border px-3 py-2">
                   <div className="text-xs text-muted-foreground">{libelle}</div>
@@ -480,7 +531,10 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                 <div className="text-xs text-muted-foreground">Coût employeur réalisé{duMois.realise.employeurMesure ? "" : " (estimé)"}</div>
                 <div className="text-lg font-semibold">{formatEuros(stats.realise ?? 0)}</div>
                 {duMois.realise.employeurMesure && duMois.realise.brut > 0 && (
-                  <div className="text-xs text-muted-foreground">Coefficient réel du mois : {(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Coefficient réel du mois : {(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}
+                    {duMois.realise.nonPeriodique.n > 0 ? ` · hors soldes de sortie : ${formatEuros(duMois.realise.employeur - duMois.realise.nonPeriodique.employeur)}` : ""}
+                  </div>
                 )}
               </div>
               {stats.paye != null && stats.realise != null && (
@@ -503,6 +557,18 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {(paieParMois.length > 0 || paieDuMois) && (
+        <PaieDecomposition
+          moisLabel={moisLabel}
+          parMois={paieParMois}
+          duMois={paieDuMois}
+          natures={naturesDuMois}
+          parDepot={paieParDepot}
+          parFonction={paieParFonction}
+          perimetreFiltre={filtres.actifs}
+        />
       )}
 
       {!aucunSalaire && lignesCostCenter.length > 0 && (
