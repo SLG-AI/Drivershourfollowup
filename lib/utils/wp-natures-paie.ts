@@ -20,8 +20,12 @@
 export type FamilleNature = "structurel" | "planning" | "primes" | "regularisations" | "soldes" | "avantages";
 
 export interface NaturePaie {
-  /** Code SIRH tel qu'il précède le tiret dans l'en-tête (null pour « Autres CS »). */
-  code: string | null;
+  /**
+   * Codes SIRH tels qu'ils précèdent le tiret dans l'en-tête (vide pour
+   * « Autres CS »). Plusieurs codes = une même nature sous deux libellés
+   * (CCT et P001 sont tous deux le complément de salaire).
+   */
+  codes: string[];
   /** Colonne de wp_salary_lines. */
   cle: `nat_${string}`;
   libelle: string;
@@ -39,27 +43,29 @@ export const FAMILLES: { id: FamilleNature; libelle: string; description: string
 
 /** Les natures connues, dans l'ordre du fichier. Une nature absente du fichier vaut 0. */
 export const NATURES: NaturePaie[] = [
-  { code: "ABIN", cle: "nat_abin", libelle: "Absence injustifiée", famille: "regularisations" },
-  { code: "AJ", cle: "nat_aj", libelle: "Ajout brut", famille: "primes" },
-  { code: "ALL", cle: "nat_all", libelle: "Car allowance", famille: "avantages" },
-  { code: "AM1", cle: "nat_am1", libelle: "Amplitude > 11 h", famille: "planning" },
-  { code: "AM2", cle: "nat_am2", libelle: "Amplitude > 12 h", famille: "planning" },
-  { code: "CCT", cle: "nat_cct", libelle: "Complément salaire (CCT)", famille: "structurel" },
-  { code: "CGTP", cle: "nat_cgtp", libelle: "Congés trop pris", famille: "regularisations" },
-  { code: "DC", cle: "nat_dc", libelle: "Décompte congé", famille: "soldes" },
-  { code: "E002", cle: "nat_e002", libelle: "Subvention d'intérêts", famille: "avantages" },
-  { code: "HFM", cle: "nat_hfm", libelle: "Heures fériées majorées", famille: "planning" },
-  { code: "HSM", cle: "nat_hsm", libelle: "Heures sup. majorées", famille: "planning" },
-  { code: "P001", cle: "nat_p001", libelle: "Complément salaire (P001)", famille: "structurel" },
-  { code: "PERM", cle: "nat_perm", libelle: "Permanence", famille: "planning" },
-  { code: "PR D", cle: "nat_pr_d", libelle: "Prime dépannage", famille: "planning" },
-  { code: "PR F", cle: "nat_pr_f", libelle: "Prime de fonction", famille: "structurel" },
-  { code: "PRIM", cle: "nat_prim", libelle: "Prime", famille: "primes" },
-  { code: "PRR", cle: "nat_prr", libelle: "Prime repos", famille: "primes" },
-  { code: "SHD", cle: "nat_shd", libelle: "Supplément dimanche", famille: "planning" },
-  { code: "SHN", cle: "nat_shn", libelle: "Supplément nuit", famille: "planning" },
-  { code: "SMG", cle: "nat_smg", libelle: "Supplément moyenne congé", famille: "structurel" },
-  { code: null, cle: "nat_autres_cs", libelle: "Autres compléments", famille: "avantages" },
+  { codes: ["ABIN"], cle: "nat_abin", libelle: "Absence injustifiée", famille: "regularisations" },
+  { codes: ["AJ"], cle: "nat_aj", libelle: "Ajout brut", famille: "primes" },
+  { codes: ["ALL"], cle: "nat_all", libelle: "Car allowance", famille: "avantages" },
+  { codes: ["AM1"], cle: "nat_am1", libelle: "Amplitude > 11 h", famille: "planning" },
+  { codes: ["AM2"], cle: "nat_am2", libelle: "Amplitude > 12 h", famille: "planning" },
+  // Prorata du 13e mois versé chaque mois aux chauffeurs de plus d'un an
+  // d'ancienneté ; le SIRH le porte sous deux codes (CCT et P001).
+  { codes: ["CCT", "P001"], cle: "nat_cct", libelle: "Complément salaire (13e mois proratisé)", famille: "structurel" },
+  { codes: ["CGTP"], cle: "nat_cgtp", libelle: "Congés trop pris", famille: "regularisations" },
+  { codes: ["DC"], cle: "nat_dc", libelle: "Décompte congé", famille: "soldes" },
+  { codes: ["E002"], cle: "nat_e002", libelle: "Subvention d'intérêts", famille: "avantages" },
+  { codes: ["HFM"], cle: "nat_hfm", libelle: "Heures fériées majorées", famille: "planning" },
+  { codes: ["HSM"], cle: "nat_hsm", libelle: "Heures sup. majorées", famille: "planning" },
+  { codes: ["PERM"], cle: "nat_perm", libelle: "Permanence", famille: "planning" },
+  { codes: ["PR D"], cle: "nat_pr_d", libelle: "Prime dépannage", famille: "planning" },
+  // Formateurs, team leaders, délégués du personnel (dès octobre 2026) : récurrente chaque mois.
+  { codes: ["PR F"], cle: "nat_pr_f", libelle: "Prime de fonction", famille: "structurel" },
+  { codes: ["PRIM"], cle: "nat_prim", libelle: "Prime", famille: "primes" },
+  { codes: ["PRR"], cle: "nat_prr", libelle: "Prime repos", famille: "primes" },
+  { codes: ["SHD"], cle: "nat_shd", libelle: "Supplément dimanche", famille: "planning" },
+  { codes: ["SHN"], cle: "nat_shn", libelle: "Supplément nuit", famille: "planning" },
+  { codes: ["SMG"], cle: "nat_smg", libelle: "Supplément moyenne congé", famille: "structurel" },
+  { codes: [], cle: "nat_autres_cs", libelle: "Autres compléments", famille: "avantages" },
 ];
 
 /**
@@ -70,10 +76,10 @@ export const NATURES: NaturePaie[] = [
  */
 export function natureDepuisEntete(enteteNormalise: string): NaturePaie | null {
   const h = enteteNormalise.replace(/\s+/g, " ").trim();
-  if (h === "autres cs") return NATURES.find((n) => n.code === null) ?? null;
+  if (h === "autres cs") return NATURES.find((n) => n.codes.length === 0) ?? null;
   const avantTiret = h.split(" - ")[0]?.trim();
   if (!avantTiret) return null;
-  return NATURES.find((n) => n.code !== null && n.code.toLowerCase() === avantTiret) ?? null;
+  return NATURES.find((n) => n.codes.some((c) => c.toLowerCase() === avantTiret)) ?? null;
 }
 
 /** Une ligne de paie : le brut de base et ses natures (clés `nat_*`), telle que wp_salary_lines la porte. */

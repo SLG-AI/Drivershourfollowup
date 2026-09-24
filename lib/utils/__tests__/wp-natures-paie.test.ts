@@ -26,6 +26,11 @@ describe("natureDepuisEntete — reconnaissance par le code avant le tiret", () 
     expect(natureDepuisEntete("prr - prime repos")?.cle).toBe("nat_prr");
   });
 
+  it("CCT et P001 sont une seule nature : le complément de salaire", () => {
+    expect(natureDepuisEntete("cct - complement salaire")?.cle).toBe("nat_cct");
+    expect(natureDepuisEntete("p001 - complement salaire")?.cle).toBe("nat_cct");
+  });
+
   it("reconnaît « Autres CS » par son libellé exact et rend null pour l'inconnu", () => {
     expect(natureDepuisEntete("autres cs")?.cle).toBe("nat_autres_cs");
     expect(natureDepuisEntete("xyz - nature nouvelle")).toBeNull();
@@ -43,7 +48,7 @@ describe("natureDepuisEntete — reconnaissance par le code avant le tiret", () 
 describe("decomposerParFamille — le classement arbitré", () => {
   const ligne = {
     brut_base: 4000,
-    nat_cct: 300, nat_smg: 20, nat_pr_f: 100, nat_p001: 10, // structurel
+    nat_cct: 310, nat_smg: 20, nat_pr_f: 100, // structurel
     nat_shn: 50, nat_shd: 80, nat_am1: 30, nat_am2: 20, nat_hsm: 40, nat_hfm: 10, nat_pr_d: 60, nat_perm: 5, // planning
     nat_prim: 200, nat_aj: 50, nat_prr: 0, // primes
     nat_abin: -120, nat_cgtp: -30, // régularisations
@@ -53,7 +58,7 @@ describe("decomposerParFamille — le classement arbitré", () => {
 
   it("somme chaque famille, le brut de base en structurel", () => {
     const f = decomposerParFamille([ligne]);
-    expect(f.structurel).toBe(4000 + 300 + 20 + 100 + 10);
+    expect(f.structurel).toBe(4000 + 310 + 20 + 100);
     expect(f.planning).toBe(50 + 80 + 30 + 20 + 40 + 10 + 60 + 5);
     expect(f.primes).toBe(250);
     expect(f.regularisations).toBe(-150);

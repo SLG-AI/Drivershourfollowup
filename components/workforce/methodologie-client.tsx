@@ -1392,7 +1392,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
           {
             titre: "Les natures de paie qui composent les suppléments, par famille",
             points: FAMILLES.map((f) => {
-              const natures = NATURES.filter((n) => n.famille === f.id).map((n) => (n.code ? `${n.code} (${n.libelle})` : n.libelle)).join(", ");
+              const natures = NATURES.filter((n) => n.famille === f.id).map((n) => (n.codes.length > 0 ? `${n.codes.join(" / ")} (${n.libelle})` : n.libelle)).join(", ");
               return `${f.libelle} — ${f.description} Natures : ${natures}.${f.id === "structurel" ? " Le brut de base compte aussi dans cette famille." : ""}`;
             }),
           },

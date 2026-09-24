@@ -586,20 +586,15 @@ export function parseSalaryLines(buffer: ArrayBuffer): WpParseResult {
   // dans cet intervalle est signalée : elle entre dans le total brut du
   // fichier mais dans aucune famille.
   const finNatures = colBrutNatures >= 0 ? colBrutNatures : colTotalBrut;
+  // Plusieurs colonnes peuvent nourrir une même nature (CCT et P001 sont le
+  // même complément de salaire) : elles s'additionnent.
   const colonnesNatures: { col: number; cle: `nat_${string}` }[] = [];
   const naturesInconnues: string[] = [];
-  const naturesVues = new Set<string>();
   for (let c = colBrutBase + 1; c < finNatures; c++) {
     if (!hn[c]) continue;
     const nature = natureDepuisEntete(hn[c]);
-    if (!nature) {
-      naturesInconnues.push(h[c].trim());
-    } else if (naturesVues.has(nature.cle)) {
-      warnings.push(`Nature « ${h[c].trim()} » en double : seule la première colonne est lue.`);
-    } else {
-      naturesVues.add(nature.cle);
-      colonnesNatures.push({ col: c, cle: nature.cle });
-    }
+    if (!nature) naturesInconnues.push(h[c].trim());
+    else colonnesNatures.push({ col: c, cle: nature.cle });
   }
   if (naturesInconnues.length > 0) {
     warnings.push(`Nature${naturesInconnues.length > 1 ? "s" : ""} de paie non classée${naturesInconnues.length > 1 ? "s" : ""}, ignorée${naturesInconnues.length > 1 ? "s" : ""} dans la décomposition : ${naturesInconnues.join(", ")}. À déclarer dans wp-natures-paie.ts.`);
@@ -665,7 +660,7 @@ export function parseSalaryLines(buffer: ArrayBuffer): WpParseResult {
       cout_employeur: 0,
     };
     for (const n of NATURES) ligne[n.cle] = 0;
-    for (const { col, cle } of colonnesNatures) ligne[cle] = parseNumeric(row[col]);
+    for (const { col, cle } of colonnesNatures) ligne[cle] += parseNumeric(row[col]);
 
     ligne.cm_patronale = ligne.cm_patronale_soins + ligne.cm_patronale_especes;
     ligne.charges_patronales =

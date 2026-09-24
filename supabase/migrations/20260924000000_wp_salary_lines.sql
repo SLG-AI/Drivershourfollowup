@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS wp_salary_lines (
   tache_pct NUMERIC DEFAULT 0,
 
   brut_base NUMERIC DEFAULT 0,
-  -- Natures (voir lib/utils/wp-natures-paie.ts pour le classement en familles)
+  -- Natures (voir lib/utils/wp-natures-paie.ts pour le classement en familles).
+  -- nat_cct cumule les codes CCT et P001 : même complément de salaire (13e mois proratisé).
   nat_abin NUMERIC DEFAULT 0,
   nat_aj NUMERIC DEFAULT 0,
   nat_all NUMERIC DEFAULT 0,
@@ -49,7 +50,6 @@ CREATE TABLE IF NOT EXISTS wp_salary_lines (
   nat_e002 NUMERIC DEFAULT 0,
   nat_hfm NUMERIC DEFAULT 0,
   nat_hsm NUMERIC DEFAULT 0,
-  nat_p001 NUMERIC DEFAULT 0,
   nat_perm NUMERIC DEFAULT 0,
   nat_pr_d NUMERIC DEFAULT 0,
   nat_pr_f NUMERIC DEFAULT 0,

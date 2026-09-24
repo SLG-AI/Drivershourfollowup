@@ -14,7 +14,7 @@ const BANDEAU = ["Liste des salaires ", "Employeur", "S.L.A.", null, null, null,
 // colonnes non lues (nom, net, impôts…) présentes pour vérifier qu'elles restent ignorées.
 const ENTETES = [
   "Code salarié", "Nom salarié", "Prénom", "Période", "Département", "Centre de coût", "Fonction", "Sal/rnp", "Tâche en %",
-  "Brut base", "ABIN - ABSENCE INJUSTIFIEE", "AM1 - Amplitude > 11", "CCT - Complément salaire", "DC - Décompte congé",
+  "Brut base", "ABIN - ABSENCE INJUSTIFIEE", "AM1 - Amplitude > 11", "CCT - Complément salaire", "DC - Décompte congé", "P001 - Complément salaire",
   "HSM - Heures sup. majorées ", "PR D - PRIME DEPANNAGE", "PR F - Prime de fonction", "SHD - Supplément sur heures dimanche",
   "SHN - Supplément heures de nuit", "Autres CS", "Brut base + natures", "Total brut",
   "CM Sal. soins", "CM Sal. espèces", "CP Salariale", "Assurance dépendance", "Impôts (CI déduits)", "Net",
@@ -24,11 +24,11 @@ const ENTETES = [
 ];
 
 function ligne(p: {
-  code: string; periode: number; type: string; tache?: number; base: number; abin?: number; am1?: number; cct?: number; dc?: number;
+  code: string; periode: number; type: string; tache?: number; base: number; abin?: number; am1?: number; cct?: number; dc?: number; p001?: number;
   hsm?: number; prd?: number; prf?: number; shd?: number; shn?: number; autres?: number;
   cmS: number; cmE: number; cp: number; acc: number; sante: number; mut: number; autresPat?: number; cout: number;
 }): unknown[] {
-  const natures = [p.abin ?? 0, p.am1 ?? 0, p.cct ?? 0, p.dc ?? 0, p.hsm ?? 0, p.prd ?? 0, p.prf ?? 0, p.shd ?? 0, p.shn ?? 0, p.autres ?? 0];
+  const natures = [p.abin ?? 0, p.am1 ?? 0, p.cct ?? 0, p.dc ?? 0, p.p001 ?? 0, p.hsm ?? 0, p.prd ?? 0, p.prf ?? 0, p.shd ?? 0, p.shn ?? 0, p.autres ?? 0];
   const total = p.base + natures.reduce((s, v) => s + v, 0);
   return [
     p.code, "Dupont", "Jean", p.periode, "DEP_BB_TL_9.1", "SLA202", "CHAUFFEUR BUS", p.type, p.tache ?? 100,
@@ -40,7 +40,7 @@ function ligne(p: {
 }
 
 describe("parseSalaryLines — Liste des salaires", () => {
-  const salaire = ligne({ code: "SLA 0001", periode: 8, type: "Salaire", base: 4000, am1: 30, cct: 300, prd: 80, shd: 200, shn: 50, cmS: 120, cmE: 11, cp: 370, acc: 28, sante: 6, mut: 115, cout: 4660 + 650 });
+  const salaire = ligne({ code: "SLA 0001", periode: 8, type: "Salaire", base: 4000, am1: 30, cct: 290, p001: 10, prd: 80, shd: 200, shn: 50, cmS: 120, cmE: 11, cp: 370, acc: 28, sante: 6, mut: 115, cout: 4660 + 650 });
   const np = ligne({ code: "SLA 0001", periode: 13, type: "Rémun. np", tache: 0, base: 0, dc: 900, cmS: 25, cmE: 2, cp: 72, acc: 6, sante: 1, mut: 21, cout: 900 + 127 });
   const manager = ligne({ code: "SLA 0002", periode: 8, type: "Salaire", base: 6000, autres: 250, cmS: 170, cmE: 15, cp: 500, acc: 40, sante: 8, mut: 160, cout: 6250 + 893 - 250 });
   const total = ["Total général", null, null, null, null, null, null, null, 200, 10000];
@@ -63,7 +63,8 @@ describe("parseSalaryLines — Liste des salaires", () => {
     expect(l.tache_pct).toBe(100);
     expect(l.brut_base).toBe(4000);
     expect(l.nat_am1).toBe(30);
-    expect(l.nat_cct).toBe(300);
+    expect(l.nat_cct).toBe(300); // CCT 290 + P001 10 : une seule nature
+    expect("nat_p001" in l).toBe(false);
     expect(l.nat_pr_d).toBe(80);
     expect(l.nat_shd).toBe(200);
     expect(l.nat_shn).toBe(50);
