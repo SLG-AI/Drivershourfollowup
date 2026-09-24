@@ -6,10 +6,12 @@ import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, NATURES_RECURRENTES, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 import { NATURES, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
+import { reconcilierPaie } from "@/lib/utils/wp-reconciliation-paie";
+import { injustifieesDuPerimetre } from "@/lib/utils/wp-paliers";
 import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
 import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
@@ -18,7 +20,7 @@ import { LIBELLES_LEVIER, unite, type LevierCout } from "@/lib/utils/wp-leviers-
 import { LIBELLES_REPLI } from "@/lib/utils/wp-cout-moyen";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { etpDe } from "@/lib/utils/wp-paliers";
-import { horsWeekEnd, lastDayOfMonth } from "@/lib/utils/wp-calculations";
+import { getWorkableHoursInMonth, horsWeekEnd, lastDayOfMonth } from "@/lib/utils/wp-calculations";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 import { formatEuros } from "@/lib/utils/format";
 import { HeadcountEvolutionChart, type ScenarioOption, type ScenarioProjectionData } from "@/components/workforce/headcount-evolution-chart";
@@ -437,37 +439,39 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       note: "Hors masse salariale courante et hors coefficient : décaissés ce mois, mais ne décrivent pas la paie d'un mois normal.",
     };
 
-    // Écart réalisé − payé : réconciliation, natures chargées au coefficient réel du mois
-    let ecart: DetailCase | null = null;
+    // Écart réalisé − payé : réconciliation SALARIÉ PAR SALARIÉ (wp-reconciliation-paie.ts).
     // La paie est un flux du mois entier : on la compare au payé MOYEN du mois
-    // (jour par jour, dates d'entrée et de sortie, sortants hors photo), pas au
-    // palier de fin de mois, quand la vue Moyenne l'a calculé.
+    // (jour par jour, dates d'entrée et de sortie), pas au palier de fin de
+    // mois, quand la vue Moyenne l'a calculé.
+    let ecart: DetailCase | null = null;
     const payeReference = stats.paye_moyen ?? stats.paye;
     if (payeReference != null && stats.realise != null && brut > 0) {
-      const coefReel = realiseDuMois.employeur / brut;
-      const total = stats.realise - payeReference;
-      const regul = naturesDuMois.filter((n) => n.famille === "regularisations").reduce((acc, n) => acc + n.montant, 0);
-      const soldesBrut = realiseDuMois.nonPeriodique.brut;
-      // Le 13e mois proratisé et la prime de fonction sont déjà dans le contractuel (taux mesuré) : hors de l'écart
-      const clesRecurrentes = new Set<string>(NATURES_RECURRENTES.map((n) => n.cle));
-      const recurrents = naturesDuMois.filter((n) => clesRecurrentes.has(n.cle)).reduce((acc, n) => acc + n.montant, 0);
-      const supplementsVariables = realiseDuMois.supplements - soldesBrut - regul - recurrents;
-      const lignesEcart = [
-        { libelle: "Suppléments variables du mois, chargés (natures × coefficient réel, hors 13e mois et prime de fonction déjà au contractuel)", montant: supplementsVariables * coefReel },
-        { libelle: "Régularisations, chargées (retenues)", montant: regul * coefReel },
-        { libelle: "Soldes de sortie (coût employeur)", montant: realiseDuMois.nonPeriodique.employeur },
-      ];
-      const explique = lignesEcart.reduce((acc, l) => acc + l.montant, 0);
-      lignesEcart.push({
-        libelle: stats.paye_moyen != null
-          ? "Reste : écart brut indice / brut payé, compléments récurrents réels vs taux, avantages déduits, entrées et sorties non datées"
-          : "Reste : prorata des entrées et sorties, écart brut indice / brut payé, compléments récurrents réels vs taux, avantages déduits",
-        montant: total - explique,
+      const photoMois = photoDuMois(selectedMonth) as SalarieCout[];
+      const codesPhoto = new Set(photoMois.map((s) => s.code_salarie));
+      const reconciliation = reconcilierPaie({
+        mois: selectedMonth,
+        annee: selectedYear,
+        lignesPaie: lignesPaieDuMois as unknown as LignePaieDetaillee[],
+        photo: photoMois,
+        source: sourceDuMois,
+        cns: absences.filter((a) => Number(a.mois) === selectedMonth && codesPhoto.has(String(a.code_salarie))) as unknown as Parameters<typeof reconcilierPaie>[0]["cns"],
+        injustifiees: injustifieesDuPerimetre(absencesInjustifiees, filtres.actifs, codesPhoto).filter((a) => Number(a.mois) === selectedMonth) as unknown as Parameters<typeof reconcilierPaie>[0]["injustifiees"],
+        heuresTravaillables: getWorkableHoursInMonth(selectedYear, selectedMonth),
+        coef: coefficient.coef,
+        coefParCc,
+        complements,
+        realise: stats.realise,
+        payeReference,
       });
       ecart = {
         sousTitre: `Réalisé ${formatEuros(stats.realise)} − payé contractuel ${formatEuros(payeReference)}${stats.paye_moyen != null ? " (moyenne du mois, au prorata des entrées et sorties)" : " (fin de mois)"}`,
-        sections: [{ titre: "D'où vient l'écart", montant: total, ouvert: true, lignes: lignesEcart }],
-        note: `Estimation : les natures de paie sont chargées au coefficient réel du mois (${coefReel.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}) ; le « reste » est obtenu par différence.`,
+        sections: reconciliation.groupes.map((g) => ({
+          titre: g.titre,
+          montant: g.montant,
+          ouvert: true,
+          lignes: g.lignes.map((l) => ({ libelle: l.n > 0 ? `${l.libelle} (${l.n.toLocaleString("fr-FR")} sal.)` : l.libelle, montant: l.montant })),
+        })),
+        note: `Réconciliation salarié par salarié : le payé contractuel est refait pour chacun (brut indice × ETP × jours sous contrat × (1 + compléments) × coefficient, moins suspension, CNS et injustifiées) et chaque euro de paie est rattaché à sa cause. Natures chargées au coefficient réel des lignes de salaire (${reconciliation.coefReel.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}). La somme des lignes vaut l'écart, exactement.`,
       };
     }
 
