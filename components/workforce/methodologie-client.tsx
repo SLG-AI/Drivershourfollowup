@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Printer, AlertTriangle, Info } from "lucide-react";
 import type { PaliersMois } from "@/lib/utils/wp-paliers";
 import type { CoutsMois } from "@/lib/utils/wp-couts";
+import { FAMILLES, NATURES } from "@/lib/utils/wp-natures-paie";
 
 const MOIS_LABELS: Record<number, string> = {
   1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
@@ -1373,6 +1374,28 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
             ]
           : undefined,
         details: [
+          {
+            titre: "Ce que contient chaque case de la carte « Paie réalisée »",
+            points: [
+              "Brut base : colonne « Brut base » de la paie — le salaire de base du mois, déjà proratisé par le temps payé (« Tâche en % ») et par les entrées et sorties en cours de mois. C'est le pendant réel du brut indice × taux d'occupation du roster.",
+              "Suppléments : tout ce qui s'ajoute au brut de base pour former le total brut, c'est-à-dire la somme des natures de paie (voir la liste ci-dessous). Avec les Statistiques rapides, c'est la colonne « Suppléments » du fichier, non détaillée.",
+              "Total brut : brut base + suppléments, colonne « Total brut » de la paie. Les retenues pour absence injustifiée et congés trop pris y sont déjà déduites (natures négatives).",
+              "CM patronale : caisse maladie, part employeur — « CM Patr. soins » + « CM Patr. espèces ». CP patronale : caisse de pension, part employeur. Assurance accident, Santé au travail, Mutualité, Autres cotisations patronales : les colonnes du même nom.",
+              "Charges patronales : la somme des cotisations patronales ci-dessus. Les cotisations SALARIALES (CM/CP salariales, assurance dépendance), l'impôt et le net ne sont pas importés : ils ne changent pas ce que l'employeur décaisse.",
+              "Avantages en nature (déduits) : ce que la paie retire du brut chargé pour obtenir son coût — voiture de fonction et compléments valorisés dans le brut pour l'impôt mais qui ne sont pas un décaissement de salaire. Calculé comme total brut + charges patronales − coût natures déduites.",
+              "Soldes de sortie : les lignes « Rémun. np » (période 13 du SIRH), en pratique le décompte de congés versé à la sortie. Comptées dans le coût employeur réalisé (elles sont décaissées ce mois) mais données à part, hors masse salariale courante et hors coefficient.",
+              "Coût employeur réalisé : colonne « Coût natures déduites » de la paie = total brut + charges patronales − avantages en nature. « Hors soldes de sortie » retire les lignes non périodiques.",
+              "Coefficient réel du mois : coût employeur réalisé / total brut, soldes compris — à comparer au coefficient de charges appliqué au contractuel.",
+              "Écart réalisé − payé contractuel : ce que le contractuel (brut indice × ETP × coefficient, absences non payées retirées) ne modélise pas — suppléments et heures supplémentaires, prorata des entrées et sorties en cours de mois, régularisations, soldes de sortie, écart entre brut indice et brut réellement payé.",
+            ],
+          },
+          {
+            titre: "Les natures de paie qui composent les suppléments, par famille",
+            points: FAMILLES.map((f) => {
+              const natures = NATURES.filter((n) => n.famille === f.id).map((n) => (n.code ? `${n.code} (${n.libelle})` : n.libelle)).join(", ");
+              return `${f.libelle} — ${f.description} Natures : ${natures}.${f.id === "structurel" ? " Le brut de base compte aussi dans cette famille." : ""}`;
+            }),
+          },
           {
             titre: "Une 6e courbe, pas un palier",
             points: [
