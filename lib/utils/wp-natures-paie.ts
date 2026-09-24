@@ -54,8 +54,11 @@ export const NATURES: NaturePaie[] = [
   { codes: ["CGTP"], cle: "nat_cgtp", libelle: "Congés trop pris", famille: "regularisations" },
   { codes: ["DC"], cle: "nat_dc", libelle: "Décompte congé", famille: "soldes" },
   { codes: ["E002"], cle: "nat_e002", libelle: "Subvention d'intérêts", famille: "avantages" },
+  { codes: ["G001"], cle: "nat_g001", libelle: "Gratification", famille: "primes" },
   { codes: ["HFM"], cle: "nat_hfm", libelle: "Heures fériées majorées", famille: "planning" },
   { codes: ["HSM"], cle: "nat_hsm", libelle: "Heures sup. majorées", famille: "planning" },
+  // Valorisé dans le brut pour l'impôt, retiré du coût par la paie (« Coût natures déduites »)
+  { codes: ["N002"], cle: "nat_n002", libelle: "Avantage en nature voiture", famille: "avantages" },
   { codes: ["PERM"], cle: "nat_perm", libelle: "Permanence", famille: "planning" },
   { codes: ["PR D"], cle: "nat_pr_d", libelle: "Prime dépannage", famille: "planning" },
   // Formateurs, team leaders, délégués du personnel (dès octobre 2026) : récurrente chaque mois.

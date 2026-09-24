@@ -50,20 +50,20 @@ describe("decomposerParFamille — le classement arbitré", () => {
     brut_base: 4000,
     nat_cct: 310, nat_smg: 20, nat_pr_f: 100, // structurel
     nat_shn: 50, nat_shd: 80, nat_am1: 30, nat_am2: 20, nat_hsm: 40, nat_hfm: 10, nat_pr_d: 60, nat_perm: 5, // planning
-    nat_prim: 200, nat_aj: 50, nat_prr: 0, // primes
+    nat_prim: 200, nat_aj: 50, nat_prr: 0, nat_g001: 25, // primes
     nat_abin: -120, nat_cgtp: -30, // régularisations
     nat_dc: 900, // soldes
-    nat_all: 250, nat_autres_cs: 70, nat_e002: 0, // avantages
+    nat_all: 250, nat_autres_cs: 70, nat_e002: 0, nat_n002: 30, // avantages
   };
 
   it("somme chaque famille, le brut de base en structurel", () => {
     const f = decomposerParFamille([ligne]);
     expect(f.structurel).toBe(4000 + 310 + 20 + 100);
     expect(f.planning).toBe(50 + 80 + 30 + 20 + 40 + 10 + 60 + 5);
-    expect(f.primes).toBe(250);
+    expect(f.primes).toBe(275);
     expect(f.regularisations).toBe(-150);
     expect(f.soldes).toBe(900);
-    expect(f.avantages).toBe(320);
+    expect(f.avantages).toBe(350);
   });
 
   it("brut de base + Σ natures = total brut du fichier (identité de la Liste des salaires)", () => {
