@@ -28,7 +28,7 @@ import type { JournalMoisProjection } from "./wp-projection-scenarios";
 import { coutMoyenEtp, type CoutMoyen, type ProfilCout } from "./wp-cout-moyen";
 import { brutPleinTempsAvecLeviers, coefficientPour, facteurHausse, primesDuMois, type LevierCout, type MoisAnnee } from "./wp-leviers-cout";
 import { etpDe } from "./wp-paliers";
-import type { SalarieCout, SourceSalaires } from "./wp-couts";
+import { tauxComplementsDe, type ComplementsRecurrents, type SalarieCout, type SourceSalaires } from "./wp-couts";
 import { familleContrat } from "./wp-filtres";
 
 export interface EntreesValorisation {
@@ -42,6 +42,13 @@ export interface EntreesValorisation {
   premierMoisProjete: MoisAnnee;
   /** Coût moyen par ETP de repli quand aucun salarié comparable n'a de salaire. */
   coutEtpDefaut: number;
+  /**
+   * Compléments récurrents (13e mois proratisé, prime de fonction) : mêmes
+   * taux que la chaîne des coûts réels, sinon la courbe sauterait entre le
+   * dernier mois réel et le premier projeté. Une hypothèse d'arrivée n'a pas
+   * l'ancienneté du 13e mois : elle ne porte que la prime de fonction.
+   */
+  complements?: ComplementsRecurrents | null;
 }
 
 export interface SourceCoutHypothese {
@@ -99,7 +106,7 @@ export function coutEtpDuMois(e: EntreesValorisation, m: MoisAnnee): { coutEtp: 
     const cc = s.centre_cout ?? null;
     const coef = coefficientPour(e.leviers, cc, m, e.premierMoisProjete, e.coefBase);
     const cout = brut != null
-      ? brutPleinTempsAvecLeviers(brut, e.leviers, cc, m, e.premierMoisProjete).brut * etpS * coef
+      ? brutPleinTempsAvecLeviers(brut, e.leviers, cc, m, e.premierMoisProjete).brut * (1 + tauxComplementsDe(e.complements, cc)) * etpS * coef
       : e.coutEtpDefaut * etpS * facteurHausse(e.leviers, cc, m, e.premierMoisProjete);
     masse += cout;
     etp += etpS;
@@ -119,7 +126,9 @@ export function valoriserProjection(journal: JournalMoisProjection[], e: Entrees
     const facteur = facteurHausse(e.leviers, profil.centre_cout, m, e.premierMoisProjete);
     const coefRatio = coefficientPour(e.leviers, profil.centre_cout, m, e.premierMoisProjete, e.coefBase) / e.coefBase;
     const etp = h.nb_personnes * (h.taux_occupation / 100);
-    const coutEtp = sens === "arrivee" ? base.coutEtp * facteur * coefRatio : (coutParHypothese.get(h.id) ?? base.coutEtp * facteur * coefRatio);
+    // Arrivée : prime de fonction du cost center, pas de 13e mois (ancienneté < 1 an)
+    const complements = 1 + tauxComplementsDe(e.complements, profil.centre_cout, { sansCct: true });
+    const coutEtp = sens === "arrivee" ? base.coutEtp * complements * facteur * coefRatio : (coutParHypothese.get(h.id) ?? base.coutEtp * complements * facteur * coefRatio);
     if (sens === "arrivee") coutParHypothese.set(h.id, coutEtp);
     sources.push({
       libelle: `${h.nb_personnes} × ${h.fonction || "fonction non précisée"} (${h.type_contrat}${h.centre_cout ? `, ${h.centre_cout}` : ""})`,
@@ -133,7 +142,7 @@ export function valoriserProjection(journal: JournalMoisProjection[], e: Entrees
   let etpDepart = 0;
   for (const s of e.photoDepart) {
     const brut = e.source.brutDe(s.code_salarie);
-    masse += (brut != null ? brut * e.coefBase : e.coutEtpDefaut) * etpDe(s);
+    masse += (brut != null ? brut * (1 + tauxComplementsDe(e.complements, s.centre_cout ?? null)) * e.coefBase : e.coutEtpDefaut) * etpDe(s);
     etpDepart += etpDe(s);
   }
   // Coût moyen de départ, SANS levier : un levier effectif dès le premier

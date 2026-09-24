@@ -52,6 +52,8 @@ export interface DonneesMethodologie {
     periodeReference: { mois: number; annee: number } | null;
     aucunSalaire: boolean;
     realise: { employeur: number; brut: number; n: number; mesure: boolean };
+    /** Compléments récurrents mesurés sur la Liste des salaires, null sans mesure. */
+    complements: { mois: number; annee: number; taux: number; tauxCct: number; tauxPrf: number; n: number; brutBase: number; montant: number; costCenters: number } | null;
   };
 }
 
@@ -1250,18 +1252,31 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-sous-contrat",
         titre: "Coût employeur sous contrat",
-        definition: "Ce que coûterait, sur le mois, l'ensemble des salariés sous contrat : brut indice × taux d'occupation × coefficient de charges.",
+        definition: "Ce que coûterait, sur le mois, l'ensemble des salariés sous contrat : brut indice × (1 + compléments récurrents) × taux d'occupation × coefficient de charges.",
         valeur: p ? euros(p.sousContrat) : undefined,
         valeurNote: c?.salairesReportes && reference ? `salaires lus dans le roster de ${reference}` : undefined,
-        formule: "coût sous contrat = Σ actifs (brut indice plein temps × taux d'occupation / 100 × coefficient)",
+        formule: "coût sous contrat = Σ actifs (brut indice plein temps × (1 + taux de compléments récurrents) × taux d'occupation / 100 × coefficient)",
         operandes: p
           ? [
               { label: "Coût moyen par ETP", valeur: euros(p.coutMoyenEtp) },
+              { label: "Compléments récurrents", valeur: c?.complements ? `${nf(c.complements.taux * 100, 1)} % du brut de base` : "non mesurés" },
+              { label: "dont sous contrat", valeur: euros(p.complementsRecurrents) },
               { label: "Coefficient", valeur: nf(p.coef, 3) },
               { label: "Sous contrat", valeur: euros(p.sousContrat) },
             ]
           : undefined,
         details: [
+          {
+            titre: "Les compléments récurrents : 13e mois proratisé et prime de fonction",
+            points: [
+              "Le brut indice du roster ne porte ni le prorata mensuel du 13e mois (CCT / P001, versé aux chauffeurs de plus d'un an d'ancienneté) ni la prime de fonction (PR F : formateurs, team leaders, délégués du personnel dès octobre 2026). Les deux sont récurrents chaque mois : ils sont comptés dans le contractuel, pas dans le variable.",
+              "Le taux est mesuré sur le dernier mois de Liste des salaires : Σ (CCT + PR F) / Σ brut de base des lignes de salaire, globalement et par cost center (la prime de fonction est concentrée sur quelques fonctions ; le taux du cost center d'un salarié prime, sinon le global). Il s'applique au brut indice avant les charges.",
+              c?.complements
+                ? `Mesure : ${MOIS_LABELS[c.complements.mois]} ${c.complements.annee}, ${nf(c.complements.n, 0)} lignes, ${euros(c.complements.montant)} de compléments pour ${euros(c.complements.brutBase)} de brut de base ⇒ ${nf(c.complements.taux * 100, 2)} % (13e mois ${nf(c.complements.tauxCct * 100, 2)} %, prime de fonction ${nf(c.complements.tauxPrf * 100, 2)} %), ${nf(c.complements.costCenters, 0)} cost centers avec leur propre taux.`
+                : "Aucune Liste des salaires importée : le taux vaut 0 et le contractuel sous-estime la masse d'environ 6 %.",
+              "Dans les scénarios, les mêmes taux s'appliquent aux mois projetés (sinon la courbe sauterait entre le dernier mois réel et le premier projeté). Une hypothèse d'arrivée ne porte que la prime de fonction de son cost center : elle n'a pas l'ancienneté du 13e mois.",
+            ],
+          },
           {
             titre: "Le brut indice est un plein temps",
             points: [
@@ -1409,7 +1424,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-moyen-etp",
         titre: "Coût moyen par ETP",
-        definition: "Le coût employeur d'un équivalent temps plein, sur le périmètre et le mois affichés.",
+        definition: "Le coût employeur d'un équivalent temps plein, sur le périmètre et le mois affichés, compléments récurrents compris.",
         valeur: p ? euros(p.coutMoyenEtp) : undefined,
         formule: "coût moyen par ETP = coût sous contrat / Σ ETP sous contrat",
         details: [

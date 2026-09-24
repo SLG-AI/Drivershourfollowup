@@ -30,6 +30,11 @@ export interface CoutsStats {
   coefficient_source: string | null;
   cout_moyen_etp: number;
   brut_plein_temps_moyen: number;
+  /** Part du sous contrat due aux compléments récurrents (13e mois proratisé, prime de fonction). */
+  complements_recurrents?: number;
+  /** Taux global mesuré (Σ compléments / Σ brut de base), null sans Liste des salaires. */
+  taux_complements?: number | null;
+  complements_source?: string | null;
   etp_sous_contrat: number;
   /** Somme des douze mois sous contrat, mesurés et reportés. */
   masse_annuelle: number;
@@ -55,9 +60,11 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       title: "Coût employeur sous contrat",
       ancre: "cout-sous-contrat",
       value: euros(stats.sous_contrat),
-      description: `${stats.etp_sous_contrat.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ETP × ${euros(stats.cout_moyen_etp)} par ETP`,
+      description: `${stats.etp_sous_contrat.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ETP × ${euros(stats.cout_moyen_etp)} par ETP${stats.taux_complements != null && stats.complements_recurrents ? ` · dont compléments récurrents ${euros(stats.complements_recurrents)}` : ""}`,
       average: stats.sous_contrat_moyen != null ? `Moyenne du mois : ${euros(stats.sous_contrat_moyen)}` : null,
-      note: stats.codes_sans_salaire > 0 ? `${stats.codes_sans_salaire} salarié${stats.codes_sans_salaire > 1 ? "s" : ""} sans salaire connu, au coût moyen` : null,
+      note: stats.codes_sans_salaire > 0
+        ? `${stats.codes_sans_salaire} salarié${stats.codes_sans_salaire > 1 ? "s" : ""} sans salaire connu, au coût moyen`
+        : stats.taux_complements == null ? "Sans Liste des salaires : 13e mois proratisé et prime de fonction non comptés" : null,
       icon: Euro, iconColor: "text-blue-600", iconBg: "bg-blue-50",
     },
     {
@@ -117,7 +124,7 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       title: "Coût moyen par ETP",
       ancre: "cout-moyen-etp",
       value: euros(stats.cout_moyen_etp),
-      description: `Brut plein temps moyen ${euros(stats.brut_plein_temps_moyen)} × coefficient`,
+      description: `Brut plein temps moyen ${euros(stats.brut_plein_temps_moyen)}${stats.taux_complements != null ? ` × (1 + ${pct(stats.taux_complements * 100)} de compléments récurrents)` : ""} × coefficient`,
       average: null,
       note: stats.reference_label ? `Salaires lus dans le roster de ${stats.reference_label}` : null,
       icon: Users, iconColor: "text-violet-600", iconBg: "bg-violet-50",

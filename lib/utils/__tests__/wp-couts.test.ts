@@ -551,3 +551,62 @@ describe("calculerCoutsPaliers — opérandes de la valorisation des heures (mé
     expect(c.heures.injustifiees).toEqual({ lignes: 0, heures: 0, etp: 0, cout: 0, coutEtpApplique: 0, lignesAuRepli: 0 });
   });
 });
+
+// ============================================================
+// Compléments récurrents (13e mois proratisé, prime de fonction)
+// ============================================================
+import { calculerComplementsRecurrents, tauxComplementsDe } from "../wp-couts";
+
+describe("calculerComplementsRecurrents — taux mesuré sur le dernier mois de Liste des salaires", () => {
+  const lignes: LignePaieDetaillee[] = [
+    // juillet : un autre taux, ignoré (pas le dernier mois)
+    { code_salarie: "A", mois: 7, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 4000, nat_cct: 1000, nat_pr_f: 0 },
+    // août : CC1 = deux chauffeurs avec 13e mois, CC2 = un formateur avec prime de fonction
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 4000, nat_cct: 320, nat_pr_f: 0 },
+    { code_salarie: "B", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 4000, nat_cct: 0, nat_pr_f: 0 },
+    { code_salarie: "C", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC2", brut_base: 5000, nat_cct: 400, nat_pr_f: 200 },
+    // soldes de sortie et lignes sans brut de base : hors mesure
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "non_periodique", centre_cout: "CC1", brut_base: 0, nat_cct: 0, nat_pr_f: 0, nat_dc: 900 },
+    { code_salarie: "D", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 0, nat_cct: 50, nat_pr_f: 0 },
+  ];
+
+  it("prend le dernier mois, lignes de salaire avec brut de base seulement, global et par cost center", () => {
+    const c = calculerComplementsRecurrents(lignes)!;
+    expect(c.mois).toBe(8);
+    expect(c.global.n).toBe(3);
+    expect(c.global.brutBase).toBe(13000);
+    expect(c.global.complements).toBe(920);
+    expect(c.global.taux).toBeCloseTo(920 / 13000, 9);
+    expect(c.global.tauxCct).toBeCloseTo(720 / 13000, 9);
+    expect(c.global.tauxPrf).toBeCloseTo(200 / 13000, 9);
+    expect(c.parCc.get("CC1")?.taux).toBeCloseTo(320 / 8000, 9);
+    expect(c.parCc.get("CC2")?.taux).toBeCloseTo(600 / 5000, 9);
+    expect(c.parCc.get("CC2")?.tauxPrf).toBeCloseTo(200 / 5000, 9);
+  });
+
+  it("tauxComplementsDe : cost center s'il est mesuré, sinon global ; 0 sans mesure ; sans 13e mois pour une arrivée", () => {
+    const c = calculerComplementsRecurrents(lignes);
+    expect(tauxComplementsDe(c, "CC2")).toBeCloseTo(600 / 5000, 9);
+    expect(tauxComplementsDe(c, "CC9")).toBeCloseTo(920 / 13000, 9);
+    expect(tauxComplementsDe(c, null)).toBeCloseTo(920 / 13000, 9);
+    expect(tauxComplementsDe(c, "CC2", { sansCct: true })).toBeCloseTo(200 / 5000, 9);
+    expect(tauxComplementsDe(null, "CC2")).toBe(0);
+    expect(calculerComplementsRecurrents([])).toBeNull();
+  });
+
+  it("calculerCoutsPaliers applique le taux au brut avant les charges et isole la part des compléments", () => {
+    const c = calculerComplementsRecurrents(lignes);
+    const photo = [
+      salarie({ code_salarie: "A", taux_occupation: 100, brut_indice: 4000, centre_cout: "CC1" }),
+      salarie({ code_salarie: "C", taux_occupation: 50, brut_indice: 5000, centre_cout: "CC2" }),
+    ];
+    const sans = calculerCoutsPaliers(photo, [], [], [], 8, 2026, { coef: 1.15, source: sourceDe(photo) });
+    const avec = calculerCoutsPaliers(photo, [], [], [], 8, 2026, { coef: 1.15, source: sourceDe(photo), complements: c });
+    const attenduA = 4000 * (1 + 320 / 8000) * 1.15;
+    const attenduC = 5000 * (1 + 600 / 5000) * 0.5 * 1.15;
+    expect(avec.sousContrat).toBe(Math.round(attenduA + attenduC));
+    expect(avec.complementsRecurrents).toBe(Math.round(4000 * (320 / 8000) * 1.15 + 5000 * (600 / 5000) * 0.5 * 1.15));
+    expect(sans.complementsRecurrents).toBe(0);
+    expect(avec.sousContrat).toBeGreaterThan(sans.sousContrat);
+  });
+});

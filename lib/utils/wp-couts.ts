@@ -328,6 +328,102 @@ export function calculerCoefficientsParCostCenter(
   return resultat;
 }
 
+// ============================================================
+// Compléments récurrents (13e mois proratisé, prime de fonction)
+// ============================================================
+
+/**
+ * Le brut indice du roster ne porte ni le prorata mensuel du 13e mois (CCT,
+ * chauffeurs de plus d'un an d'ancienneté) ni la prime de fonction (PR F :
+ * formateurs, team leaders, délégués du personnel). Tous deux sont
+ * récurrents, donc contractuels au sens de la chaîne des coûts ; sans eux, le
+ * sous contrat sous-estimait la masse d'environ 6 % et l'écart au réalisé
+ * mêlait du structurel au variable (arbitrage utilisateur, 24/09/2026).
+ *
+ * Ils sont mesurés sur le dernier mois de Liste des salaires, en TAUX du brut
+ * de base (Σ compléments / Σ brut de base des lignes de salaire), global et
+ * par cost center — la prime de fonction est concentrée sur quelques
+ * fonctions, un taux par cost center évite de la diluer sur les chauffeurs.
+ * Le taux s'applique au brut indice AVANT les charges :
+ * coût = brut × (1 + taux) × ETP × coefficient.
+ */
+export interface TauxComplements {
+  /** Σ (CCT + PR F) / Σ brut de base. */
+  taux: number;
+  /** Part du 13e mois proratisé seule (retirée pour une arrivée de scénario, sans ancienneté). */
+  tauxCct: number;
+  tauxPrf: number;
+  n: number;
+  brutBase: number;
+  complements: number;
+}
+
+export interface ComplementsRecurrents {
+  mois: number;
+  annee: number;
+  global: TauxComplements;
+  parCc: Map<string, TauxComplements>;
+}
+
+/** Natures récurrentes de la Liste des salaires, colonnes de wp_salary_lines. */
+export const NATURES_RECURRENTES: { cle: `nat_${string}`; part: "cct" | "prf" }[] = [
+  { cle: "nat_cct", part: "cct" },
+  { cle: "nat_pr_f", part: "prf" },
+];
+
+function tauxDe(lignes: LignePaieDetaillee[]): TauxComplements {
+  let brutBase = 0, cct = 0, prf = 0;
+  for (const l of lignes) {
+    brutBase += nombre(l.brut_base);
+    cct += nombre(l.nat_cct);
+    prf += nombre(l.nat_pr_f);
+  }
+  const t = (x: number) => (brutBase > 0 ? x / brutBase : 0);
+  return { taux: t(cct + prf), tauxCct: t(cct), tauxPrf: t(prf), n: lignes.length, brutBase, complements: cct + prf };
+}
+
+/**
+ * Taux de compléments récurrents sur le DERNIER mois de Liste des salaires
+ * qui porte du brut de base. Lignes de salaire seulement (pas les soldes de
+ * sortie). Null sans Liste des salaires : le contractuel reste brut × coef.
+ */
+export function calculerComplementsRecurrents(lignes: LignePaieDetaillee[]): ComplementsRecurrents | null {
+  const salaire = lignes.filter((l) => l.type_remuneration !== "non_periodique" && nombre(l.brut_base) > 0);
+  let dernier: { mois: number; annee: number } | null = null;
+  for (const l of salaire) {
+    const annee = Number(l.annee), mois = Number(l.mois);
+    if (!dernier || annee > dernier.annee || (annee === dernier.annee && mois > dernier.mois)) dernier = { mois, annee };
+  }
+  if (!dernier) return null;
+  const { mois, annee } = dernier;
+  const duMois = salaire.filter((l) => Number(l.annee) === annee && Number(l.mois) === mois);
+  const parCc = new Map<string, LignePaieDetaillee[]>();
+  duMois.forEach((l) => {
+    if (!l.centre_cout) return;
+    parCc.set(l.centre_cout, [...(parCc.get(l.centre_cout) ?? []), l]);
+  });
+  return {
+    mois, annee,
+    global: tauxDe(duMois),
+    parCc: new Map([...parCc.entries()].map(([cc, ls]) => [cc, tauxDe(ls)])),
+  };
+}
+
+/**
+ * Taux à appliquer au brut d'un salarié : celui de son cost center s'il est
+ * mesuré, sinon le global ; 0 sans mesure. `sansCct` retire le 13e mois
+ * (arrivée de scénario : pas encore un an d'ancienneté).
+ */
+export function tauxComplementsDe(
+  complements: ComplementsRecurrents | null | undefined,
+  centreCout: string | null | undefined,
+  opts: { sansCct?: boolean } = {}
+): number {
+  if (!complements) return 0;
+  const t = (centreCout && complements.parCc.get(centreCout)) || complements.global;
+  return opts.sansCct ? t.tauxPrf : t.taux;
+}
+
 /** D'où vient le brut de chaque salarié du mois. */
 export interface SourceSalaires {
   /** Brut plein temps d'un salarié, null s'il n'en a nulle part ou s'il n'est pas dans la photo du mois. */
@@ -415,6 +511,8 @@ export interface CoutsMois {
 
   /** Coût employeur moyen d'un ETP sous contrat ce mois = sousContrat / Σ ETP des actifs (0 si aucun). */
   coutMoyenEtp: number;
+  /** Part du sous contrat due aux compléments récurrents (13e mois proratisé, prime de fonction), 0 sans mesure. */
+  complementsRecurrents: number;
 
   /** Opérandes de la valorisation des absences en heures (MCT, injustifiées), pour la méthodologie. */
   heures: {
@@ -468,19 +566,23 @@ export function calculerCoutsPaliers(
   absencesInjustifiees: LigneHeures[],
   mois: number,
   annee: number,
-  opts: { coef: number; source: SourceSalaires; coutEtpRepli?: number; coefParCc?: Map<string, { coef: number }> }
+  opts: { coef: number; source: SourceSalaires; coutEtpRepli?: number; coefParCc?: Map<string, { coef: number }>; complements?: ComplementsRecurrents | null }
 ): CoutsMois {
-  const { coef, source, coutEtpRepli, coefParCc } = opts;
+  const { coef, source, coutEtpRepli, coefParCc, complements } = opts;
   // Coefficient du cost center du salarié quand la paie le donne, sinon le global
   const coefDe = (e: SalarieCout) => (e.centre_cout && coefParCc?.get(e.centre_cout)?.coef) || coef;
+  // Compléments récurrents : même logique, taux du cost center sinon global
+  const complementsDe = (e: SalarieCout) => tauxComplementsDe(complements, e.centre_cout);
   const refDate = lastDayOfMonth(annee, mois);
   const heuresTravaillables = getWorkableHoursInMonth(annee, mois);
 
   const actifs = employes.filter((e) => estActifLe(e, refDate));
 
-  // Coût contractuel d'un salarié : brut plein temps × ETP × charges. Sans
-  // brut, le coût de repli (déjà chargé) × ETP, et on le dénombre.
+  // Coût contractuel d'un salarié : brut plein temps × (1 + compléments
+  // récurrents) × ETP × charges. Sans brut, le coût de repli (déjà chargé) ×
+  // ETP, et on le dénombre.
   let codesManquants = 0;
+  let complementsRecurrents = 0;
   const cout = new Map<string, number>();
   actifs.forEach((e) => {
     const brut = source.brutDe(e.code_salarie);
@@ -488,7 +590,9 @@ export function calculerCoutsPaliers(
       codesManquants += 1;
       cout.set(e.code_salarie, (coutEtpRepli ?? 0) * etpDe(e));
     } else {
-      cout.set(e.code_salarie, brut * etpDe(e) * coefDe(e));
+      const base = brut * etpDe(e) * coefDe(e);
+      cout.set(e.code_salarie, base * (1 + complementsDe(e)));
+      complementsRecurrents += base * complementsDe(e);
     }
   });
   const coutDe = (e: SalarieCout) => cout.get(e.code_salarie) ?? 0;
@@ -525,7 +629,7 @@ export function calculerCoutsPaliers(
   const brutChargeParCode = new Map<string, number | null>();
   employes.forEach((e) => {
     const brut = source.brutDe(e.code_salarie);
-    brutChargeParCode.set(e.code_salarie, brut !== null ? brut * coefDe(e) : null);
+    brutChargeParCode.set(e.code_salarie, brut !== null ? brut * (1 + complementsDe(e)) * coefDe(e) : null);
   });
   const coutEtpDe = (code: string): number => brutChargeParCode.get(code) ?? coutEtpRepli ?? coutMoyenEtp;
   const coutDesHeures = (lignes: LigneHeures[]) =>
@@ -578,6 +682,7 @@ export function calculerCoutsPaliers(
     coutPerduMct: euro(coutPerduMct),
     apresMct: euro(apresMct),
     coutMoyenEtp: euro(coutMoyenEtp),
+    complementsRecurrents: euro(complementsRecurrents),
     heures: {
       travaillables: heuresTravaillables,
       mct: detailHeures(mctDuMois, coutPerduMct),

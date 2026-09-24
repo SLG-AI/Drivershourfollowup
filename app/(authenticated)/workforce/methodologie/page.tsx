@@ -22,7 +22,7 @@ import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } 
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerCoutsPaliers, construireSourceSalaires, fusionnerSourcesPaie, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, calculerCoutsPaliers, construireSourceSalaires, fusionnerSourcesPaie, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 
 interface Props {
   searchParams: Promise<{
@@ -112,7 +112,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
   const [periodeReference, dernierMoisStats, salaryLines, dernierMoisPaie] = await Promise.all([
     supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
-    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur").eq("annee", selectedYear)),
     supabase.from("wp_salary_lines").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
   ]);
   const periodeRef = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
@@ -124,7 +124,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
     dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cout_employeur").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cout_employeur").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
   // Même fusion des deux exports de paie que la page Coûts
@@ -236,6 +236,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
   const coefficient = calculerCoefficientCharges(paie, filtres.actifs ? codesRoster : undefined);
   // Coefficient par cost center : le même que la page Coûts, sinon les paliers en euros divergent de quelques dizaines d'euros
   const coefParCc = calculerCoefficientsParCostCenter(paie);
+  const complements = calculerComplementsRecurrents([...salaryLines, ...lignesCoefficient] as unknown as LignePaieDetaillee[]);
   const sourceSalaires = construireSourceSalaires(roster as unknown as SalarieCout[], photoReference as SalarieCout[] | null);
   const coutsPaliers = calculerCoutsPaliers(
     roster as unknown as SalarieCout[],
@@ -244,7 +245,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
     selectedMonth,
     selectedYear,
-    { coef: coefficient.coef, source: sourceSalaires, coefParCc }
+    { coef: coefficient.coef, source: sourceSalaires, coefParCc, complements }
   );
   const realise = realiseDuMois(paie, selectedMonth, selectedYear, filtres.actifs ? codesRoster : undefined);
 
@@ -278,6 +279,9 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       periodeReference: periodeRef,
       aucunSalaire: photoReference == null,
       realise: { employeur: realise.employeur, brut: realise.brut, n: realise.n, mesure: realise.mesure },
+      complements: complements
+        ? { mois: complements.mois, annee: complements.annee, taux: complements.global.taux, tauxCct: complements.global.tauxCct, tauxPrf: complements.global.tauxPrf, n: complements.global.n, brutBase: complements.global.brutBase, montant: complements.global.complements, costCenters: complements.parCc.size }
+        : null,
     },
   };
 

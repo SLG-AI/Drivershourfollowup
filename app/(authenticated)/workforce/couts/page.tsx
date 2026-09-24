@@ -6,7 +6,7 @@ import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, construireSourceSalaires, fusionnerSourcesPaie, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, NATURES_RECURRENTES, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 import { NATURES, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
@@ -219,6 +219,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const coefficient = calculerCoefficientCharges(paie, filtres.actifs ? employeeCodes : undefined);
   // Coefficient par cost center, lu dans la paie quand elle porte les charges patronales
   const coefParCc = calculerCoefficientsParCostCenter(paie);
+  // Compléments récurrents (13e mois proratisé, prime de fonction) : taux mesurés sur la Liste des salaires
+  const complements = calculerComplementsRecurrents([...salaryLines, ...lignesCoefficient] as unknown as LignePaieDetaillee[]);
   const courbeCouts = construireCourbeCouts({
     headcountData: courbe.headcountData,
     selectedYear,
@@ -227,6 +229,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     photoReference: photoReference as SalarieCout[] | null,
     coef: coefficient.coef,
     coefParCc,
+    complements,
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,
@@ -268,6 +271,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       leviers,
       premierMoisProjete: courbe.etapesProjection[0] ?? { mois: selectedMonth, annee: selectedYear },
       coutEtpDefaut: duMois.couts.coutMoyenEtp,
+      complements,
     });
     scenarioProjectionsCouts = [{
       scenario_id: "__combined__",
@@ -307,7 +311,10 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       ? `Calculé sur ${MONTH_LABELS[coefficient.source.mois]} ${coefficient.source.annee} (${coefficient.source.n.toLocaleString("fr-FR")} lignes, ${coefficient.source.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
       : null,
     cout_moyen_etp: duMois.couts.coutMoyenEtp,
-    brut_plein_temps_moyen: coefficient.coef > 0 ? duMois.couts.coutMoyenEtp / coefficient.coef : 0,
+    brut_plein_temps_moyen: coefficient.coef > 0 ? duMois.couts.coutMoyenEtp / coefficient.coef / (1 + (complements?.global.taux ?? 0)) : 0,
+    complements_recurrents: duMois.couts.complementsRecurrents,
+    taux_complements: complements?.global.taux ?? null,
+    complements_source: complements ? `${MONTH_LABELS[complements.mois]} ${complements.annee}` : null,
     etp_sous_contrat: etpSousContrat,
     masse_annuelle: points.reduce((s, p) => s + p.effectif_brut, 0),
     mois_reportes: points.filter((p) => p.reporte?.brut).length,
@@ -329,7 +336,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     if (brut != null) {
       ligne.avecBrut += 1;
       ligne.brutPleinTemps += brut;
-      ligne.cout += brut * etpDe(e) * coefCc;
+      ligne.cout += brut * (1 + tauxComplementsDe(complements, e.centre_cout)) * etpDe(e) * coefCc;
     } else {
       ligne.cout += duMois.couts.coutMoyenEtp * etpDe(e);
     }
@@ -437,14 +444,17 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       const total = stats.realise - stats.paye;
       const regul = naturesDuMois.filter((n) => n.famille === "regularisations").reduce((acc, n) => acc + n.montant, 0);
       const soldesBrut = realiseDuMois.nonPeriodique.brut;
-      const supplementsCourants = realiseDuMois.supplements - soldesBrut - regul;
+      // Le 13e mois proratisé et la prime de fonction sont déjà dans le contractuel (taux mesuré) : hors de l'écart
+      const clesRecurrentes = new Set<string>(NATURES_RECURRENTES.map((n) => n.cle));
+      const recurrents = naturesDuMois.filter((n) => clesRecurrentes.has(n.cle)).reduce((acc, n) => acc + n.montant, 0);
+      const supplementsVariables = realiseDuMois.supplements - soldesBrut - regul - recurrents;
       const lignesEcart = [
-        { libelle: "Suppléments du mois, chargés (natures × coefficient réel)", montant: supplementsCourants * coefReel },
+        { libelle: "Suppléments variables du mois, chargés (natures × coefficient réel, hors 13e mois et prime de fonction déjà au contractuel)", montant: supplementsVariables * coefReel },
         { libelle: "Régularisations, chargées (retenues)", montant: regul * coefReel },
         { libelle: "Soldes de sortie (coût employeur)", montant: realiseDuMois.nonPeriodique.employeur },
       ];
       const explique = lignesEcart.reduce((acc, l) => acc + l.montant, 0);
-      lignesEcart.push({ libelle: "Reste : prorata des entrées et sorties, écart brut indice / brut payé, avantages déduits", montant: total - explique });
+      lignesEcart.push({ libelle: "Reste : prorata des entrées et sorties, écart brut indice / brut payé, compléments récurrents réels vs taux, avantages déduits", montant: total - explique });
       ecart = {
         sousTitre: `Réalisé ${formatEuros(stats.realise)} − payé contractuel ${formatEuros(stats.paye)}`,
         sections: [{ titre: "D'où vient l'écart", montant: total, ouvert: true, lignes: lignesEcart }],
@@ -669,7 +679,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
           <CardHeader>
             <CardTitle className="text-base">Coût employeur par cost center — {moisLabel}</CardTitle>
             <CardDescription>
-              Salariés sous contrat en fin de mois. Coût = brut plein temps × taux d&apos;occupation × coefficient de charges ({coefficient.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })} par défaut, ou celui du cost center lu dans la paie) ; un salarié sans brut est compté au coût moyen par ETP du périmètre.
+              Salariés sous contrat en fin de mois. Coût = brut plein temps × (1 + compléments récurrents{complements ? `, ${(complements.global.taux * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} % ou le taux du cost center` : ""}) × taux d&apos;occupation × coefficient de charges ({coefficient.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })} par défaut, ou celui du cost center lu dans la paie) ; un salarié sans brut est compté au coût moyen par ETP du périmètre.
             </CardDescription>
           </CardHeader>
           <CardContent>
