@@ -18,6 +18,7 @@ export interface HeadcountItem {
   nom_salarie?: string | null;
   vehicle_type: string;
   description_equipe: string;
+  centre_cout: string;
   type_contrat: string;
   date_entree: string | null;
   etp: number;
@@ -103,6 +104,7 @@ function EmployeeRows({ items }: { items: HeadcountItem[] }) {
             <Badge variant="outline" className="text-xs">{d.vehicle_type}</Badge>
           </TableCell>
           <TableCell className="text-sm">{d.description_equipe}</TableCell>
+          <TableCell className="text-sm">{d.centre_cout || "—"}</TableCell>
           <TableCell className="text-sm text-muted-foreground">{d.type_contrat || "—"}</TableCell>
           <TableCell className="text-sm">{formatDate(d.date_entree)}</TableCell>
           <TableCell className="text-sm text-right">{d.etp}</TableCell>
@@ -125,7 +127,7 @@ function SubcategorySection({
         className="cursor-pointer hover:bg-muted/50"
         onClick={() => setOpen(!open)}
       >
-        <TableCell colSpan={6} className="pl-4">
+        <TableCell colSpan={7} className="pl-4">
           <div className="flex items-center gap-2">
             {open ? (
               <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
@@ -178,6 +180,7 @@ export function HeadcountTable({ items }: { items: HeadcountItem[] }) {
                   <TableHead className="text-xs">Salarié</TableHead>
                   <TableHead className="text-xs">Type</TableHead>
                   <TableHead className="text-xs">Équipe</TableHead>
+                  <TableHead className="text-xs">Cost center</TableHead>
                   <TableHead className="text-xs">Contrat</TableHead>
                   <TableHead className="text-xs">Entrée</TableHead>
                   <TableHead className="text-xs text-right">ETP</TableHead>

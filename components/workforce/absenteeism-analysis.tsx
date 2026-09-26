@@ -64,7 +64,7 @@ export function AbsenteeismAnalysis({ analyses, anneeInitiale }: Props) {
   const colonneTriee = COLONNES_DEPOT.find((c) => c.cle === tri.cle)?.label.toLowerCase();
   const nbPartis = a.bradford.filter((b) => b.parti).length;
 
-  const tooltipStyle = { borderRadius: "8px", border: "1px solid hsl(var(--border))", backgroundColor: "hsl(var(--background))" };
+  const tooltipStyle = { borderRadius: "8px", border: "1px solid var(--border)", backgroundColor: "var(--background)" };
 
   const tuiles: { label: string; taux: number; couleur?: string; detail: string }[] = [
     { label: "Absentéisme global", taux: a.taux.global, detail: `sur ${fmtEtp(a.netEtpMoyen)} ETP disponibles · ${a.moisAvecDonnees.length} mois` },
@@ -124,9 +124,9 @@ export function AbsenteeismAnalysis({ analyses, anneeInitiale }: Props) {
               <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} width={40} unit="%" />
               <Tooltip contentStyle={tooltipStyle} formatter={(v) => fmtPct(Number(v))} />
               <Legend />
-              <Bar dataKey="CNS" stackId="s" fill={COULEURS.cns} stroke="hsl(var(--background))" strokeWidth={1} />
-              <Bar dataKey="MCT" stackId="s" fill={COULEURS.mct} stroke="hsl(var(--background))" strokeWidth={1} />
-              <Bar dataKey="Injustifiées" stackId="s" fill={COULEURS.injustifiees} stroke="hsl(var(--background))" strokeWidth={1} radius={[4, 4, 0, 0]}>
+              <Bar dataKey="CNS" stackId="s" fill={COULEURS.cns} stroke="var(--background)" strokeWidth={1} />
+              <Bar dataKey="MCT" stackId="s" fill={COULEURS.mct} stroke="var(--background)" strokeWidth={1} />
+              <Bar dataKey="Injustifiées" stackId="s" fill={COULEURS.injustifiees} stroke="var(--background)" strokeWidth={1} radius={[4, 4, 0, 0]}>
                 {/* Total global au-dessus de la pile, en encre de texte (pas la couleur d'une série) */}
                 <LabelList dataKey="Global" position="top" offset={6} formatter={(v) => fmtPct(Number(v))} className="fill-foreground" fontSize={12} />
               </Bar>

@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { revalidatePath } from "next/cache";
 import { lastDayOfMonth } from "@/lib/utils/wp-calculations";
+import { MODE_PAR_TYPE, type ModeLevier, type TypeLevier } from "@/lib/utils/wp-leviers-cout";
 
 interface MonthlyParamInput {
   mois: number;
@@ -289,6 +290,16 @@ export async function duplicateScenario(sourceId: string) {
     );
   }
 
+  // Copy cost levers
+  const costParams = await fetchAll(
+    supabase.from("wp_scenario_cost_params").select("*").eq("scenario_id", sourceId)
+  );
+  if (costParams.length > 0) {
+    await supabase.from("wp_scenario_cost_params").insert(
+      costParams.map(({ id: _id, scenario_id: _sid, created_at: _ca, ...rest }) => ({ scenario_id: newId, ...rest }))
+    );
+  }
+
   revalidatePath("/", "layout");
   return { id: newId };
 }
@@ -416,6 +427,85 @@ export async function deleteArrivalHypothesis(id: string) {
 
   if (after) throw new Error("La suppression a échoué silencieusement - la ligne existe toujours");
 
+  revalidatePath("/", "layout");
+  return { success: true };
+}
+
+// ============================================================
+// Cost levers CRUD (wp_scenario_cost_params)
+// ============================================================
+
+interface CostParamInput {
+  type: TypeLevier;
+  centre_cout: string | null;
+  annee_effet: number;
+  mois_effet: number;
+  valeur: number;
+  mode: ModeLevier;
+  libelle: string | null;
+}
+
+/**
+ * Garde serveur : la base impose déjà la cohérence type/mode, mais un message
+ * en français vaut mieux qu'une violation de contrainte.
+ */
+function validerCostParam(data: CostParamInput): CostParamInput {
+  const modes = MODE_PAR_TYPE[data.type];
+  if (!modes) throw new Error("Type de levier inconnu");
+  if (!modes.includes(data.mode)) throw new Error("Mode incompatible avec le type de levier");
+  const valeur = Number(data.valeur);
+  if (!Number.isFinite(valeur)) throw new Error("La valeur doit être un nombre");
+  const mois = Number(data.mois_effet);
+  const annee = Number(data.annee_effet);
+  if (!Number.isInteger(mois) || mois < 1 || mois > 12) throw new Error("Mois d'effet invalide");
+  if (!Number.isInteger(annee) || annee < 2000 || annee > 2100) throw new Error("Année d'effet invalide");
+  const centre = data.centre_cout?.trim() || null;
+  const libelle = data.libelle?.trim() || null;
+  return { type: data.type, centre_cout: centre, annee_effet: annee, mois_effet: mois, valeur, mode: data.mode, libelle };
+}
+
+export async function addCostParam(scenarioId: string, data: CostParamInput) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { data: result, error } = await supabase
+    .from("wp_scenario_cost_params")
+    .insert({ scenario_id: scenarioId, ...validerCostParam(data) })
+    .select()
+    .single();
+
+  if (error) throw new Error("Erreur ajout levier de coût: " + error.message);
+  revalidatePath("/", "layout");
+  return result;
+}
+
+export async function updateCostParam(id: string, data: CostParamInput) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { error } = await supabase
+    .from("wp_scenario_cost_params")
+    .update(validerCostParam(data))
+    .eq("id", id);
+
+  if (error) throw new Error("Erreur mise à jour levier de coût: " + error.message);
+  revalidatePath("/", "layout");
+  return { success: true };
+}
+
+export async function deleteCostParam(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Non authentifié");
+
+  const { error } = await supabase
+    .from("wp_scenario_cost_params")
+    .delete()
+    .eq("id", id);
+
+  if (error) throw new Error("Erreur suppression levier de coût: " + error.message);
   revalidatePath("/", "layout");
   return { success: true };
 }

@@ -239,7 +239,7 @@ export default function AnalyticsClient({
                     formatter={(value) => [`${Number(value).toFixed(2)}h`]}
                     contentStyle={{
                       borderRadius: "8px",
-                      border: "1px solid hsl(var(--border))",
+                      border: "1px solid var(--border)",
                     }}
                   />
                   <Legend />
@@ -249,7 +249,7 @@ export default function AnalyticsClient({
                       dataKey="Heures payées"
                       stackId="solde"
                       fill="#ef4444"
-                      stroke="hsl(var(--background))"
+                      stroke="var(--background)"
                       strokeWidth={1}
                       radius={visibleMetrics.has("Heures positives fin") ? 0 : [4, 4, 0, 0]}
                     >
@@ -259,7 +259,7 @@ export default function AnalyticsClient({
                     </Bar>
                   )}
                   {visibleMetrics.has("Heures positives fin") && (
-                    <Bar dataKey="Heures positives fin" stackId="solde" fill="#22c55e" stroke="hsl(var(--background))" strokeWidth={1} radius={[4, 4, 0, 0]}>
+                    <Bar dataKey="Heures positives fin" stackId="solde" fill="#22c55e" stroke="var(--background)" strokeWidth={1} radius={[4, 4, 0, 0]}>
                       <LabelList
                         dataKey={visibleMetrics.has("Heures payées") ? "Payées + positives" : "Heures positives fin"}
                         position="top"
@@ -328,12 +328,12 @@ export default function AnalyticsClient({
                         <YAxis fontSize={12} />
                         <Tooltip
                           formatter={(value, name) => [fmtH(Number(value)), String(name)]}
-                          contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
+                          contentStyle={{ borderRadius: "8px", border: "1px solid var(--border)" }}
                         />
                         <Legend />
-                        <Bar dataKey="Heures théoriques" stackId="total" fill="#9ca3af" stroke="hsl(var(--background))" strokeWidth={1} />
-                        <Bar dataKey="Heures payées" stackId="total" fill="#ef4444" stroke="hsl(var(--background))" strokeWidth={1} />
-                        <Bar dataKey="Heures positives fin" stackId="total" fill="#22c55e" stroke="hsl(var(--background))" strokeWidth={1} radius={[4, 4, 0, 0]}>
+                        <Bar dataKey="Heures théoriques" stackId="total" fill="#9ca3af" stroke="var(--background)" strokeWidth={1} />
+                        <Bar dataKey="Heures payées" stackId="total" fill="#ef4444" stroke="var(--background)" strokeWidth={1} />
+                        <Bar dataKey="Heures positives fin" stackId="total" fill="#22c55e" stroke="var(--background)" strokeWidth={1} radius={[4, 4, 0, 0]}>
                           <LabelList dataKey="Total" position="top" offset={6} fontSize={12} className="fill-foreground" formatter={(v) => fmtH(Number(v))} />
                         </Bar>
                       </BarChart>
@@ -769,7 +769,7 @@ export default function AnalyticsClient({
                   formatter={(value, name) => [`${Number(value).toFixed(2)}h`, name]}
                   contentStyle={{
                     borderRadius: "8px",
-                    border: "1px solid hsl(var(--border))",
+                    border: "1px solid var(--border)",
                   }}
                 />
                 <Legend />
@@ -876,7 +876,7 @@ export default function AnalyticsClient({
                   formatter={(value, name) => [`${Number(value).toFixed(2)}h`, name]}
                   contentStyle={{
                     borderRadius: "8px",
-                    border: "1px solid hsl(var(--border))",
+                    border: "1px solid var(--border)",
                   }}
                 />
                 <Legend />

@@ -63,8 +63,8 @@ export function GapAnalysisChart({ data }: Props) {
             <Tooltip
               contentStyle={{
                 borderRadius: "8px",
-                border: "1px solid hsl(var(--border))",
-                backgroundColor: "hsl(var(--background))",
+                border: "1px solid var(--border)",
+                backgroundColor: "var(--background)",
               }}
               formatter={(value, name) => {
                 const labels: Record<string, string> = {

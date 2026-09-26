@@ -72,11 +72,11 @@ describe("estFinDeMission / estSortieHorsTurnover", () => {
     expect(estFinDeMission(null)).toBe(false);
   });
 
-  it("écarte du turnover les sorties temporaires, les CDD et les fins de mission", () => {
+  it("écarte du turnover les sorties temporaires et les fins de mission, pas un CDD rompu avant terme", () => {
     expect(estSortieHorsTurnover({ est_sortie_temporaire: true })).toBe(true);
-    expect(estSortieHorsTurnover({ type_contrat: "CDD" })).toBe(true);
-    expect(estSortieHorsTurnover({ type_contrat: "cdd" })).toBe(true);
     expect(estSortieHorsTurnover({ description_motif_sortie: "Fin de mission" })).toBe(true);
-    expect(estSortieHorsTurnover({ type_contrat: "CDI", description_motif_sortie: "Demission" })).toBe(false);
+    expect(estSortieHorsTurnover({ description_motif_sortie: "Demission" })).toBe(false);
+    // Le type de contrat n'entre pas en jeu : seul le motif décide
+    expect(estSortieHorsTurnover({ ...{ type_contrat: "CDD CHAUF. BUS" }, description_motif_sortie: "Résiliation commun accord" })).toBe(false);
   });
 });

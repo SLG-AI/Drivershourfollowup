@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import { getLatestRosterPeriod } from "@/lib/utils/roster-period";
 import { revalidatePath } from "next/cache";
+import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 
 // ============================================================
 // Legacy target needs (kept for backward compatibility)
@@ -194,7 +195,7 @@ export async function computeProjectionByDepot(input: {
     fetchAll(rosterPeriode
       ? supabase.from("wp_employees").select("*").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
       : supabase.from("wp_employees").select("*").limit(0)),
-    fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie")),
+    fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie")).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_absences_mct").select("code_salarie, mois, annee, duree_hrs, date_absence")),
     fetchAll(supabase.from("wp_scenario_monthly_params").select("*").in("scenario_id", scenarioIds)),
     fetchAll(supabase.from("wp_scenario_monthly_turnover_params").select("*").in("scenario_id", scenarioIds)),

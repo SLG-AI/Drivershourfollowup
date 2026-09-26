@@ -100,3 +100,46 @@ export function computeEffectifMoyen(
   const suspendus = sommeSuspendus / jours;
   return { brut, suspendus, net: brut - suspendus, jours };
 }
+
+// ============================================================
+// Courbe d'évolution : un point de fin de mois exprimé en moyenne du mois
+// ============================================================
+
+/** Paliers d'un mois, en ETP. Les champs absents le restent. */
+export interface PaliersDuPoint {
+  effectif_brut: number;
+  effectif_net: number;
+  effectif_reel?: number;
+  effectif_apres_injustifiees?: number;
+  projected_apres_injustifiees?: number;
+  effectif_apres_mct?: number;
+  projected_apres_mct?: number;
+}
+
+const arrondi1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Convertit les paliers de FIN de mois en MOYENNE du mois.
+ *
+ * Sous contrat et net viennent de la moyenne journalière (`computeEffectifMoyen`).
+ * Les paliers suivants retirent des absences dont les TAUX sont déjà des
+ * moyennes du mois, rapportés à l'effectif net : on les applique donc à
+ * l'effectif net moyen. Comme chaque palier vaut « net × (1 − taux cumulés) »,
+ * cela revient à le multiplier par net moyen / net de fin de mois — exactement
+ * ce que font les cartes KPI (« Effectif moyen payé », « disponible »…), de
+ * sorte que le point du mois affiché et ses cartes donnent le même chiffre.
+ */
+export function paliersEnMoyenne(fin: PaliersDuPoint, moyenne: Pick<EffectifMoyen, "brut" | "net">): PaliersDuPoint {
+  const k = fin.effectif_net > 0 ? moyenne.net / fin.effectif_net : 1;
+  const echelle = (v: number | undefined) => (v == null ? undefined : Math.max(0, arrondi1(v * k)));
+  return {
+    effectif_brut: arrondi1(moyenne.brut),
+    effectif_net: Math.max(0, arrondi1(moyenne.net)),
+    effectif_reel: echelle(fin.effectif_reel),
+    effectif_apres_injustifiees: echelle(fin.effectif_apres_injustifiees),
+    projected_apres_injustifiees: echelle(fin.projected_apres_injustifiees),
+    effectif_apres_mct: echelle(fin.effectif_apres_mct),
+    projected_apres_mct: echelle(fin.projected_apres_mct),
+  };
+}
+

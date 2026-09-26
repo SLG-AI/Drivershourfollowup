@@ -18,9 +18,11 @@ import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
 import { estFinDeMission, estSortieHorsTurnover } from "@/lib/utils/wp-suspension";
-import { calculerPaliers, etpDe, type SalariePaliers } from "@/lib/utils/wp-paliers";
+import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
+import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, calculerCoutsPaliers, construireSourceSalaires, fusionnerSourcesPaie, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 
 interface Props {
   searchParams: Promise<{
@@ -30,6 +32,8 @@ interface Props {
     cc?: string;
     depots?: string;
     equipes?: string;
+    contrats?: string;
+    societes?: string;
     employee?: string;
   }>;
 }
@@ -45,10 +49,12 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
 
   // Périmètre actif, pour que le lecteur sache à quoi se rapportent les chiffres
   const perimetre: { libelle: string; valeurs: string[] }[] = [
+    { libelle: "Sociétés", valeurs: filtres.societes },
     { libelle: "Fonctions", valeurs: filtres.fonctions },
     { libelle: "Centres de coût", valeurs: filtres.cc },
     { libelle: "Dépôts", valeurs: filtres.depots },
     { libelle: "Équipes", valeurs: filtres.equipes },
+    { libelle: "Contrats", valeurs: filtres.contrats },
     { libelle: "Salarié", valeurs: filtres.employee ? [filtres.employee] : [] },
   ].filter((f) => f.valeurs.length > 0);
 
@@ -89,7 +95,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
             supabase.from("wp_employees").select("*").eq("mois", moisPrecedent.mois).eq("annee", moisPrecedent.annee)
           )
         : Promise.resolve([] as Record<string, unknown>[]),
-      fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)),
+      fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
       fetchAll(supabase.from("wp_absences_mct").select("*").eq("annee", selectedYear)),
       fetchAll(supabase.from("wp_absences_injustifiees").select("*").eq("annee", selectedYear)),
       fetchAll(
@@ -99,8 +105,30 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
           .in("annee", Array.from(new Set([selectedYear, moisPrecedent.annee])))
           .in("type", ["sortie", "sortie_temporaire"])
       ),
-      fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee").eq("annee", selectedYear)),
+      fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee, centre_cout, total_brut, brut_base, supplements, cout_total_secu, charges_patronales").eq("annee", selectedYear)),
     ]);
+  // Coûts : photo de référence salariale (dernière avec brut indice) et dernier
+  // mois de statistiques salariales avec montants, comme sur la page Coûts.
+  const [periodeReference, dernierMoisStats, salaryLines, dernierMoisPaie] = await Promise.all([
+    supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur").eq("annee", selectedYear)),
+    supabase.from("wp_salary_lines").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  const periodeRef = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
+  const [photoReference, statsCoefficient, lignesCoefficient] = await Promise.all([
+    periodeRef
+      ? fetchAll(supabase.from("wp_employees").select("code_salarie, brut_indice, taux_occupation").eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
+      : Promise.resolve(null),
+    dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
+      ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
+      : Promise.resolve([] as Record<string, unknown>[]),
+    dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cout_employeur").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+      : Promise.resolve([] as Record<string, unknown>[]),
+  ]);
+  // Même fusion des deux exports de paie que la page Coûts
+  const paie = fusionnerSourcesPaie([...salaryStats, ...statsCoefficient], [...salaryLines, ...lignesCoefficient] as unknown as LignePaieDetaillee[]);
 
   // Mêmes filtres et même reclassification que le tableau de bord, sinon les
   // chiffres de cette page ne seraient pas ceux qu'on cherche à expliquer.
@@ -125,7 +153,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     roster as unknown as SalariePaliers[],
     cns,
     mct,
-    absencesInj,
+    injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
     selectedMonth,
     selectedYear
   );
@@ -162,22 +190,20 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     });
 
   const mouvements = moisPrecedentDisponible
-    ? computeRosterMovements(rosterPrec, roster, selectedMonth, selectedYear, sortiesConstatees)
+    ? computeRosterMovements(rosterPrec, roster, selectedMonth, selectedYear, sortiesConstatees, { prev: employeesPrec, curr: employees })
     : null;
 
-  const typeContratParCode = new Map<string, string>();
-  [...rosterPrec, ...roster].forEach((e) => typeContratParCode.set(e.code_salarie, e.type_contrat || ""));
-  const estFinDeCdd = (code: string, motif: string | null | undefined) =>
-    estFinDeMission(motif) || (typeContratParCode.get(code) || "").toUpperCase() === "CDD";
+  // Hors turnover : les seules fins de mission (voir estSortieHorsTurnover)
+  const estFinDeCdd = (motif: string | null | undefined) => estFinDeMission(motif);
 
   let sortiesMoisEtp: number;
   let sortiesMoisHorsTurnoverEtp = 0;
   if (mouvements) {
     sortiesMoisEtp = mouvements.sortiesDefinitives
-      .filter((i) => !estFinDeCdd(i.code_salarie, i.motif))
+      .filter((i) => !estFinDeCdd(i.motif))
       .reduce((sum, i) => sum + i.etp, 0);
     sortiesMoisHorsTurnoverEtp = mouvements.sortiesDefinitives
-      .filter((i) => estFinDeCdd(i.code_salarie, i.motif))
+      .filter((i) => estFinDeCdd(i.motif))
       .reduce((sum, i) => sum + i.etp, 0);
   } else {
     sortiesMoisEtp = roster
@@ -204,6 +230,25 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
 
   const tauxTurnoverMensuel = effectifMoyen.brut > 0 ? (sortiesMoisEtp / effectifMoyen.brut) * 100 : 0;
 
+  // ============================================================
+  // Coûts : la même chaîne en euros (page Coûts)
+  // ============================================================
+  const coefficient = calculerCoefficientCharges(paie, filtres.actifs ? codesRoster : undefined);
+  // Coefficient par cost center : le même que la page Coûts, sinon les paliers en euros divergent de quelques dizaines d'euros
+  const coefParCc = calculerCoefficientsParCostCenter(paie);
+  const complements = calculerComplementsRecurrents([...salaryLines, ...lignesCoefficient] as unknown as LignePaieDetaillee[]);
+  const sourceSalaires = construireSourceSalaires(roster as unknown as SalarieCout[], photoReference as SalarieCout[] | null);
+  const coutsPaliers = calculerCoutsPaliers(
+    roster as unknown as SalarieCout[],
+    cns,
+    mct,
+    injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
+    selectedMonth,
+    selectedYear,
+    { coef: coefficient.coef, source: sourceSalaires, coefParCc, complements }
+  );
+  const realise = realiseDuMois(paie, selectedMonth, selectedYear, filtres.actifs ? codesRoster : undefined);
+
   const donnees: DonneesMethodologie = {
     refDate,
     paliers,
@@ -223,6 +268,20 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       tauxMensuel: tauxTurnoverMensuel,
       tauxAnnualise: tauxTurnoverMensuel * 12,
       sourceMouvements: mouvements !== null,
+    },
+    couts: {
+      paliers: coutsPaliers,
+      coefficient: coefficient.coef,
+      coefficientSource: coefficient.source
+        ? { mois: coefficient.source.mois, annee: coefficient.source.annee, n: coefficient.source.n, brut: coefficient.source.brut, employeur: coefficient.source.employeur, perimetre: coefficient.source.perimetre }
+        : null,
+      salairesReportes: sourceSalaires.reporte,
+      periodeReference: periodeRef,
+      aucunSalaire: photoReference == null,
+      realise: { employeur: realise.employeur, brut: realise.brut, n: realise.n, mesure: realise.mesure },
+      complements: complements
+        ? { mois: complements.mois, annee: complements.annee, taux: complements.global.taux, tauxCct: complements.global.tauxCct, tauxPrf: complements.global.tauxPrf, n: complements.global.n, brutBase: complements.global.brutBase, montant: complements.global.complements, costCenters: complements.parCc.size }
+        : null,
     },
   };
 

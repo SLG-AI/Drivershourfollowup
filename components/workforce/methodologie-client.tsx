@@ -20,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Printer, AlertTriangle, Info } from "lucide-react";
 import type { PaliersMois } from "@/lib/utils/wp-paliers";
+import type { CoutsMois } from "@/lib/utils/wp-couts";
+import { FAMILLES, NATURES } from "@/lib/utils/wp-natures-paie";
 
 const MOIS_LABELS: Record<number, string> = {
   1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
@@ -41,6 +43,18 @@ export interface DonneesMethodologie {
     tauxAnnualise: number;
     sourceMouvements: boolean;
   };
+  /** La chaîne des paliers en euros (page Coûts). */
+  couts?: {
+    paliers: CoutsMois;
+    coefficient: number;
+    coefficientSource: { mois: number; annee: number; n: number; brut: number; employeur: number; perimetre: "filtre" | "entreprise" } | null;
+    salairesReportes: boolean;
+    periodeReference: { mois: number; annee: number } | null;
+    aucunSalaire: boolean;
+    realise: { employeur: number; brut: number; n: number; mesure: boolean };
+    /** Compléments récurrents mesurés sur la Liste des salaires, null sans mesure. */
+    complements: { mois: number; annee: number; taux: number; tauxCct: number; tauxPrf: number; n: number; brutBase: number; montant: number; costCenters: number } | null;
+  };
 }
 
 interface Props {
@@ -59,6 +73,7 @@ const nf = (n: number, d = 1) =>
 const etp = (n: number) => `${nf(n)} ETP`;
 const pct = (n: number, d = 1) => `${nf(n, d)} %`;
 const heures = (n: number) => `${nf(n, 0)} h`;
+const euros = (n: number) => `${nf(n, 0)} €`;
 const dateFr = (iso: string) => {
   const [a, m, j] = iso.split("-");
   return `${j}/${m}/${a}`;
@@ -411,6 +426,7 @@ function exempleTempsPartiel(p: PaliersMois | undefined, libelleMois: string): I
         points: [
           "Le pourcentage du fichier CNS vaut 20, pas 10 : c'est un pourcentage rapporté aux heures théoriques DU SALARIÉ, pas à un mois de temps plein. Un mi-temps a environ moitié moins d'heures théoriques qu'un temps plein.",
           "Ce pourcentage est ensuite multiplié par l'ETP disponible du salarié : 0,20 × 0,5 = 0,10 ETP. Sans cette multiplication, un mi-temps absent pèserait autant qu'un temps plein.",
+          "Le pourcentage est plafonné à 100 % avant tout calcul. Le fichier dépasse parfois ce seuil — 248 h de maladie pour 168 h théoriques, quand le SIRH crédite des journées pleines sur des jours non ouvrés — et un salarié ferait alors perdre plus que son propre ETP. La base conserve la valeur du fichier, les heures affichées restent les siennes, la ligne est marquée « plafonné » et l'import signale ces salariés.",
         ],
       },
       {
@@ -430,7 +446,7 @@ function exempleTempsPartiel(p: PaliersMois | undefined, libelleMois: string): I
         ],
       },
     ],
-    source: "Tables wp_absences, wp_absences_mct, wp_absences_injustifiees ; contrôle dans lib/utils/wp-duree-absence.ts.",
+    source: "Tables wp_absences, wp_absences_mct, wp_absences_injustifiees ; contrôles dans lib/utils/wp-duree-absence.ts et lib/utils/wp-taux-cns.ts.",
   };
 }
 
@@ -570,6 +586,15 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "L'activité et la suspension sont évaluées jour par jour avec les règles décrites plus haut, y compris la fraction suspendue.",
               ],
             },
+            {
+              titre: "La vue « Moyenne » de la courbe",
+              points: [
+                "Le bouton « Fin de mois / Moyenne » de la courbe d'évolution applique ce calcul aux douze mois, chacun lu dans sa propre photographie.",
+                "Sous contrat et net sont des moyennes journalières. Les paliers suivants (réel, payé, disponible) appliquent à l'effectif net moyen les taux d'absence du mois, qui sont déjà des moyennes : le point du mois affiché donne donc les mêmes chiffres que les lignes violettes des cartes, à l'arrondi près.",
+                "Les sortis absents de la photographie ne sont repris que lorsque le mois et le précédent ont chacun leur photo. Un scénario est projeté en fin de mois : en vue Moyenne, chaque mois projeté vaut la moyenne de ses deux fins de mois (la précédente et la sienne), une interpolation linéaire à l'intérieur du mois.",
+                "Sur chaque ligne, le trait plein couvre les mois mesurés et le pointillé les mois reportés : photo de roster reconduite d'un autre mois, ou taux d'absence repris du dernier mois connu. Un palier hérite du report de ses entrées, si bien que le pointillé peut commencer plus tôt sur les lignes du bas. L'infobulle marque ces valeurs « reporté ».",
+              ],
+            },
           ],
           source: "lib/utils/wp-effectif-moyen.ts.",
         },
@@ -664,6 +689,53 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
           source: "Table wp_absences (fichier CNS mensuel).",
         },
         {
+          cle: "taux-injustifiees",
+          titre: "Taux d'absences injustifiées",
+          definition: "Part de l'effectif absente sans justificatif.",
+          valeur: p ? pct(p.tauxInjustifiees) : undefined,
+          valeurNote: p
+            ? p.injustifieesMesure
+              ? `${heures(p.heuresInjustifiees)} = ${etp(p.etpPerduInjustifiees)}`
+              : "aucune absence injustifiée sur ce mois"
+            : undefined,
+          formule:
+            "taux injustifiées = (heures injustifiées / heures travaillables) / effectif après suspension × 100",
+          operandes: p
+            ? [
+                { label: "Heures injustifiées", valeur: heures(p.heuresInjustifiees) },
+                { label: "Heures travaillables", valeur: heures(p.heuresTravaillables) },
+                { label: "ETP perdus", valeur: etp(p.etpPerduInjustifiees) },
+                { label: "Taux", valeur: pct(p.tauxInjustifiees) },
+              ]
+            : undefined,
+          details: [
+            {
+              titre: "Une différence avec les deux autres taux",
+              points: [
+                "Sans filtre, les absences injustifiées ne sont PAS restreintes aux salariés présents dans la photographie du mois : le fichier peut concerner un salarié sorti depuis, et ces heures ont bien manqué au mois.",
+                "Dès qu'un filtre de périmètre est actif, seules comptent celles des salariés du périmètre, comme pour la CNS et le MCT. Sans cela, les heures de toute l'entreprise seraient retirées d'un effectif partiel.",
+              ],
+            },
+            {
+              titre: "Pourquoi ce palier vient avant le MCT : l'effectif payé",
+              points: [
+                "Une absence CNS ou injustifiée n'est pas payée par l'employeur. Un salarié en MCT, lui, reste payé ; la mutuelle rembourse ensuite une partie.",
+                "Retirer les injustifiées juste après la CNS fait donc de ce palier l'effectif PAYÉ. Le MCT se retire ensuite et donne l'effectif disponible, dont la valeur ne dépend pas de l'ordre.",
+              ],
+            },
+            {
+              titre: "Conversion",
+              points: [
+                "Identique au MCT : heures additionnées, divisées par les heures travaillables du mois, puis rapportées à l'effectif après suspension.",
+                "Un jour d'absence injustifiée vaut 8 heures lorsqu'il faut le convertir en jours, par exemple dans le score de Bradford.",
+                "Une ligne de ce fichier décrit une PÉRIODE (début → fin), pas une journée : sa durée couvre tous les jours ouvrés de l'intervalle, à la journée contractuelle du salarié. Une absence du 4 au 12 août vaut ainsi 56 h, soit 7 jours ouvrés à 8 h.",
+                "La colonne « Jours » du détail compte donc les jours ouvrés de chaque période. Elle comptait auparavant les lignes du fichier, ce qui affichait « 1 jour » pour une absence d'une semaine.",
+              ],
+            },
+          ],
+          source: "Table wp_absences_injustifiees.",
+        },
+        {
           cle: "taux-mct",
           titre: "Taux de maladies non prises en charge (MCT)",
           definition:
@@ -708,51 +780,11 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
             {
               titre: "Le dénominateur ne change pas",
               points: [
-                "Le taux est rapporté à l'effectif après suspension, pas à l'effectif après CNS. Le palier « après MCT », lui, se retire bien en cascade du palier précédent.",
+                "Le taux est rapporté à l'effectif après suspension, pas au palier précédent. Le palier « après MCT », lui, se retire bien en cascade de l'effectif payé, et donne l'effectif disponible : le dernier de la chaîne.",
               ],
             },
           ],
           source: "Table wp_absences_mct.",
-        },
-        {
-          cle: "taux-injustifiees",
-          titre: "Taux d'absences injustifiées",
-          definition: "Part de l'effectif absente sans justificatif.",
-          valeur: p ? pct(p.tauxInjustifiees) : undefined,
-          valeurNote: p
-            ? p.injustifieesMesure
-              ? `${heures(p.heuresInjustifiees)} = ${etp(p.etpPerduInjustifiees)}`
-              : "aucune absence injustifiée sur ce mois"
-            : undefined,
-          formule:
-            "taux injustifiées = (heures injustifiées / heures travaillables) / effectif après suspension × 100",
-          operandes: p
-            ? [
-                { label: "Heures injustifiées", valeur: heures(p.heuresInjustifiees) },
-                { label: "Heures travaillables", valeur: heures(p.heuresTravaillables) },
-                { label: "ETP perdus", valeur: etp(p.etpPerduInjustifiees) },
-                { label: "Taux", valeur: pct(p.tauxInjustifiees) },
-              ]
-            : undefined,
-          details: [
-            {
-              titre: "Une différence avec les deux autres taux",
-              points: [
-                "Les absences injustifiées ne sont PAS restreintes aux salariés présents dans la photographie du mois : le fichier peut concerner un salarié sorti depuis, et ces heures ont bien manqué au mois.",
-                "Elles ne sont pas non plus restreintes par les filtres de périmètre. Un filtre par dépôt réduit donc le dénominateur sans réduire le numérateur : à périmètre restreint, ce taux est à lire avec prudence.",
-              ],
-            },
-            {
-              titre: "Conversion",
-              points: [
-                "Identique au MCT : heures additionnées, divisées par les heures travaillables du mois, puis rapportées à l'effectif après suspension.",
-                "Un jour d'absence injustifiée vaut 8 heures lorsqu'il faut le convertir en jours, par exemple dans le score de Bradford.",
-                "Une ligne de ce fichier décrit une PÉRIODE (début → fin), pas une journée : sa durée couvre tous les jours ouvrés de l'intervalle, à la journée contractuelle du salarié. Une absence du 4 au 12 août vaut ainsi 56 h, soit 7 jours ouvrés à 8 h.",
-                "La colonne « Jours » du détail compte donc les jours ouvrés de chaque période. Elle comptait auparavant les lignes du fichier, ce qui affichait « 1 jour » pour une absence d'une semaine.",
-              ],
-            },
-          ],
-          source: "Table wp_absences_injustifiees.",
         },
         {
           cle: "taux-global",
@@ -783,7 +815,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               titre: "Effectif disponible",
               points: [
                 "Le complément du taux global appliqué à l'effectif après suspension donne l'effectif réellement disponible : le dernier palier de la chaîne.",
-                p ? `Sur ${libelleMois} : ${etp(p.apresInjustifiees)} disponibles sur ${etp(p.sousContrat)} sous contrat.` : "",
+                p ? `Sur ${libelleMois} : ${etp(p.apresMct)} disponibles sur ${etp(p.sousContrat)} sous contrat.` : "",
               ].filter(Boolean),
             },
             {
@@ -823,7 +855,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               titre: "Ce qui est exclu, et pourquoi",
               points: [
                 "Les fins de mission — le terme prévu d'un CDD — ne sont pas du turnover : on mesure les départs subis ou choisis, pas des contrats arrivés à leur terme. Arbitrage du 15 septembre 2026.",
-                "Sont exclues aussi bien les sorties dont le motif est « Fin de mission » que celles des salariés dont le type de contrat est un CDD.",
+                "Seul le motif décide : un CDD rompu avant son terme (démission, licenciement, résiliation d'un commun accord) est un départ, il compte dans le turnover. Arbitrage du 22 septembre 2026, qui aligne le tableau de bord sur l'analyse historique.",
                 "Les suspensions de contrat ne sont pas des sorties : elles n'entrent pas dans ce taux.",
               ],
             },
@@ -883,6 +915,8 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "L'export SIRH ne reconduit pas les salariés déjà sortis à sa date. Lire les dates de sortie dans la seule photo du mois affiché fait donc purement et simplement disparaître les sortis du mois.",
                 "La comparaison de deux photos consécutives est la seule source fiable : qui est apparu, qui a disparu, qui est passé en suspension, qui en est revenu.",
                 "Les deux photos subissent les mêmes filtres et la même reclassification, sans quoi un salarié hors périmètre passerait pour un nouvel engagé ou un sorti.",
+                "Sous filtre, un salarié muté vers un autre cost center, dépôt ou équipe disparaît du périmètre sans quitter l'entreprise. Les photos complètes permettent de le reconnaître : il est classé « Sorti du périmètre » (ou « Entré dans le périmètre » dans l'autre sens), avec son affectation de destination ou d'origine, plutôt que parmi les disparus ou les nouveaux engagés. Ces transferts pèsent sur le solde du périmètre, mais ne sont ni des départs ni des embauches.",
+                "Même règle de temps que pour les embauches et les retours : le panneau Mouvements montre les transferts survenus entre les deux photos ; les cartes « Départs identifiés » et « Arrivées identifiées » n'annoncent que ceux des mois suivants, tels qu'un roster plus récent les révèle. Sur la dernière photo de l'année, elles n'en montrent donc aucun.",
               ],
             },
             {
@@ -921,6 +955,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
         },
       ],
     },
+    sectionCouts(d, libelleMois),
     {
       cle: "sec-historique",
       titre: "Analyse historique",
@@ -1021,6 +1056,8 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               points: [
                 "Le KPI du tableau de bord est mensuel, calculé sur l'effectif moyen du mois, et son ×12 n'est qu'une projection.",
                 "L'analyse historique est annuelle et s'appuie sur les entrées/sorties de l'année. Les deux chiffres n'ont pas vocation à coïncider.",
+                "Sous le graphique « Sorties par mois », chaque mois porte son taux mensuel : sorties du mois hors fins de mission / effectif en fin de mois, lu dans la photo du mois — la même base que l'effectif moyen de l'année. Le KPI du tableau de bord divise, lui, par l'effectif moyen pondéré par les jours : les deux peuvent différer de quelques centièmes de point.",
+                "Un mois sans roster (mois à venir dont des sorties sont déjà connues) reprend l'effectif de la dernière photo, sorties déjà datées retirées ; son taux s'affiche en gris italique.",
               ],
             },
           ],
@@ -1072,7 +1109,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
           cle: "perimetre-filtres",
           titre: "Les filtres de périmètre",
           definition:
-            "Fonction, centre de coût, dépôt, équipe et salarié : les filtres de la barre d'en-tête s'appliquent à toutes les pages du module, et sont conservés dans l'adresse de la page.",
+            "Société (code employeur), fonction, centre de coût, dépôt, équipe, contrat (CDI ou CDD) et salarié : les filtres de la barre d'en-tête s'appliquent à toutes les pages du module, et sont conservés dans l'adresse de la page.",
           details: [
             {
               titre: "Comment ils se combinent",
@@ -1083,9 +1120,9 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               ],
             },
             {
-              titre: "Une exception à connaître",
+              titre: "Le cas des absences injustifiées",
               points: [
-                "Les absences injustifiées ne sont pas filtrées par périmètre, alors que leur dénominateur l'est. À périmètre restreint, ce taux et le taux global qui l'inclut sont surestimés.",
+                "Sans filtre, tout le fichier compte, y compris un salarié absent du roster. Avec un filtre, elles sont restreintes aux salariés du périmètre, comme les autres absences.",
               ],
             },
           ],
@@ -1103,6 +1140,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
                 "Elle part du dernier mois réel connu, puis enchaîne les mois un par un jusqu'à décembre de l'année affichée — en traversant les années si nécessaire, au lieu de repartir de la dernière photographie.",
                 "Chaque mois applique, dans l'ordre : les arrivées prévues, les départs connus et le taux de turnover, les départs et retours de congé, puis les taux d'absence.",
                 "Pour une année future, les taux d'absence sont amorcés sur les derniers mois connus de l'année précédente, calculés exactement comme les mois réels.",
+                "La projection déroule la même chaîne que les mois réels : après CNS (dernier taux connu), après absences injustifiées (dernier taux connu, le scénario n'en modélise pas), après MCT. Le taux MCT est celui du scénario ; un scénario qui n'en renseigne aucun (tous les mois à 0) reprend le dernier taux MCT connu, comme la courbe sans scénario.",
               ],
             },
             {
@@ -1161,3 +1199,277 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
     },
   ];
 }
+
+// ============================================================
+// Section « Les coûts » : la chaîne des paliers en euros (page Coûts)
+// ============================================================
+
+const MOIS_LONG = ["", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+
+function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Section {
+  const c = d?.couts;
+  const p = c?.paliers;
+  const coefTexte = c
+    ? c.coefficientSource
+      ? `${nf(c.coefficient, 3)}, calculé sur ${MOIS_LONG[c.coefficientSource.mois]} ${c.coefficientSource.annee} (${nf(c.coefficientSource.n, 0)} lignes, ${c.coefficientSource.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
+      : `${nf(c.coefficient, 2)}, valeur par défaut faute de paie avec charges patronales`
+    : undefined;
+  const reference = c?.periodeReference ? `${MOIS_LONG[c.periodeReference.mois]} ${c.periodeReference.annee}` : null;
+
+  return {
+    cle: "sec-couts",
+    titre: "Les coûts",
+    chapeau:
+      "La même chaîne de paliers, en euros de coût employeur : ce que coûterait l'effectif sous contrat, ce qui n'est pas payé, ce qui l'est. Deux sources : le brut indice du roster pour le contractuel, la paie (Liste des salaires, sinon Statistiques rapides) pour le réalisé.",
+    indicateurs: [
+      {
+        cle: "coefficient-charges",
+        titre: "Coefficient de charges patronales",
+        definition: "Le rapport entre le coût employeur (brut + charges patronales) et le salaire brut, lu sur la paie réelle.",
+        valeur: coefTexte,
+        formule: "coefficient = Σ coût employeur / Σ Total brut, sur le dernier mois de paie qui porte les charges patronales (Liste des salaires : coût de la paie ; Statistiques rapides : total brut + charges patronales)",
+        operandes: c?.coefficientSource
+          ? [
+              { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
+              { label: "Coût employeur", valeur: euros(c.coefficientSource.employeur) },
+              { label: "Coefficient", valeur: nf(c.coefficient, 3) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Périmètre puis entreprise, puis défaut",
+            points: [
+              "Le ratio est d'abord cherché sur le périmètre filtré (les charges varient avec la structure des salaires), sinon sur toute l'entreprise, sinon la valeur par défaut 1,15 (taux de charges patronales de 15 %) est appliquée et signalée.",
+              "Les charges patronales sont la somme des colonnes CM et CP patronales, assurance accident, allocation familiale, santé au travail, mutualité et autres cotisations patronales du fichier. La colonne « Total SECU » n'est PAS un coût employeur : c'est le total des cotisations salariales et patronales (≈ 27 % du brut), elle ne sert pas au coefficient.",
+              "Un fichier « sans salaire » (colonnes présentes, montants vides) ne compte pas : ses lignes valent 0 et n'entrent pas dans le ratio. Un fichier avec montants mais sans les colonnes patronales ne le fait pas non plus : le coût employeur y est alors estimé (brut × coefficient) et signalé.",
+              "Quand la paie porte le centre de coût, un coefficient est aussi calculé par cost center et appliqué aux salariés de ce cost center dans la chaîne des paliers.",
+              "La purge de rétention (3 ans) peut faire retomber le coefficient sur le défaut : sa source est toujours affichée.",
+            ],
+          },
+        ],
+        source: "lib/utils/wp-couts.ts (calculerCoefficientCharges).",
+      },
+      {
+        cle: "cout-sous-contrat",
+        titre: "Coût employeur sous contrat",
+        definition: "Ce que coûterait, sur le mois, l'ensemble des salariés sous contrat : brut indice × (1 + compléments récurrents) × taux d'occupation × coefficient de charges.",
+        valeur: p ? euros(p.sousContrat) : undefined,
+        valeurNote: c?.salairesReportes && reference ? `salaires lus dans le roster de ${reference}` : undefined,
+        formule: "coût sous contrat = Σ actifs (brut indice plein temps × (1 + taux de compléments récurrents) × taux d'occupation / 100 × coefficient)",
+        operandes: p
+          ? [
+              { label: "Coût moyen par ETP", valeur: euros(p.coutMoyenEtp) },
+              { label: "Compléments récurrents", valeur: c?.complements ? `${nf(c.complements.taux * 100, 1)} % du brut de base` : "non mesurés" },
+              { label: "dont sous contrat", valeur: euros(p.complementsRecurrents) },
+              { label: "Coefficient", valeur: nf(p.coef, 3) },
+              { label: "Sous contrat", valeur: euros(p.sousContrat) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Les compléments récurrents : 13e mois proratisé et prime de fonction",
+            points: [
+              "Le brut indice du roster ne porte ni le prorata mensuel du 13e mois (CCT / P001, versé aux chauffeurs de plus d'un an d'ancienneté) ni la prime de fonction (PR F : formateurs, team leaders, délégués du personnel dès octobre 2026). Les deux sont récurrents chaque mois : ils sont comptés dans le contractuel, pas dans le variable.",
+              "Le taux est mesuré sur le dernier mois de Liste des salaires : Σ (CCT + PR F) / Σ brut de base des lignes de salaire, globalement et par cost center (la prime de fonction est concentrée sur quelques fonctions ; le taux du cost center d'un salarié prime, sinon le global). Il s'applique au brut indice avant les charges.",
+              c?.complements
+                ? `Mesure : ${MOIS_LABELS[c.complements.mois]} ${c.complements.annee}, ${nf(c.complements.n, 0)} lignes, ${euros(c.complements.montant)} de compléments pour ${euros(c.complements.brutBase)} de brut de base ⇒ ${nf(c.complements.taux * 100, 2)} % (13e mois ${nf(c.complements.tauxCct * 100, 2)} %, prime de fonction ${nf(c.complements.tauxPrf * 100, 2)} %), ${nf(c.complements.costCenters, 0)} cost centers avec leur propre taux.`
+                : "Aucune Liste des salaires importée : le taux vaut 0 et le contractuel sous-estime la masse d'environ 6 %.",
+              "Dans les scénarios, les mêmes taux s'appliquent aux mois projetés (sinon la courbe sauterait entre le dernier mois réel et le premier projeté). Une hypothèse d'arrivée ne porte que la prime de fonction de son cost center : elle n'a pas l'ancienneté du 13e mois.",
+            ],
+          },
+          {
+            titre: "Le brut indice est un plein temps",
+            points: [
+              "Le roster porte le brut mensuel à l'indice PLEIN TEMPS, quel que soit le taux d'occupation (vérifié : un mi-temps y porte le même brut qu'un temps plein). Le coût mensuel le multiplie donc par le taux.",
+              "Un roster « sans salaire » (Brut indice vide) emprunte le brut de chaque salarié à la dernière photo qui en porte ; le mois est alors reporté et tracé en pointillé. Un salarié sans brut nulle part est compté au coût moyen par ETP du périmètre.",
+              p && p.reporte.codesManquants > 0 ? `Sur ${libelleMois} : ${p.reporte.codesManquants} salarié(s) sans brut connu.` : "",
+            ].filter(Boolean),
+          },
+        ],
+        source: "wp_employees.brut_indice ; lib/utils/wp-couts.ts (calculerCoutsPaliers).",
+      },
+      {
+        cle: "cout-apres-suspension",
+        titre: "Coût après suspension de contrat",
+        definition: "Le coût sous contrat moins celui des contrats suspendus, qui ne sont pas payés.",
+        valeur: p ? euros(p.apresSuspension) : undefined,
+        formule: "après suspension = sous contrat − Σ suspendus (coût × fraction suspendue)",
+        operandes: p
+          ? [
+              { label: "Sous contrat", valeur: euros(p.sousContrat) },
+              { label: "Suspendu", valeur: euros(p.coutSuspendu) },
+              { label: "Après suspension", valeur: euros(p.apresSuspension) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Mêmes règles que les ETP",
+            points: [
+              "Un congé parental à temps partiel ne retire que la moitié du coût, comme il ne retire que la moitié de l'ETP. C'est le même drapeau et la même fraction (wp-suspension.ts).",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "cout-paye",
+        titre: "Coût payé (après CNS et absences injustifiées)",
+        definition: "Ce que l'employeur paie réellement : le coût après suspension, moins les absences CNS et les absences injustifiées, non rémunérées.",
+        valeur: p ? euros(p.apresInjustifiees) : undefined,
+        formule: "payé = après suspension − CNS − injustifiées",
+        operandes: p
+          ? [
+              { label: "CNS", valeur: euros(p.coutPerduCns) },
+              { label: "Injustifiées", valeur: euros(p.coutPerduInjustifiees) },
+              { label: "Payé", valeur: euros(p.apresInjustifiees) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Salarié par salarié quand le fichier existe",
+            points: [
+              "Sur un mois qui a son fichier d'absences, chaque absence est valorisée au coût du salarié concerné : une absence CNS pèse son pourcentage d'absence × son coût disponible ; une absence en heures pèse ses heures / heures travaillables × son coût plein temps. Un absent bien payé coûte plus qu'un absent au salaire minimum.",
+              "Sur un mois sans fichier, le taux repris (le même que la courbe des effectifs) s'applique au coût net : le point est reporté.",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "cout-mct",
+        titre: "Coût des absences payées (MCT)",
+        definition: "Les maladies non prises en charge sont payées par l'employeur : leur coût sort du disponible sans sortir du payé. Chaque heure d'absence est valorisée au coût employeur d'un ETP du salarié concerné.",
+        valeur: p ? euros(p.coutPerduMct) : undefined,
+        formule: "MCT = Σ (heures MCT du salarié / heures travaillables du mois) × brut plein temps du salarié × coefficient ; disponible = payé − MCT",
+        operandes: p
+          ? [
+              { label: "Heures MCT retenues", valeur: `${nf(p.heures.mct.heures, 1)} h (${nf(p.heures.mct.lignes, 0)} lignes)` },
+              { label: "Heures travaillables", valeur: `${nf(p.heures.travaillables, 0)} h` },
+              { label: "ETP équivalents", valeur: etp(p.heures.mct.etp) },
+              { label: "Coût moyen par ETP appliqué", valeur: p.heures.mct.etp > 0 ? euros(p.heures.mct.coutEtpApplique) : "—" },
+              { label: "MCT", valeur: euros(p.coutPerduMct) },
+              { label: "Payé", valeur: euros(p.apresInjustifiees) },
+              { label: "Disponible", valeur: euros(p.apresMct) },
+            ]
+          : undefined,
+        valeurNote: p && p.heures.mct.lignesAuRepli > 0 ? `${nf(p.heures.mct.lignesAuRepli, 0)} ligne${p.heures.mct.lignesAuRepli > 1 ? "s" : ""} valorisée${p.heures.mct.lignesAuRepli > 1 ? "s" : ""} au coût moyen par ETP du mois (salarié sans brut connu)` : undefined,
+        details: [
+          {
+            titre: "Les heures retenues",
+            points: [
+              "Les lignes MCT du mois affiché, hors week-end (les heures travaillables ne comptent que du lundi au vendredi), restreintes aux salariés actifs en fin de mois dans la photo roster du périmètre. Un salarié en MCT sorti avant la fin du mois n'y figure pas.",
+              "Heures travaillables = jours ouvrés du mois (fériés luxembourgeois exclus) × 8 h. Une absence de 8 h vaut 1 / jours ouvrés d'ETP-mois.",
+            ],
+          },
+          {
+            titre: "Un coût par salarié, pas un taux moyen",
+            points: [
+              "Chaque fraction d'ETP est valorisée au brut plein temps du salarié (brut indice du roster) × coefficient de charges (celui de son cost center quand la paie le donne, sinon le global). Un absent bien payé pèse plus qu'un absent au salaire minimum ; le « coût moyen par ETP appliqué » ci-dessus est le résultat de cette pondération, pas une entrée.",
+              "Ce coût vient du contractuel (roster), pas de la paie réelle : la Liste des salaires ne porte pas les heures d'absence et ne change rien ici.",
+            ],
+          },
+          {
+            titre: "Pourquoi ce palier vient après le payé",
+            points: [
+              "C'est l'ordre de la chaîne des effectifs : un salarié en MCT reste payé (la mutuelle rembourse ensuite en partie). Le disponible en euros est donc une lecture de capacité, pas un décaissement.",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "cout-realise",
+        titre: "Réalisé du mois (coût employeur de la paie)",
+        definition: "La paie effective du mois telle que la paie la donne : coût employeur (Liste des salaires : total brut + charges patronales − avantages en nature ; Statistiques rapides : total brut + charges patronales), toutes absences déjà déduites, suppléments et heures supplémentaires compris. Les rémunérations non périodiques (soldes de sortie) y sont comprises.",
+        valeur: c ? (c.realise.mesure ? euros(c.realise.employeur) : "aucun montant importé") : undefined,
+        valeurNote: c && !c.realise.mesure && c.realise.n > 0 ? `${nf(c.realise.n, 0)} lignes présentes mais sans salaire` : undefined,
+        formule: "réalisé = Σ (Total brut + charges patronales) des lignes du mois (périmètre filtré : salariés de la photo) ; sans charges patronales importées : Σ Total brut × coefficient, marqué estimé",
+        operandes: c?.realise.mesure
+          ? [
+              { label: "Total brut", valeur: euros(c.realise.brut) },
+              { label: "Coût employeur", valeur: euros(c.realise.employeur) },
+              { label: "Lignes", valeur: nf(c.realise.n, 0) },
+            ]
+          : undefined,
+        details: [
+          {
+            titre: "Ce que contient chaque case de la carte « Paie réalisée »",
+            points: [
+              "Brut base : colonne « Brut base » de la paie — le salaire de base du mois, déjà proratisé par le temps payé (« Tâche en % ») et par les entrées et sorties en cours de mois. C'est le pendant réel du brut indice × taux d'occupation du roster.",
+              "Suppléments : tout ce qui s'ajoute au brut de base pour former le total brut, c'est-à-dire la somme des natures de paie (voir la liste ci-dessous). Avec les Statistiques rapides, c'est la colonne « Suppléments » du fichier, non détaillée.",
+              "Total brut : brut base + suppléments, colonne « Total brut » de la paie. Les retenues pour absence injustifiée et congés trop pris y sont déjà déduites (natures négatives).",
+              "CM patronale : caisse maladie, part employeur — « CM Patr. soins » + « CM Patr. espèces ». CP patronale : caisse de pension, part employeur. Assurance accident, Santé au travail, Mutualité, Autres cotisations patronales : les colonnes du même nom.",
+              "Charges patronales : la somme des cotisations patronales ci-dessus. Les cotisations SALARIALES (CM/CP salariales, assurance dépendance), l'impôt et le net ne sont pas importés : ils ne changent pas ce que l'employeur décaisse.",
+              "Avantages en nature (déduits) : ce que la paie retire du brut chargé pour obtenir son coût — voiture de fonction et compléments valorisés dans le brut pour l'impôt mais qui ne sont pas un décaissement de salaire. Calculé comme total brut + charges patronales − coût natures déduites.",
+              "Soldes de sortie : les lignes « Rémun. np » (période 13 du SIRH), en pratique le décompte de congés versé à la sortie. Comptées dans le coût employeur réalisé (elles sont décaissées ce mois) mais données à part, hors masse salariale courante et hors coefficient.",
+              "Coût employeur réalisé : colonne « Coût natures déduites » de la paie = total brut + charges patronales − avantages en nature. « Hors soldes de sortie » retire les lignes non périodiques.",
+              "Coefficient réel du mois : coût employeur réalisé / total brut, soldes compris — à comparer au coefficient de charges appliqué au contractuel.",
+              "Écart réalisé − payé contractuel : ce que le contractuel (brut indice × ETP × coefficient, absences non payées retirées) ne modélise pas — suppléments et heures supplémentaires, prorata des entrées et sorties en cours de mois, régularisations, soldes de sortie, écart entre brut indice et brut réellement payé.",
+            ],
+          },
+          {
+            titre: "Les natures de paie qui composent les suppléments, par famille",
+            points: FAMILLES.map((f) => {
+              const natures = NATURES.filter((n) => n.famille === f.id).map((n) => (n.codes.length > 0 ? `${n.codes.join(" / ")} (${n.libelle})` : n.libelle)).join(", ");
+              return `${f.libelle} — ${f.description} Natures : ${natures}.${f.id === "structurel" ? " Le brut de base compte aussi dans cette famille." : ""}`;
+            }),
+          },
+          {
+            titre: "Une 6e courbe, pas un palier",
+            points: [
+              "Le réalisé ne se découpe pas en paliers : il intègre déjà toutes les absences, les suppléments et les heures supplémentaires. Il est tracé à part, en gris, sur les seuls mois qui portent des montants.",
+              "L'écart entre réalisé et payé contractuel se lit sur la carte, contre le payé MOYEN du mois (jour par jour, au prorata des entrées et sorties datées) : la paie est un flux du mois entier, pas une photo au 31. Il mesure ce que le contractuel ne modélise pas (suppléments variables, régularisations, soldes de sortie, écart brut indice / brut payé).",
+            ],
+          },
+        ],
+        source: "Table wp_salary_lines (Liste des salaires : brut par nature, cotisations patronales, coût employeur) quand le mois y est, sinon wp_salary_stats (Statistiques rapides).",
+      },
+      {
+        cle: "cout-moyen-etp",
+        titre: "Coût moyen par ETP",
+        definition: "Le coût employeur d'un équivalent temps plein, sur le périmètre et le mois affichés, compléments récurrents compris.",
+        valeur: p ? euros(p.coutMoyenEtp) : undefined,
+        formule: "coût moyen par ETP = coût sous contrat / Σ ETP sous contrat",
+        details: [
+          {
+            titre: "Le coût moyen qui valorise une hypothèse de scénario",
+            points: [
+              "Une embauche, un départ ou une suspension d'hypothèse n'a pas de salaire : elle est valorisée au coût moyen des salariés comparables, par une chaîne de repli à sept niveaux — même cost center et même profil (fonction + CDI/CDD), même dépôt et même profil, toute l'entreprise et même profil, puis même cost center et même fonction, toute l'entreprise et même fonction, toute l'entreprise, enfin le coût moyen du périmètre.",
+              "Le niveau atteint est affiché avec l'hypothèse : un chauffeur de bus n'est jamais valorisé au tarif d'un chef de service.",
+            ],
+          },
+        ],
+        source: "lib/utils/wp-cout-moyen.ts.",
+      },
+      {
+        cle: "masse-annuelle",
+        titre: "Masse salariale annuelle sous contrat",
+        definition: "La somme des douze coûts mensuels sous contrat, mois mesurés et mois reportés confondus.",
+        details: [
+          {
+            titre: "Lecture",
+            points: [
+              "Chaque mois se lit dans sa photo de roster, reconduite à défaut ; un mois reporté est signalé. Ce n'est pas un budget : les mois à venir prolongent le dernier connu, sans hausse ni scénario, sauf sur la courbe quand un scénario est affiché.",
+            ],
+          },
+        ],
+      },
+      {
+        cle: "leviers-cout",
+        titre: "Leviers de coût d'un scénario",
+        definition: "Un scénario porte, en plus de ses hypothèses d'effectifs, des leviers qui modifient les salaires ou les charges à partir d'un mois donné.",
+        details: [
+          {
+            titre: "Les cinq leviers",
+            points: [
+              "Indexation et augmentation générale : +X % sur les bruts à partir d'un mois d'effet ; plusieurs tranches se cumulent en se multipliant. Les tranches antérieures au premier mois projeté sont ignorées : le brut de la photo les porte déjà.",
+              "Salaire social minimum : un nouveau seuil plein temps à partir d'un mois ; chaque salarié dont le brut plein temps est sous ce seuil est relevé au seuil (× son taux d'occupation). Un seuil est lui-même relevé par les indexations postérieures à son effet.",
+              "Coefficient de charges forcé : remplace le coefficient calculé à partir de son mois d'effet.",
+              "Primes et suppléments ponctuels : un montant global, ou par ETP payé, sur un mois donné, ajouté à tous les paliers du mois (une prime est payée quelle que soit l'absence).",
+              "Chaque levier est global ou propre à un cost center. Quand plusieurs scénarios sont combinés, les hausses et primes s'additionnent ; le seuil et le coefficient viennent du scénario choisi comme source « Coûts », comme les taux de turnover, d'absentéisme et de congés.",
+            ],
+          },
+        ],
+        source: "Table wp_scenario_cost_params ; lib/utils/wp-leviers-cout.ts.",
+      },
+    ],
+  };
+}
+

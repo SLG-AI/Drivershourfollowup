@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeEffectifMoyen, estActifLe, joursDuMois } from "../wp-effectif-moyen";
+import { computeEffectifMoyen, estActifLe, joursDuMois, paliersEnMoyenne } from "../wp-effectif-moyen";
 
 const AOUT = { mois: 8, annee: 2026, jours: 31 };
 
@@ -118,3 +118,33 @@ describe("computeEffectifMoyen", () => {
     expect(m.brut).toBe(1);
   });
 });
+
+describe("paliersEnMoyenne", () => {
+  // Août 2026, SLA202 + SLA206 : fin de mois 908,9 / 881,1 ; moyenne 913,7 / 887,1
+  const fin = { effectif_brut: 908.9, effectif_net: 881.1, effectif_reel: 848.7, effectif_apres_injustifiees: 847.6, effectif_apres_mct: 796.9 };
+  const moyenne = { brut: 913.7, net: 887.1 };
+
+  it("prend sous contrat et net dans la moyenne journalière", () => {
+    const m = paliersEnMoyenne(fin, moyenne);
+    expect(m.effectif_brut).toBe(913.7);
+    expect(m.effectif_net).toBe(887.1);
+  });
+
+  it("applique les mêmes taux d'absence à l'effectif net moyen", () => {
+    const m = paliersEnMoyenne(fin, moyenne);
+    // taux cumulé jusqu'au payé = 1 − 847,6 / 881,1 ; appliqué à 887,1
+    expect(m.effectif_apres_injustifiees).toBeCloseTo(887.1 * (847.6 / 881.1), 1);
+    expect(m.effectif_apres_mct).toBeCloseTo(887.1 * (796.9 / 881.1), 1);
+    // l'ordre des paliers est conservé
+    expect(m.effectif_reel!).toBeGreaterThan(m.effectif_apres_injustifiees!);
+    expect(m.effectif_apres_injustifiees!).toBeGreaterThan(m.effectif_apres_mct!);
+  });
+
+  it("laisse absents les paliers absents, et ne divise pas par un net nul", () => {
+    const m = paliersEnMoyenne({ effectif_brut: 0, effectif_net: 0, projected_apres_mct: 5 }, { brut: 0, net: 0 });
+    expect(m.effectif_reel).toBeUndefined();
+    expect(m.effectif_apres_mct).toBeUndefined();
+    expect(m.projected_apres_mct).toBe(5);
+  });
+});
+

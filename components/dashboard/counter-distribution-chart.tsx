@@ -51,7 +51,7 @@ export function CounterDistributionChart({
                 formatter={(value) => [`${value} conducteurs`, "Nombre"]}
                 contentStyle={{
                   borderRadius: "8px",
-                  border: "1px solid hsl(var(--border))",
+                  border: "1px solid var(--border)",
                 }}
               />
               <Bar dataKey="count" radius={[4, 4, 0, 0]}>

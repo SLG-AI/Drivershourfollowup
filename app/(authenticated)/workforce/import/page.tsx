@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { parseWpFile, detectFileType, type WpFileType, type WpParseResult } from "@/lib/utils/wp-excel-parser";
 import { importWpData, getWpImportHistory, verifierDureesAbsence } from "./actions";
+import { controlerTauxCns, messagesControleTauxCns } from "@/lib/utils/wp-taux-cns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock, ArrowLeftRight } from "lucide-react";
+import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock, ArrowLeftRight, Receipt } from "lucide-react";
 import { toast } from "sonner";
 
 const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: typeof Users; example: string }[] = [
@@ -28,6 +29,13 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
     description: "Données mensuelles : heures travaillées, ETP, coûts salariaux.",
     icon: FileSpreadsheet,
     example: "StatRapides_SLA_*.xlsx",
+  },
+  {
+    id: "salary_lines",
+    label: "Liste des salaires",
+    description: "Paie détaillée : brut par nature (nuit, dimanche, amplitudes, heures sup., primes), charges patronales et coût employeur.",
+    icon: Receipt,
+    example: "StatAvecCS*.xlsx",
   },
   {
     id: "absences_cns",
@@ -84,13 +92,14 @@ export default function WorkforceImportPage() {
   const [importHistory, setImportHistory] = useState<ImportHistoryItem[]>([]);
   const [overrideYear, setOverrideYear] = useState<number>(new Date().getFullYear());
   const [overrideMonth, setOverrideMonth] = useState<number>(0);
-  // Contrôle des durées d'absence contre le temps de travail des Statistiques
-  // rapides. Consultatif : il n'empêche jamais de confirmer l'import.
-  const [avertissementsDurees, setAvertissementsDurees] = useState<string[]>([]);
+  // Contrôles du fichier : durées d'absence contre le temps de travail des
+  // Statistiques rapides, taux CNS > 100 %, fichiers « sans salaire ».
+  // Consultatifs : ils n'empêchent jamais de confirmer l'import.
+  const [avertissementsControle, setAvertissementsControle] = useState<string[]>([]);
   const [controleDureesEnCours, setControleDureesEnCours] = useState(false);
 
   // Types dont l'import est rattaché à une période.
-  const TYPES_AVEC_PERIODE: (WpFileType | null)[] = ["roster_rh", "salary_stats", "absences_cns", "absences_mct"];
+  const TYPES_AVEC_PERIODE: (WpFileType | null)[] = ["roster_rh", "salary_stats", "salary_lines", "absences_cns", "absences_mct"];
 
   useEffect(() => {
     getWpImportHistory().then((data) => setImportHistory(data as ImportHistoryItem[]));
@@ -144,15 +153,21 @@ export default function WorkforceImportPage() {
         toast.error(result.errors[0]);
       }
 
-      // Durées d'absence : comparées à la journée contractuelle lue dans les
-      // Statistiques rapides. Asynchrone (lecture en base), l'aperçu s'affiche
-      // sans l'attendre.
-      setAvertissementsDurees([]);
-      if (result.data.length > 0 && (fileType === "absences_mct" || fileType === "absences_injustifiees")) {
+      // Contrôles portés par le parseur lui-même (fichier « sans salaire » pour
+      // les Statistiques rapides et le roster) : le fichier suffit.
+      const controlesParseur = result.controles ?? [];
+      setAvertissementsControle(controlesParseur);
+      if (fileType === "absences_cns") {
+        // Taux CNS > 100 % : le fichier suffit, aucun aller-retour serveur.
+        setAvertissementsControle([...controlesParseur, ...messagesControleTauxCns(controlerTauxCns(result.data))]);
+      } else if (result.data.length > 0 && (fileType === "absences_mct" || fileType === "absences_injustifiees")) {
+        // Durées d'absence : comparées à la journée contractuelle lue dans les
+        // Statistiques rapides. Asynchrone (lecture en base), l'aperçu
+        // s'affiche sans l'attendre.
         setControleDureesEnCours(true);
         verifierDureesAbsence(fileType, result.data)
-          .then(setAvertissementsDurees)
-          .catch(() => setAvertissementsDurees([]))
+          .then((durees) => setAvertissementsControle([...controlesParseur, ...durees]))
+          .catch(() => setAvertissementsControle(controlesParseur))
           .finally(() => setControleDureesEnCours(false));
       }
 
@@ -200,7 +215,7 @@ export default function WorkforceImportPage() {
     setStage("select");
     setSelectedType(null);
     setParseResult(null);
-    setAvertissementsDurees([]);
+    setAvertissementsControle([]);
     setFileName("");
     setFileBuffer(null);
     setProgress(0);
@@ -228,7 +243,7 @@ export default function WorkforceImportPage() {
 
       {/* Stage: File type selection + upload */}
       {stage === "select" && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {FILE_TYPES.map((ft) => (
             <Card
               key={ft.id}
@@ -308,18 +323,18 @@ export default function WorkforceImportPage() {
               </div>
             )}
 
-            {/* Contrôle des durées contre le temps de travail (Statistiques rapides) */}
+            {/* Contrôles du fichier : durées d'absence, taux CNS, fichiers sans salaire */}
             {controleDureesEnCours && (
               <p className="text-sm text-muted-foreground">
                 Contrôle des durées d&apos;absence en cours…
               </p>
             )}
-            {avertissementsDurees.length > 0 && (
+            {avertissementsControle.length > 0 && (
               <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-orange-800">
-                  Durées d&apos;absence
+                  Contrôles du fichier
                 </p>
-                {avertissementsDurees.map((w, i) => (
+                {avertissementsControle.map((w, i) => (
                   <p key={i} className="mt-1 text-sm text-orange-700">{w}</p>
                 ))}
               </div>

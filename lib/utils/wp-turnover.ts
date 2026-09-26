@@ -166,7 +166,18 @@ export interface TurnoverAnnee {
   categories: Record<CategorieSortie, CompteCategorie>;
   /** Hors fin de mission, en % de l'effectif moyen */
   tauxTotal: number;
-  parMois: { mois: number; volontaire: number; involontaire: number; autre: number }[];
+  parMois: {
+    mois: number;
+    volontaire: number;
+    involontaire: number;
+    autre: number;
+    /** Effectif (ETP) en fin de mois, lu dans la photo du mois — la même base que l'effectif moyen de l'année. */
+    effectifEtp: number;
+    /** Sorties du mois hors fins de mission / effectif en fin de mois, en %, 2 décimales. */
+    taux: number;
+    /** false : le mois n'a pas sa photo, l'effectif est reconduit de la plus récente. */
+    couvert: boolean;
+  }[];
   parMotif: { motif: string; categorie: CategorieSortie; nb: number; etp: number; part: number }[];
   /** Classables d'abord, puis du taux le plus fort au plus faible */
   parDepot: TurnoverDepot[];
@@ -209,10 +220,26 @@ export function analyserTurnover<T extends LignePhotoTurnover>(
   });
   const etpHorsFinMission = categories.volontaire.etp + categories.involontaire.etp + categories.autre.etp;
 
-  const parMois = Array.from({ length: 12 }, (_, i) => ({ mois: i + 1, volontaire: 0, involontaire: 0, autre: 0 }));
+  const parMois = Array.from({ length: 12 }, (_, i) => ({
+    mois: i + 1, volontaire: 0, involontaire: 0, autre: 0, effectifEtp: 0, taux: 0, couvert: false,
+  }));
   sorties.forEach((s) => {
     if (s.categorie === "fin_de_mission") return;
     parMois[s.mois - 1][s.categorie] = arrondi1(parMois[s.mois - 1][s.categorie] + s.etp);
+  });
+  // Taux mensuel : même base que le taux de l'année (effectif en fin de mois,
+  // dans la photo du mois). Un mois sans photo reconduit la plus récente, dont
+  // les sorties déjà datées sont retirées par `actifsEnFinDeMois`.
+  parMois.forEach((m) => {
+    // `moisCouverts` dit qu'un mois est ÉCOULÉ, pas qu'il a son roster :
+    // septembre en cours peut n'avoir que la photo d'août. Seule `exacte` le dit.
+    const photo = photoPourLeMois(photos, m.mois, annee);
+    m.couvert = photo.exacte;
+    const actifs = actifsEnFinDeMois(photo.lignes, lastDayOfMonth(annee, m.mois));
+    const effectif = actifs.reduce((s, e) => s + etpDe(e), 0);
+    m.effectifEtp = arrondi1(effectif);
+    const sortis = m.volontaire + m.involontaire + m.autre;
+    m.taux = effectif > 0 ? Math.round((sortis / effectif) * 10000) / 100 : 0;
   });
 
   const motifs = new Map<string, { categorie: CategorieSortie; nb: number; etp: number }>();

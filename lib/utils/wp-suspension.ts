@@ -184,11 +184,16 @@ export function estFinDeMission(motif: string | null | undefined): boolean {
   return /fin\s+de\s+mission/i.test(motif || "");
 }
 
-/** Sortie d'une photo de roster à écarter du turnover : temporaire, CDD ou fin de mission. */
+/**
+ * Sortie d'une photo de roster à écarter du turnover : temporaire, ou fin de
+ * mission (terme prévu d'un CDD). Un CDD rompu avant terme — démission,
+ * licenciement, résiliation — est bien un départ, il compte. Arbitrage du
+ * 22 septembre 2026 ; jusque-là le code testait aussi `type_contrat === "CDD"`,
+ * qui ne se déclenchait jamais (les libellés SIRH sont « CDD CHAUF. BUS »…).
+ */
 export function estSortieHorsTurnover(e: {
   est_sortie_temporaire?: boolean | null;
-  type_contrat?: string | null;
   description_motif_sortie?: string | null;
 }): boolean {
-  return Boolean(e.est_sortie_temporaire) || (e.type_contrat || "").toUpperCase() === "CDD" || estFinDeMission(e.description_motif_sortie);
+  return Boolean(e.est_sortie_temporaire) || estFinDeMission(e.description_motif_sortie);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { ChevronDown } from "lucide-react";
+import type { PaliersDuPoint } from "@/lib/utils/wp-effectif-moyen";
+import { formatEuros } from "@/lib/utils/format";
 import {
   ResponsiveContainer,
   LineChart,
@@ -29,13 +31,26 @@ export interface HeadcountDataPoint {
   effectif_reel?: number;
   effectif_apres_mct?: number;
   projected_apres_mct?: number;
+  /** Sous contrat et net en moyenne journalière du mois (intermédiaire de calcul). */
+  moyenne_brute?: { brut: number; net: number };
+  /** Les mêmes paliers en MOYENNE du mois, pour la vue « Moyenne ». */
+  moyenne?: PaliersDuPoint;
+  /** Réel − MCT, sans les injustifiées : point de départ des scénarios, qui ne les modélisent pas. Non tracé. */
+  base_scenario_apres_mct?: number;
   effectif_apres_injustifiees?: number;
   projected_apres_injustifiees?: number;
   is_projection: boolean;
+  /** Par ligne, la valeur du mois est REPORTÉE (photo reconduite ou taux repris) : tracée en pointillé. */
+  reporte?: Reporte;
+  /** Taux d'absence effectivement appliqués au mois (mesurés ou repris), en % : nécessaires à la page Coûts. */
+  taux_appliques?: { cns: number | null; inj: number | null; mct: number | null };
+  /** Page Coûts : paie réalisée du mois (brut + charges patronales), absente sur un mois sans montants. */
+  realise?: number;
   target?: number;
   scenario_brut?: number;
   scenario_net?: number;
   scenario_reel?: number;
+  scenario_apres_injustifiees?: number;
   scenario_apres_mct?: number;
   scenario_apres_conges?: number;
 }
@@ -53,32 +68,56 @@ export interface ScenarioProjectionData {
     scenario_brut: number;
     scenario_net: number;
     scenario_reel: number;
+    scenario_apres_injustifiees?: number;
     scenario_apres_mct: number;
     scenario_apres_conges?: number;
   }[];
 }
 
-interface SeriesDef {
+/** Drapeaux de report d'un point : une clé par ligne mesurée (+ `cout` pour la page Coûts). */
+export interface Reporte {
+  brut?: boolean; net?: boolean; reel?: boolean; injustifiees?: boolean; mct?: boolean; cout?: boolean;
+}
+
+export interface SeriesDef {
   key: string;
   label: string;
   color: string;
   dashed?: boolean;
   isScenario?: boolean;
+  /**
+   * Série MESURÉE : tracée en deux traits, plein sur les mois mesurés et
+   * pointillé sur les mois où ce drapeau de `reporte` est levé.
+   */
+  reportFlag?: keyof Reporte;
+  /** Série dont l'infobulle affiche l'écart : le palier précédent de la chaîne. */
+  parent?: string;
+  /** Une série mesurée mais trouée (ex. paie réalisée) : pas de raccord entre les trous. */
+  connectNulls?: boolean;
 }
 
-const ALL_SERIES: SeriesDef[] = [
-  { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)" },
-  { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)" },
-  { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)" },
-  { key: "effectif_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true },
-  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées", color: "hsl(45, 93%, 47%)" },
+const mesureKey = (key: string) => `mesure_${key}`;
+const reportKey = (key: string) => `report_${key}`;
+
+/** Les 5 paliers d'effectif, la cible et les séries de scénario. Les clés servent aussi, en euros, à la page Coûts. */
+export const ALL_SERIES: SeriesDef[] = [
+  { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", reportFlag: "brut" },
+  { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)", reportFlag: "net", parent: "effectif_brut" },
+  { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)", reportFlag: "reel", parent: "effectif_net" },
+  // Ordre de la chaîne : réel −injustifiées→ payé −MCT→ disponible (wp-paliers.ts)
+  { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)", reportFlag: "injustifiees", parent: "effectif_reel" },
+  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", reportFlag: "mct", parent: "effectif_apres_injustifiees" },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
-  { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true },
-  { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true },
-  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true },
-  { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true },
+  { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true, parent: "scenario_brut" },
+  { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true, parent: "scenario_net" },
+  { key: "scenario_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)", dashed: true, isScenario: true, parent: "scenario_reel" },
+  { key: "scenario_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_apres_injustifiees" },
+  { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true, parent: "scenario_apres_mct" },
 ];
+
+/** Valeur telle que la courbe ETP l'affiche : au dixième. */
+const formatDefaut = (n: number) => String(Math.round(n * 10) / 10);
 
 interface Props {
   data: HeadcountDataPoint[];
@@ -90,6 +129,16 @@ interface Props {
   initialAbsSrc?: string | null;
   initialLeaveSrc?: string | null;
   combinedProjection?: ScenarioProjectionData | null;
+  /** Séries à tracer, dans l'ordre de la chaîne (défaut : les effectifs). */
+  series?: SeriesDef[];
+  /** Unité des valeurs (infobulle, axe, écarts) : ETP au dixième, ou euros à l'euro près. Une prop sérialisable, la page étant un composant serveur. */
+  unite?: "etp" | "euros";
+  /** Pas d'arrondi des bornes de l'axe Y. Défaut 10 (effectifs) ; en euros, un pas à l'échelle des montants. */
+  axeStep?: number;
+  /** Série de la réglette de zoom. */
+  brushDataKey?: string;
+  /** Message quand `data` est vide. */
+  libelleVide?: string;
 }
 
 export function HeadcountEvolutionChart({
@@ -102,15 +151,30 @@ export function HeadcountEvolutionChart({
   initialAbsSrc = null,
   initialLeaveSrc = null,
   combinedProjection = null,
+  series = ALL_SERIES,
+  unite = "etp",
+  axeStep = 10,
+  brushDataKey = "effectif_brut",
+  libelleVide = "Importez des données pour visualiser l'évolution des effectifs.",
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const formatValue = unite === "euros" ? formatEuros : formatDefaut;
+  // Visibilité des séries (pastilles) — toutes visibles par défaut. Déclaré ici,
+  // avant tout retour conditionnel : les hooks doivent s'exécuter dans le même ordre.
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  // Dérivés des séries : quelle ligne se dédouble en mesuré/reporté, et la chaîne des écarts
+  const cleReport = new Map(series.filter((s) => s.reportFlag).map((s) => [s.key, s.reportFlag!]));
+  const deltaParent = new Map(series.filter((s) => s.parent).map((s) => [s.key, s.parent!]));
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(initialSelectedScenarios));
   const [turnoverSrc, setTurnoverSrc] = useState<string | null>(initialTurnoverSrc);
   const [absSrc, setAbsSrc] = useState<string | null>(initialAbsSrc);
   const [leaveSrc, setLeaveSrc] = useState<string | null>(initialLeaveSrc);
   const [urlDirty, setUrlDirty] = useState(false);
+  // Lecture de la courbe : effectif au dernier jour du mois, ou moyenne du
+  // mois pondérée par les jours (celle des cartes KPI).
+  const [vue, setVue] = useState<"fin" | "moyenne">("fin");
 
   // Sync selection to URL query params via useEffect (avoids setState during render)
   useEffect(() => {
@@ -204,14 +268,42 @@ export function HeadcountEvolutionChart({
 
   const lastMctRealMonth = data.reduce((last, d, i) => d.effectif_apres_mct != null ? i + 1 : last, 0);
 
-  const chartData = data.map((d, idx) => {
+  // Vue Moyenne : les mois mesurés portent leur moyenne pondérée par les
+  // jours ; un mois projeté par un scénario, qui n'a qu'une valeur de fin de
+  // mois, prend la moyenne de ses deux fins de mois (la précédente et la
+  // sienne), une interpolation linéaire à l'intérieur du mois.
+  const moyenneDisponible = data.some((d) => d.moyenne != null);
+  const vueMoyenne = vue === "moyenne" && moyenneDisponible;
+  const CLE_FIN_MESUREE: Record<string, (d: HeadcountDataPoint) => number | undefined> = {
+    scenario_brut: (d) => d.effectif_brut,
+    scenario_net: (d) => d.effectif_net,
+    scenario_reel: (d) => d.effectif_reel,
+    scenario_apres_injustifiees: (d) => d.effectif_apres_injustifiees ?? d.projected_apres_injustifiees,
+    scenario_apres_mct: (d) => d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
+    scenario_apres_conges: (d) => d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
+  };
+  /** Valeur de FIN du mois d'indice `i` pour une série de scénario : celle du scénario s'il couvre ce mois, sinon la mesure. */
+  const finDuMois = (i: number, key: string): number | undefined => {
+    if (i < 0) return undefined;
+    const md = selectedProjection?.months.find((m) => m.month_index === i + 1);
+    const v = md ? (md as unknown as Record<string, number | undefined>)[key] : undefined;
+    if (v != null) return v;
+    return CLE_FIN_MESUREE[key]?.(data[i]);
+  };
+  const moyenneProjetee = (i: number, key: string, cur: number | undefined): number | undefined => {
+    if (!vueMoyenne || cur == null) return cur;
+    const prev = finDuMois(i - 1, key);
+    return prev == null ? cur : (prev + cur) / 2;
+  };
+
+  const chartDataFusionne = data.map((d, idx) => {
     // Merge projected_* into effectif_* for a single continuous line
-    let merged = d;
-    if (d.projected_apres_mct != null && d.effectif_apres_mct == null) {
-      merged = { ...merged, effectif_apres_mct: d.projected_apres_mct };
+    let merged = vueMoyenne && d.moyenne ? { ...d, ...d.moyenne } : d;
+    if (merged.projected_apres_mct != null && merged.effectif_apres_mct == null) {
+      merged = { ...merged, effectif_apres_mct: merged.projected_apres_mct };
     }
-    if (d.projected_apres_injustifiees != null && d.effectif_apres_injustifiees == null) {
-      merged = { ...merged, effectif_apres_injustifiees: d.projected_apres_injustifiees };
+    if (merged.projected_apres_injustifiees != null && merged.effectif_apres_injustifiees == null) {
+      merged = { ...merged, effectif_apres_injustifiees: merged.projected_apres_injustifiees };
     }
     if (!showScenario || !selectedProjection) return merged;
     const monthIndex = idx + 1;
@@ -229,6 +321,7 @@ export function HeadcountEvolutionChart({
         scenario_brut: merged.effectif_brut,
         scenario_net: merged.effectif_net,
         scenario_reel: merged.effectif_reel,
+        scenario_apres_injustifiees: merged.effectif_apres_injustifiees,
         scenario_apres_mct: merged.effectif_apres_mct ?? merged.effectif_reel,
       };
     }
@@ -242,13 +335,37 @@ export function HeadcountEvolutionChart({
       effectif_reel: undefined,
       effectif_apres_mct: undefined,
       effectif_apres_injustifiees: undefined,
-      scenario_brut: monthData.scenario_brut,
-      scenario_net: monthData.scenario_net,
-      scenario_reel: monthData.scenario_reel,
-      scenario_apres_mct: monthData.scenario_apres_mct,
-      scenario_apres_conges: monthData.scenario_apres_conges,
+      scenario_brut: moyenneProjetee(idx, "scenario_brut", monthData.scenario_brut),
+      scenario_net: moyenneProjetee(idx, "scenario_net", monthData.scenario_net),
+      scenario_reel: moyenneProjetee(idx, "scenario_reel", monthData.scenario_reel),
+      scenario_apres_injustifiees: moyenneProjetee(idx, "scenario_apres_injustifiees", monthData.scenario_apres_injustifiees),
+      scenario_apres_mct: moyenneProjetee(idx, "scenario_apres_mct", monthData.scenario_apres_mct),
+      scenario_apres_conges: moyenneProjetee(idx, "scenario_apres_conges", monthData.scenario_apres_conges),
     };
   });
+
+  // Chaque ligne mesurée se trace en deux traits : plein sur les mois mesurés,
+  // pointillé sur les mois reportés (`reporte`). La valeur fusionnée reste
+  // sous sa clé d'origine (échelle, infobulle) ; les traits lisent
+  // `mesure_*` / `report_*`, raccordés par un point commun à chaque bascule.
+  const chartData: Record<string, unknown>[] = chartDataFusionne.map((d) => {
+    const row: Record<string, unknown> = { ...d };
+    for (const [key, flag] of cleReport) {
+      const valeur = row[key] as number | undefined;
+      const estReporte = d.reporte?.[flag] === true;
+      row[mesureKey(key)] = estReporte ? undefined : valeur;
+      row[reportKey(key)] = estReporte ? valeur : undefined;
+    }
+    return row;
+  });
+  for (const key of cleReport.keys()) {
+    const m = mesureKey(key), r = reportKey(key);
+    for (let i = 0; i + 1 < chartData.length; i++) {
+      const a = chartData[i], b = chartData[i + 1];
+      if (a[m] != null && b[m] == null && b[r] != null) a[r] = a[m];
+      if (a[r] != null && a[m] == null && b[m] != null) b[r] = b[m];
+    }
+  }
 
   if (data.length === 0) {
     return (
@@ -257,32 +374,27 @@ export function HeadcountEvolutionChart({
           <CardTitle className="text-base">{title}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground text-center py-8">
-            Importez des données pour visualiser l&apos;évolution des effectifs.
-          </p>
+          <p className="text-sm text-muted-foreground text-center py-8">{libelleVide}</p>
         </CardContent>
       </Card>
     );
   }
 
-  const hasData: Record<string, boolean> = {
-    effectif_brut: !showScenario,
-    effectif_net: !showScenario,
-    effectif_reel: !showScenario && chartData.some((d) => d.effectif_reel != null),
-    effectif_apres_mct: !showScenario && chartData.some((d) => d.effectif_apres_mct != null),
-    effectif_apres_injustifiees: !showScenario && chartData.some((d) => d.effectif_apres_injustifiees != null),
-    target: chartData.some((d) => d.target != null),
-    scenario_brut: showScenario && chartData.some((d) => d.scenario_brut != null),
-    scenario_net: showScenario && chartData.some((d) => d.scenario_net != null),
-    scenario_reel: showScenario && chartData.some((d) => d.scenario_reel != null),
-    scenario_apres_mct: showScenario && chartData.some((d) => d.scenario_apres_mct != null),
-    scenario_apres_conges: showScenario && chartData.some((d) => d.scenario_apres_conges != null),
-  };
-
-  const availableSeries = ALL_SERIES.filter((s) => hasData[s.key]);
-
-  // Visibility state — all visible by default
-  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  // Les séries mesurées restent tracées sur les mois réels quand un scénario
+  // est affiché (le pointillé du scénario prend le relais à partir du premier
+  // mois projeté) ; une série de scénario n'existe que dans ce cas.
+  const aDesValeurs = (key: string) => chartData.some((d) => d[key] != null);
+  // Sans taux de congés, « après congés » se confond avec « après MCT » et le
+  // recouvrirait : la série n'est proposée que si elle s'en écarte quelque part.
+  // Comparaison sur les mois PROJETÉS, les seuls où les deux viennent de la
+  // même projection (sur le mois de raccord, « après MCT » vaut la mesure).
+  const congesDistincts = chartData.some(
+    (d) => d.is_projection === true && d.scenario_apres_conges != null && d.scenario_apres_mct != null && d.scenario_apres_conges !== d.scenario_apres_mct
+  );
+  const availableSeries = series.filter(
+    (s) => (s.isScenario ? showScenario : true) && aDesValeurs(s.key) && (s.key !== "scenario_apres_conges" || congesDistincts)
+  );
+  const libelle = (s: SeriesDef) => (s.isScenario ? `${s.label} — scénario` : s.label);
 
   const toggleSeries = (key: string) => {
     setHiddenSeries((prev) => {
@@ -303,12 +415,9 @@ export function HeadcountEvolutionChart({
   const dataMin = allValues.length > 0 ? Math.min(...allValues) : 0;
   const dataMax = allValues.length > 0 ? Math.max(...allValues) : 100;
   const range = dataMax - dataMin || 1;
-  const padding = Math.max(range * 0.15, 5);
-  const yMin = Math.max(0, Math.floor((dataMin - padding) / 10) * 10);
-  const yMax = Math.ceil((dataMax + padding) / 10) * 10;
-
-  const labelMap: Record<string, string> = {};
-  ALL_SERIES.forEach((s) => { labelMap[s.key] = s.label; });
+  const padding = Math.max(range * 0.15, axeStep / 2);
+  const yMin = Math.max(0, Math.floor((dataMin - padding) / axeStep) * axeStep);
+  const yMax = Math.ceil((dataMax + padding) / axeStep) * axeStep;
 
   // Helper to get scenario name by id
   const getScenarioName = (id: string | null) => scenarios.find((s) => s.id === id)?.name ?? "—";
@@ -317,7 +426,36 @@ export function HeadcountEvolutionChart({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-4">
-          <CardTitle className="text-base">{title}</CardTitle>
+          <CardTitle className="text-base">
+            {title}
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {vueMoyenne ? (showScenario ? "moyenne du mois — scénario : moyenne des deux fins de mois" : "moyenne du mois, pondérée par les jours") : "au dernier jour du mois"}
+            </span>
+          </CardTitle>
+          <div className="flex items-center gap-2">
+          {moyenneDisponible && (
+            <div
+              role="group"
+              aria-label="Lecture de la courbe"
+              className="inline-flex h-8 items-center rounded-md border p-0.5 text-xs"
+              title={showScenario ? "Un scénario est projeté en fin de mois : en vue Moyenne, chaque mois projeté vaut la moyenne de ses deux fins de mois." : undefined}
+            >
+              {([["fin", "Fin de mois"], ["moyenne", "Moyenne"]] as const).map(([cle, libelle]) => {
+                const actif = cle === "moyenne" ? vueMoyenne : !vueMoyenne;
+                return (
+                  <button
+                    key={cle}
+                    type="button"
+                    aria-pressed={actif}
+                    onClick={() => setVue(cle)}
+                    className={`h-full rounded px-2.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${actif ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {libelle}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {scenarios.length > 0 && (
             <Popover>
               <PopoverTrigger asChild>
@@ -413,6 +551,7 @@ export function HeadcountEvolutionChart({
               </PopoverContent>
             </Popover>
           )}
+          </div>
         </div>
 
         {/* Series toggles */}
@@ -438,7 +577,7 @@ export function HeadcountEvolutionChart({
                     borderBottom: s.dashed ? `2px dashed ${active ? "rgba(255,255,255,0.8)" : s.color}` : undefined,
                   }}
                 />
-                {s.label}
+                {libelle(s)}
               </button>
             );
           })}
@@ -457,73 +596,69 @@ export function HeadcountEvolutionChart({
               tick={{ fontSize: 12 }}
               className="text-muted-foreground"
               domain={[yMin, yMax]}
+              tickFormatter={(v: number) => formatValue(v)}
+              width={axeStep >= 1000 ? 80 : 60}
             />
             <Tooltip
-              contentStyle={{
-                borderRadius: "8px",
-                border: "1px solid hsl(var(--border))",
-                backgroundColor: "hsl(var(--background))",
-              }}
-              itemSorter={(item) => {
-                const order: Record<string, number> = {
-                  effectif_brut: 0, effectif_net: 1, effectif_reel: 2,
-                  effectif_apres_mct: 3, effectif_apres_injustifiees: 4, target: 5,
-                  scenario_brut: 6, scenario_net: 7, scenario_reel: 8, scenario_apres_mct: 9, scenario_apres_conges: 10,
-                };
-                return order[String(item.dataKey)] ?? 99;
-              }}
-              labelFormatter={() => ""}
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              formatter={(value: any, name: any, _props: any, _index: any, payload: any) => {
-                const label = labelMap[String(name)] || String(name);
-                const val = value ?? 0;
-                const key = String(name);
-
-                const deltaParent: Record<string, string> = {
-                  effectif_net: "effectif_brut",
-                  effectif_reel: "effectif_net",
-                  effectif_apres_mct: "effectif_reel",
-                  effectif_apres_injustifiees: "effectif_apres_mct",
-                  scenario_net: "scenario_brut",
-                  scenario_reel: "scenario_net",
-                  scenario_apres_mct: "scenario_reel",
-                  scenario_apres_conges: "scenario_apres_mct",
-                };
-
-                const parentKey = deltaParent[key];
-                if (parentKey) {
-                  const parent = payload.find((p: { dataKey: string; value: number }) => p.dataKey === parentKey);
-                  if (parent?.value != null) {
-                    const delta = val - parent.value;
-                    const sign = delta >= 0 ? "+" : "";
-                    return [<span key={key}>{val} <span style={{ fontSize: "0.75em", color: "#999" }}>({sign}{Math.round(delta * 10) / 10})</span></span>, label];
-                  }
-                }
-                return [val, label];
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const row = payload[0].payload as Record<string, unknown>;
+                // L'ordre des séries est celui de la chaîne ; les écarts suivent `parent`
+                const visibles = series.map((s) => s.key).filter((k) => visibleSeries.some((s) => s.key === k) && row[k] != null);
+                return (
+                  <div style={{ borderRadius: "8px", border: "1px solid var(--border)", backgroundColor: "var(--background)", padding: "8px 12px", fontSize: 12 }}>
+                    {visibles.map((key) => {
+                      const serie = series.find((s) => s.key === key)!;
+                      const val = row[key] as number;
+                      const flag = cleReport.get(key);
+                      const reporte = flag != null && row.reporte != null && (row.reporte as Record<string, boolean>)[flag] === true;
+                      // Série parente masquée : on remonte la chaîne jusqu'à une série affichée
+                      let parentKey: string | undefined = deltaParent.get(key);
+                      while (parentKey && !visibles.includes(parentKey)) parentKey = deltaParent.get(parentKey);
+                      const parent = parentKey ? (row[parentKey] as number) : null;
+                      const delta = parent != null ? val - parent : null;
+                      return (
+                        <div key={key} style={{ color: serie.color, padding: "2px 0" }}>
+                          {libelle(serie)} : {formatValue(val)}
+                          {delta != null && <span style={{ fontSize: "0.75em", color: "#999" }}> ({delta >= 0 ? "+" : "−"}{formatValue(Math.abs(delta))})</span>}
+                          {reporte && <span style={{ fontSize: "0.75em", color: "#999", fontStyle: "italic" }}> reporté</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
               }}
             />
             <Legend
               content={() => null}
             />
 
-            {visibleSeries.map((s) => (
-              <Line
-                key={s.key}
-                type="monotone"
-                dataKey={s.key}
-                stroke={s.color}
-                strokeWidth={2}
-                strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
-                dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
-                activeDot={s.key === "effectif_brut" ? { r: 5 } : undefined}
-                connectNulls={s.dashed === true}
-              />
-            ))}
+            {visibleSeries.map((s) =>
+              cleReport.has(s.key) ? (
+                // Mesuré en trait plein, reporté en pointillé (même couleur, même pastille)
+                <Fragment key={s.key}>
+                  <Line type="monotone" dataKey={mesureKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} dot={{ r: 3 }} activeDot={s.key === brushDataKey ? { r: 5 } : undefined} isAnimationActive={false} />
+                  <Line type="monotone" dataKey={reportKey(s.key)} name={s.key} stroke={s.color} strokeWidth={2} strokeDasharray="8 4" dot={{ r: 3, fill: "var(--background)" }} activeDot={s.key === brushDataKey ? { r: 5 } : undefined} isAnimationActive={false} />
+                </Fragment>
+              ) : (
+                <Line
+                  key={s.key}
+                  type="monotone"
+                  dataKey={s.key}
+                  stroke={s.color}
+                  strokeWidth={2}
+                  strokeDasharray={s.dashed ? (s.isScenario ? "6 3" : "8 4") : undefined}
+                  dot={s.key === "target" ? false : { r: s.isScenario ? 2 : 3 }}
+                  connectNulls={s.connectNulls ?? s.dashed === true}
+                  isAnimationActive={false}
+                />
+              )
+            )}
 
             {projectionStartIndex > 0 && (
               <ReferenceLine
                 x={data[projectionStartIndex].month}
-                stroke="hsl(var(--muted-foreground))"
+                stroke="var(--muted-foreground)"
                 strokeDasharray="4 4"
                 label={{ value: "Projection", position: "top", fontSize: 11 }}
               />
@@ -539,7 +674,7 @@ export function HeadcountEvolutionChart({
               endIndex={chartData.length - 1}
             >
               <LineChart data={chartData}>
-                <Line type="monotone" dataKey="effectif_brut" stroke="#93c5fd" strokeWidth={1} dot={false} />
+                <Line type="monotone" dataKey={brushDataKey} stroke="#93c5fd" strokeWidth={1} dot={false} />
               </LineChart>
             </Brush>
           </LineChart>

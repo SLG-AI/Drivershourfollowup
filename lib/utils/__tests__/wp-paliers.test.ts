@@ -5,6 +5,7 @@ import {
   etpDisponibleDe,
   etpSuspenduDe,
   heuresCnsDeLaLigne,
+  injustifieesDuPerimetre,
   type SalariePaliers,
 } from "../wp-paliers";
 import { getWorkableHoursInMonth } from "../wp-calculations";
@@ -200,10 +201,19 @@ describe("calculerPaliers", () => {
     expect(p.tauxMct).toBeCloseTo(40, 10);
     expect(p.tauxInjustifiees).toBeCloseTo(20, 10);
     expect(p.tauxGlobal).toBeCloseTo(100, 10);
-    // Les paliers, eux, se retirent en cascade
+    // Les paliers, eux, se retirent en cascade : injustifiées d'abord
+    // (effectif PAYÉ), MCT ensuite (effectif DISPONIBLE).
     expect(p.apresCns).toBeCloseTo(1.5, 10);
-    expect(p.apresMct).toBeCloseTo(0.5, 10);
-    expect(p.apresInjustifiees).toBeCloseTo(0, 10);
+    expect(p.apresInjustifiees).toBeCloseTo(1, 10); // payé : le MCT l'est encore
+    expect(p.apresMct).toBeCloseTo(0, 10); // disponible
+    expect(p.etapes.map((e) => e.cle).slice(-2)).toEqual(["taux-injustifiees", "taux-mct"]);
+  });
+
+  it("restreint les injustifiées au périmètre seulement quand un filtre est actif", () => {
+    const lignes = [{ code_salarie: "A", duree_hrs: 8 }, { code_salarie: "ZZ", duree_hrs: 8 }];
+    const perimetre = new Set(["A", "B"]);
+    expect(injustifieesDuPerimetre(lignes, false, perimetre)).toHaveLength(2);
+    expect(injustifieesDuPerimetre(lignes, true, perimetre).map((l) => l.code_salarie)).toEqual(["A"]);
   });
 
   it("compte les absences injustifiées d'un salarié absent de la photo", () => {
@@ -236,8 +246,8 @@ describe("calculerPaliers", () => {
       "effectif-sous-contrat",
       "effectif-apres-suspension",
       "taux-cns",
-      "taux-mct",
-      "taux-injustifiees",
+      "taux-injustifiees", // effectif payé
+      "taux-mct", // effectif disponible
     ]);
     expect(p.etapes[1].retire).toBe(1);
   });

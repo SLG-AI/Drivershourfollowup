@@ -188,6 +188,28 @@ describe("computeRosterMovements", () => {
     expect(m.sortiesDefinitives).toEqual([]);
   });
 
+  it("reclasse en transferts les apparus et disparus du périmètre présents dans les photos complètes", () => {
+    // Périmètre = SLA202. B quitte SLA202 pour SLA330 (toujours dans l'entreprise),
+    // E arrive de SLA210, N est une vraie embauche, D a vraiment disparu.
+    const B = emp("B", { centre_cout: "SLA202", description_service: "Depots - Hosingen", description_equipe: "Team 28.1" });
+    const prevComplet = [emp("A"), B, emp("D"), emp("E", { centre_cout: "SLA210", description_service: "Depots - Bascharage", description_equipe: "Team 14.2" })];
+    // Service et équipe identiques (« Bus Training ») : le libellé n'est pas répété
+    const currComplet = [emp("A"), emp("B", { centre_cout: "SLA330", description_service: "Bus Training", description_equipe: "Bus Training" }), emp("E", { centre_cout: "SLA202" }), emp("N", { date_entree: "2026-08-03" })];
+    const prev = [emp("A"), B, emp("D")];
+    const curr = [emp("A"), emp("E", { centre_cout: "SLA202", description_service: "Depots - Hosingen", description_equipe: "Team 14.1" }), emp("N", { date_entree: "2026-08-03" })];
+    const m = computeRosterMovements(prev, curr, 8, 2026, new Map(), { prev: prevComplet, curr: currComplet });
+    expect(codes(m.nouveaux)).toEqual(["N"]);
+    expect(codes(m.disparusSansDate)).toEqual(["D"]);
+    expect(m.transfertsEntrants.map((i) => [i.code_salarie, i.motif])).toEqual([["E", "SLA210 · Depots - Bascharage · Team 14.2 → SLA202 · Depots - Hosingen · Team 14.1"]]);
+    expect(m.transfertsSortants.map((i) => [i.code_salarie, i.motif])).toEqual([["B", "SLA202 · Depots - Hosingen · Team 28.1 → SLA330 · Bus Training"]]);
+    // Les transferts pèsent sur le solde du périmètre : +N +E −D −B = 0
+    expect(soldeEtp(m).sousContrat).toBe(0);
+    // Sans photos complètes, rien ne change
+    const sans = computeRosterMovements(prev, curr, 8, 2026);
+    expect(codes(sans.nouveaux).sort()).toEqual(["E", "N"]);
+    expect(sans.transfertsEntrants).toEqual([]);
+  });
+
   it("calcule le solde sous contrat : nouveaux − sorties + changements de temps", () => {
     const prev = [
       emp("A", { taux_occupation: 100 }),

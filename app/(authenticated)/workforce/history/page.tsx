@@ -8,9 +8,10 @@ import { analyserTurnover } from "@/lib/utils/wp-turnover";
 import { analyserAbsenteisme } from "@/lib/utils/wp-absenteisme";
 import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { HistoryClient } from "./history-client";
+import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 
 interface Props {
-  searchParams: Promise<{ year?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; employee?: string }>;
+  searchParams: Promise<{ year?: string; societes?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string }>;
 }
 
 export default async function HistoryPage({ searchParams }: Props) {
@@ -26,13 +27,13 @@ export default async function HistoryPage({ searchParams }: Props) {
     fetchAll(rosterPeriode
       ? supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
       : supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement").limit(0)),
-    fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, jours_maladie, hrs_maternite, hrs_accident, hrs_raisons_familiales, hrs_conge_accompagnement, heures_theoriques")),
+    fetchAll(supabase.from("wp_absences").select("code_salarie, mois, annee, pct_absenteisme, hrs_maladie, jours_maladie, hrs_maternite, hrs_accident, hrs_raisons_familiales, hrs_conge_accompagnement, heures_theoriques")).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, etp, hrs_base, hrs_supp")),
     // Toutes les photos de roster (colonnes utiles seulement) : chaque mois se
     // lit dans SA photo. Une photo unique reconstruite par les dates culmine
     // toujours sur son propre mois, et ne connaît ni les partis avant elle ni
     // les embauchés après.
-    fetchAll(supabase.from("wp_employees").select("code_salarie, mois, annee, date_entree, date_sortie, est_sortie_temporaire, date_debut_sortie_temporaire, date_fin_sortie_temporaire, description_motif_sortie, type_contrat, taux_occupation, description_service, nom_salarie, description_fonction, centre_cout, description_equipe")),
+    fetchAll(supabase.from("wp_employees").select("code_salarie, code_employeur, mois, annee, date_entree, date_sortie, est_sortie_temporaire, date_debut_sortie_temporaire, date_fin_sortie_temporaire, description_motif_sortie, type_contrat, taux_occupation, description_service, nom_salarie, description_fonction, centre_cout, description_equipe")),
     // Mouvements constatés par le SIRH (export IN/OUT) : dates et motifs RÉELS
     // des entrées/sorties, là où une photo ne connaît que les sorties prévues.
     fetchAll(supabase.from("wp_mouvements").select("code_salarie, type, motif_sortie, date_sortie, mois, annee")),
@@ -42,7 +43,7 @@ export default async function HistoryPage({ searchParams }: Props) {
   ]);
 
   // Périmètre des filtres de l'en-tête (fonctions, centres de coût, dépôts,
-  // équipes, salarié) : les photos sont filtrées sur leurs colonnes, et les
+  // équipes, contrats CDI/CDD, salarié) : les photos sont filtrées sur leurs colonnes, et les
   // autres sources par les codes présents dans au moins une photo filtrée —
   // un salarié hors périmètre n'apporte ni absence, ni sortie, ni Bradford.
   const toutesLesPhotos = photosBrutes.filter((e) => filtres.passe(e));
