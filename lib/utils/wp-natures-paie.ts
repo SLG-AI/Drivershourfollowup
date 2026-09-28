@@ -5,9 +5,13 @@
  * la Liste des salaires décompose le brut en une vingtaine de natures (nuit,
  * dimanche, amplitudes, heures supplémentaires, primes, régularisations…).
  * Ce que la direction veut lire n'est pas la nature elle-même mais ce qu'elle
- * traduit : une part STRUCTURELLE (le contrat), une part PILOTÉE PAR LE
- * PLANNING (ce que l'organisation des tournées coûte en plus), des primes,
- * des régularisations, des soldes de sortie et des avantages. Le classement
+ * traduit : une part STRUCTURELLE (le contrat), une part LIÉE AU
+ * PLANNING (ce que les horaires de service coûtent en plus — en grande partie
+ * subi : fériés, dimanches, nuits ne se choisissent pas), des primes,
+ * des régularisations, des soldes de sortie, des allocations — et, à part,
+ * l'avantage en nature NON VERSÉ (voiture) : valorisé dans le brut pour
+ * l'impôt, retenu sur le net, retiré du coût par la paie. Il n'entre donc pas
+ * dans le « brut versé » à partir duquel la paie est décomposée. Le classement
  * est un arbitrage utilisateur (24/09/2026) ; il vit ici, à un seul endroit,
  * pour être réarbitré sans toucher ni au parseur ni aux pages.
  *
@@ -17,7 +21,7 @@
  * salaire ; il est reconnu par son libellé exact.
  */
 
-export type FamilleNature = "structurel" | "planning" | "primes" | "regularisations" | "soldes" | "avantages";
+export type FamilleNature = "structurel" | "planning" | "primes" | "regularisations" | "soldes" | "avantages" | "non_verse";
 
 export interface NaturePaie {
   /**
@@ -34,12 +38,16 @@ export interface NaturePaie {
 
 export const FAMILLES: { id: FamilleNature; libelle: string; description: string }[] = [
   { id: "structurel", libelle: "Structurel", description: "Brut de base et compléments contractuels : ce que coûte l'effectif indépendamment du planning." },
-  { id: "planning", libelle: "Piloté par le planning", description: "Nuit, dimanche, amplitudes, heures supplémentaires, fériés, dépannages : ce que l'organisation des tournées ajoute au contrat." },
+  { id: "planning", libelle: "Lié au planning", description: "Nuit, dimanche, amplitudes, heures supplémentaires, fériés, dépannages : ce que les horaires de service ajoutent au contrat, en grande partie subi (fériés, dimanches, nuits)." },
   { id: "primes", libelle: "Primes", description: "Primes ponctuelles et ajouts au brut." },
   { id: "regularisations", libelle: "Régularisations", description: "Retenues pour absences injustifiées et congés trop pris (montants négatifs)." },
   { id: "soldes", libelle: "Soldes de sortie", description: "Décomptes de congés versés à la sortie : hors masse salariale courante, mais bien décaissés." },
-  { id: "avantages", libelle: "Avantages", description: "Avantages en nature et allocations (voiture, compléments divers)." },
+  { id: "avantages", libelle: "Allocations et compléments", description: "Allocations versées (car allowance) et compléments divers sans code." },
+  { id: "non_verse", libelle: "Avantage en nature (non versé)", description: "Valorisé dans le brut pour l'impôt, retenu sur le net du salarié et retiré du coût employeur par la paie : ni versé, ni décaissé (seules les charges patronales calculées dessus le sont)." },
 ];
+
+/** Familles réellement versées : leur somme est le brut versé. */
+export const FAMILLES_VERSEES = FAMILLES.filter((f) => f.id !== "non_verse");
 
 /** Les natures connues, dans l'ordre du fichier. Une nature absente du fichier vaut 0. */
 export const NATURES: NaturePaie[] = [
@@ -53,18 +61,18 @@ export const NATURES: NaturePaie[] = [
   { codes: ["CCT", "P001"], cle: "nat_cct", libelle: "Complément salaire (13e mois proratisé)", famille: "structurel" },
   { codes: ["CGTP"], cle: "nat_cgtp", libelle: "Congés trop pris", famille: "regularisations" },
   { codes: ["DC"], cle: "nat_dc", libelle: "Décompte congé", famille: "soldes" },
-  { codes: ["E002"], cle: "nat_e002", libelle: "Subvention d'intérêts", famille: "avantages" },
+  { codes: ["E002"], cle: "nat_e002", libelle: "Subvention d'intérêts", famille: "primes" },
   { codes: ["G001"], cle: "nat_g001", libelle: "Gratification", famille: "primes" },
   { codes: ["HFM"], cle: "nat_hfm", libelle: "Heures fériées majorées", famille: "planning" },
   { codes: ["HSM"], cle: "nat_hsm", libelle: "Heures sup. majorées", famille: "planning" },
-  // Valorisé dans le brut pour l'impôt, retiré du coût par la paie (« Coût natures déduites »)
-  { codes: ["N002"], cle: "nat_n002", libelle: "Avantage en nature voiture", famille: "avantages" },
+  // Valorisé dans le brut pour l'impôt, retenu sur le net, retiré du coût par la paie (« Coût natures déduites »)
+  { codes: ["N002"], cle: "nat_n002", libelle: "Avantage en nature voiture", famille: "non_verse" },
   { codes: ["PERM"], cle: "nat_perm", libelle: "Permanence", famille: "planning" },
   { codes: ["PR D"], cle: "nat_pr_d", libelle: "Prime dépannage", famille: "planning" },
   // Formateurs, team leaders, délégués du personnel (dès octobre 2026) : récurrente chaque mois.
   { codes: ["PR F"], cle: "nat_pr_f", libelle: "Prime de fonction", famille: "structurel" },
   { codes: ["PRIM"], cle: "nat_prim", libelle: "Prime", famille: "primes" },
-  { codes: ["PRR"], cle: "nat_prr", libelle: "Prime repos", famille: "primes" },
+  { codes: ["PRR"], cle: "nat_prr", libelle: "Prime de 6e jour", famille: "planning" },
   { codes: ["SHD"], cle: "nat_shd", libelle: "Supplément dimanche", famille: "planning" },
   { codes: ["SHN"], cle: "nat_shn", libelle: "Supplément nuit", famille: "planning" },
   { codes: ["SMG"], cle: "nat_smg", libelle: "Supplément moyenne congé", famille: "structurel" },
@@ -99,7 +107,7 @@ const nombre = (v: unknown): number => {
 };
 
 export function famillesVides(): MontantsParFamille {
-  return { structurel: 0, planning: 0, primes: 0, regularisations: 0, soldes: 0, avantages: 0 };
+  return { structurel: 0, planning: 0, primes: 0, regularisations: 0, soldes: 0, avantages: 0, non_verse: 0 };
 }
 
 /** Somme par famille d'un ensemble de lignes ; le brut de base compte en « structurel ». */
@@ -117,6 +125,11 @@ export function decomposerParNature(lignes: LigneNatures[]): Map<`nat_${string}`
   const total = new Map<`nat_${string}`, number>(NATURES.map((n) => [n.cle, 0]));
   for (const l of lignes) for (const n of NATURES) total.set(n.cle, (total.get(n.cle) ?? 0) + nombre(l[n.cle]));
   return total;
+}
+
+/** Brut versé d'un ensemble de lignes : total brut (fiscal) − avantages en nature non versés. */
+export function brutVerse(lignes: LignePaieDecomposable[]): number {
+  return lignes.reduce((s, l) => s + nombre(l.total_brut), 0) - decomposerParFamille(lignes).non_verse;
 }
 
 /** Σ des natures d'une ligne (sans le brut de base) : total brut = brut base + cette somme. */
@@ -141,7 +154,7 @@ export interface LignePaieDecomposable extends LigneNatures {
 export interface DecompositionMois {
   mois: number;
   familles: MontantsParFamille;
-  /** Σ total brut des lignes du mois (salaire et non périodique). */
+  /** Σ brut VERSÉ des lignes du mois (salaire et non périodique), avantages en nature non versés exclus. */
   brut: number;
   n: number;
 }
@@ -164,7 +177,7 @@ export function decomposerParMois(lignes: LignePaieDecomposable[], annee: number
     .map(([mois, ls]) => ({
       mois,
       familles: decomposerParFamille(ls),
-      brut: ls.reduce((s, l) => s + nombre(l.total_brut), 0),
+      brut: brutVerse(ls),
       n: ls.length,
     }));
 }
@@ -174,7 +187,7 @@ export interface VentilationLigne {
   familles: MontantsParFamille;
   brut: number;
   n: number;
-  /** Part du brut pilotée par le planning, en % (null sans brut). */
+  /** Part du brut liée au planning, en % (null sans brut). */
   partPlanning: number | null;
 }
 
@@ -196,7 +209,7 @@ export function ventilerPar(
   return [...groupes.entries()]
     .map(([cle, ls]) => {
       const familles = decomposerParFamille(ls);
-      const brut = ls.reduce((s, l) => s + nombre(l.total_brut), 0);
+      const brut = brutVerse(ls);
       return { cle, familles, brut, n: ls.length, partPlanning: brut > 0 ? (familles.planning / brut) * 100 : null };
     })
     .sort((a, b) => b.brut - a.brut);

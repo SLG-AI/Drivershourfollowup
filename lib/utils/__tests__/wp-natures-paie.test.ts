@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   FAMILLES,
+  FAMILLES_VERSEES,
+  brutVerse,
   NATURES,
   decomposerParFamille,
   decomposerParMois,
@@ -49,11 +51,12 @@ describe("decomposerParFamille — le classement arbitré", () => {
   const ligne = {
     brut_base: 4000,
     nat_cct: 310, nat_smg: 20, nat_pr_f: 100, // structurel
-    nat_shn: 50, nat_shd: 80, nat_am1: 30, nat_am2: 20, nat_hsm: 40, nat_hfm: 10, nat_pr_d: 60, nat_perm: 5, // planning
-    nat_prim: 200, nat_aj: 50, nat_prr: 0, nat_g001: 25, // primes
+    nat_shn: 50, nat_shd: 80, nat_am1: 30, nat_am2: 20, nat_hsm: 40, nat_hfm: 10, nat_pr_d: 60, nat_perm: 5, nat_prr: 0, // planning
+    nat_prim: 200, nat_aj: 50, nat_g001: 25, nat_e002: 0, // primes
     nat_abin: -120, nat_cgtp: -30, // régularisations
     nat_dc: 900, // soldes
-    nat_all: 250, nat_autres_cs: 70, nat_e002: 0, nat_n002: 30, // avantages
+    nat_all: 250, nat_autres_cs: 70, // allocations et compléments
+    nat_n002: 30, // avantage en nature non versé
   };
 
   it("somme chaque famille, le brut de base en structurel", () => {
@@ -63,7 +66,17 @@ describe("decomposerParFamille — le classement arbitré", () => {
     expect(f.primes).toBe(275);
     expect(f.regularisations).toBe(-150);
     expect(f.soldes).toBe(900);
-    expect(f.avantages).toBe(350);
+    expect(f.avantages).toBe(320);
+    expect(f.non_verse).toBe(30);
+  });
+
+  it("le brut versé exclut l'avantage en nature non versé ; les familles versées le recomposent", () => {
+    const totalBrut = 4000 + sommeNatures(ligne);
+    const lignes = [{ ...ligne, code_salarie: "A", mois: 5, annee: 2026, total_brut: totalBrut }];
+    expect(brutVerse(lignes)).toBeCloseTo(totalBrut - 30, 6);
+    const f = decomposerParFamille(lignes);
+    const verse = FAMILLES_VERSEES.reduce((s, fam) => s + f[fam.id], 0);
+    expect(verse).toBeCloseTo(brutVerse(lignes), 6);
   });
 
   it("brut de base + Σ natures = total brut du fichier (identité de la Liste des salaires)", () => {

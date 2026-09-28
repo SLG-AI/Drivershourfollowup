@@ -72,6 +72,11 @@ export interface LigneStatSalariale {
    * charges − avantages en nature). Absent ou nul, le coût est brut + charges.
    */
   cout_employeur?: unknown;
+  /**
+   * Avantages en nature (voiture) retirés du coût par la paie : dans le total
+   * brut pour l'impôt, jamais versés (Liste des salaires seulement).
+   */
+  avantages_nature?: unknown;
   /** Ligne « Rémun. np » de la Liste des salaires : décaissée ce mois, hors masse salariale courante. */
   non_periodique?: boolean;
   /** D'où vient la ligne : « lignes » (Liste des salaires) ou « stats » (Statistiques rapides). */
@@ -86,6 +91,11 @@ export function ligneAvecCharges(l: LigneStatSalariale): boolean {
 export function coutEmployeurDeLaLigne(l: LigneStatSalariale): number {
   const paie = nombre(l.cout_employeur);
   return paie > 0 ? paie : nombre(l.total_brut) + nombre(l.charges_patronales);
+}
+
+/** Brut réellement versé d'une ligne : total brut − avantages en nature non versés. */
+export function brutVerseDeLaLigne(l: LigneStatSalariale): number {
+  return nombre(l.total_brut) - nombre(l.avantages_nature);
 }
 
 /** Ligne de wp_salary_lines, telle que la page la lit. */
@@ -129,6 +139,7 @@ export function ligneStatDepuisPaie(l: LignePaieDetaillee): LigneStatSalariale {
     cot_pat_autres: nombre(l.cot_pat_autres),
     centre_cout: l.centre_cout ?? null,
     cout_employeur: nombre(l.cout_employeur),
+    avantages_nature: nombre(l.avantages_nature),
     non_periodique: l.type_remuneration === "non_periodique",
     source: "lignes",
   };
@@ -189,6 +200,8 @@ export function realiseDuMois(
   codes?: Set<string>
 ): {
   brut: number; brutBase: number; supplements: number;
+  /** Brut réellement versé : total brut − avantages en nature non versés (égal au brut hors Liste des salaires). */
+  brutVerse: number;
   /** Coût employeur = brut + charges patronales ; égal au brut quand aucune ligne ne porte de charges. */
   employeur: number;
   chargesPatronales: number;
@@ -217,6 +230,7 @@ export function realiseDuMois(
   const depuisLignes = lignes.some((l) => l.source === "lignes");
   return {
     brut,
+    brutVerse: lignes.reduce((s, l) => s + brutVerseDeLaLigne(l), 0),
     brutBase: somme("brut_base"),
     supplements: somme("supplements"),
     employeur,
@@ -262,8 +276,10 @@ function dernierMois(lignes: LigneStatSalariale[]): { mois: number; annee: numbe
 }
 
 /**
- * Coefficient de charges patronales = Σ coût employeur / Σ brut du DERNIER
- * mois qui porte des charges patronales.
+ * Coefficient de charges patronales = Σ coût employeur / Σ brut VERSÉ du
+ * DERNIER mois qui porte des charges patronales. Le brut versé exclut les
+ * avantages en nature (voiture) : la paie les retire du coût, et le brut
+ * indice auquel le coefficient s'applique ne les porte pas non plus.
  *
  * On préfère le périmètre demandé (`codes`) : les charges varient avec la
  * structure des salaires, un centre de coût de chauffeurs ne pèse pas comme
@@ -290,7 +306,7 @@ export function calculerCoefficientCharges(
   for (const { lignes, perimetre } of candidats) {
     const dernier = dernierMois(lignes);
     if (!dernier) continue;
-    const brut = dernier.lignes.reduce((s, l) => s + nombre(l.total_brut), 0);
+    const brut = dernier.lignes.reduce((s, l) => s + brutVerseDeLaLigne(l), 0);
     const employeur = dernier.lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
     // Garde : un coût employeur ne peut pas être inférieur au brut
     if (brut <= 0 || employeur < brut) continue;
@@ -321,7 +337,7 @@ export function calculerCoefficientsParCostCenter(
     parCc.set(cc, [...(parCc.get(cc) ?? []), l]);
   });
   parCc.forEach((lignes, cc) => {
-    const brut = lignes.reduce((s, l) => s + nombre(l.total_brut), 0);
+    const brut = lignes.reduce((s, l) => s + brutVerseDeLaLigne(l), 0);
     const employeur = lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
     if (brut > 0 && employeur >= brut) resultat.set(cc, { coef: employeur / brut, n: lignes.length, brut, employeur });
   });

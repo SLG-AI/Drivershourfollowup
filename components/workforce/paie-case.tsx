@@ -46,6 +46,8 @@ interface Props {
   accent?: boolean;
   /** Signe explicite (« + » / « − ») devant la valeur, pour l'écart. */
   signe?: boolean;
+  /** Liseré gauche coloré (familles de la décomposition de la paie). */
+  couleur?: string;
 }
 
 // Un montant qui s'arrondit à zéro s'affiche « 0 € », jamais « −0 € »
@@ -86,13 +88,14 @@ function Section({ s }: { s: DetailSection }) {
   );
 }
 
-export function PaieCase({ libelle, valeur, note, detail, grande, accent, signe }: Props) {
+export function PaieCase({ libelle, valeur, note, detail, grande, accent, signe, couleur }: Props) {
   const classes = [
     "rounded-md border px-3 py-2 text-left",
     grande ? "md:col-span-2" : "",
     accent ? "border-slate-400 bg-slate-50" : "",
   ].join(" ");
   const valeurTexte = signe ? eurosSignes(valeur) : euros(valeur);
+  const style = couleur ? { borderLeftColor: couleur, borderLeftWidth: 4 } : undefined;
 
   const contenu = (
     <>
@@ -105,12 +108,12 @@ export function PaieCase({ libelle, valeur, note, detail, grande, accent, signe 
     </>
   );
 
-  if (!detail) return <div className={classes}>{contenu}</div>;
+  if (!detail) return <div className={classes} style={style}>{contenu}</div>;
 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" className={`${classes} w-full transition-colors hover:border-primary/60 hover:bg-muted/40 data-[state=open]:border-primary`} title={`Détail : ${libelle}`}>
+        <button type="button" className={`${classes} w-full transition-colors hover:border-primary/60 hover:bg-muted/40 data-[state=open]:border-primary`} style={style} title={`Détail : ${libelle}`}>
           {contenu}
         </button>
       </PopoverTrigger>

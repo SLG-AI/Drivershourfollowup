@@ -4,9 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Bar, BarChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { FAMILLES, type FamilleNature, type MontantsParFamille, type VentilationLigne } from "@/lib/utils/wp-natures-paie";
+import { FAMILLES, FAMILLES_VERSEES, type FamilleNature, type MontantsParFamille, type VentilationLigne } from "@/lib/utils/wp-natures-paie";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { formatEuros } from "@/lib/utils/format";
+import { PaieCase, type DetailCase, type DetailLigne } from "@/components/workforce/paie-case";
 
 /** Couleurs par famille, dans l'esprit des autres graphiques du module. */
 const COULEURS: Record<FamilleNature, string> = {
@@ -16,6 +17,7 @@ const COULEURS: Record<FamilleNature, string> = {
   regularisations: "hsl(0, 84%, 60%)",
   soldes: "hsl(174, 60%, 40%)",
   avantages: "hsl(215, 16%, 60%)",
+  non_verse: "hsl(215, 14%, 80%)",
 };
 
 export interface PaieMoisPoint {
@@ -33,6 +35,8 @@ export interface NatureMontant {
 
 interface Props {
   moisLabel: string;
+  /** Versements calendaires du mois (décompte de période, bonus, 13e mois), null un mois ordinaire. */
+  mentionCalendrier?: string | null;
   /** Les mois de l'année couverts par la Liste des salaires, dans le périmètre. */
   parMois: PaieMoisPoint[];
   /** Le mois affiché, null s'il n'est pas couvert. */
@@ -54,7 +58,7 @@ function TableVentilation({ lignes, entete }: { lignes: VentilationLigne[]; ente
         <TableRow>
           <TableHead className="text-xs">{entete}</TableHead>
           <TableHead className="text-xs text-right">Lignes</TableHead>
-          <TableHead className="text-xs text-right">Total brut</TableHead>
+          <TableHead className="text-xs text-right">Brut versé</TableHead>
           <TableHead className="text-xs text-right">Structurel</TableHead>
           <TableHead className="text-xs text-right">Planning</TableHead>
           <TableHead className="text-xs text-right">Part planning</TableHead>
@@ -82,7 +86,46 @@ function TableVentilation({ lignes, entete }: { lignes: VentilationLigne[]; ente
   );
 }
 
-export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepot, parFonction, perimetreFiltre }: Props) {
+/**
+ * Détail d'une famille : ses natures, puis sa répartition par dépôt et par
+ * fonction. Les parts sont exprimées sur le montant de la FAMILLE (le bloc
+ * affiche déjà sa part du brut).
+ */
+function detailFamille(
+  famille: FamilleNature,
+  duMois: { familles: MontantsParFamille; brut: number },
+  natures: NatureMontant[],
+  parDepot: VentilationLigne[],
+  parFonction: VentilationLigne[],
+): DetailCase {
+  const total = duMois.familles[famille];
+  const part = (n: number) => (Math.abs(total) >= 0.005 ? (n / total) * 100 : null);
+  const naturesFamille = natures.filter((n) => n.famille === famille);
+  const lignesNatures: DetailLigne[] = naturesFamille.map((n) => ({ libelle: n.libelle, montant: n.montant, part: part(n.montant) }));
+  if (famille === "structurel") {
+    const base = total - naturesFamille.reduce((acc, n) => acc + n.montant, 0);
+    lignesNatures.unshift({ libelle: "Brut de base", montant: base, part: part(base) });
+  }
+  const repartition = (lignes: VentilationLigne[]): DetailLigne[] =>
+    lignes
+      .map((l) => ({ libelle: l.cle, montant: l.familles[famille], part: part(l.familles[famille]) }))
+      .filter((l) => Math.abs(l.montant) >= 0.005)
+      .sort((a, b) => Math.abs(b.montant) - Math.abs(a.montant));
+  const depots = repartition(parDepot);
+  const fonctions = repartition(parFonction);
+  return {
+    sousTitre: FAMILLES.find((f) => f.id === famille)?.description,
+    sections: [
+      { titre: "Par nature", montant: total, ouvert: true, lignes: lignesNatures },
+      { titre: `Par dépôt (${depots.length})`, lignes: depots },
+      { titre: `Par fonction (${fonctions.length})`, lignes: fonctions },
+    ],
+    note: "Parts exprimées sur le montant de la famille.",
+    lien: { href: "#decomposition-paie-tableaux", libelle: "Voir les tableaux par nature, dépôt et fonction" },
+  };
+}
+
+export function PaieDecomposition({ moisLabel, mentionCalendrier, parMois, duMois, natures, parDepot, parFonction, perimetreFiltre }: Props) {
   const data = parMois.map((p) => ({
     label: FRENCH_MONTHS_SHORT[p.mois],
     ...p.familles,
@@ -93,24 +136,35 @@ export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepo
       <CardHeader>
         <CardTitle className="text-base">Décomposition de la paie — {moisLabel}</CardTitle>
         <CardDescription>
-          Le total brut de la Liste des salaires, réparti par famille de natures{perimetreFiltre ? ", sur le périmètre filtré" : ""}.
-          La part « pilotée par le planning » (nuit, dimanche, amplitudes, heures supplémentaires, fériés, dépannages) est ce que l&apos;organisation des tournées ajoute au contrat.
+          Le brut versé de la Liste des salaires, réparti par famille de natures{perimetreFiltre ? ", sur le périmètre filtré" : ""} ; l&apos;avantage en nature voiture, valorisé dans le brut pour l&apos;impôt mais retenu sur le net, en est exclu.
+          La part « liée au planning » (nuit, dimanche, amplitudes, heures supplémentaires, fériés, dépannages) est ce que les horaires de service ajoutent au contrat — en grande partie subie : fériés, dimanches et nuits ne se choisissent pas.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {duMois && mentionCalendrier && (
+          <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">{mentionCalendrier}</p>
+        )}
         {duMois ? (
           <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3 lg:grid-cols-6">
-            {FAMILLES.map((f) => (
-              <div key={f.id} className="rounded-md border px-3 py-2" style={{ borderLeftColor: COULEURS[f.id], borderLeftWidth: 4 }} title={f.description}>
-                <div className="text-xs text-muted-foreground">{f.libelle}</div>
-                <div className="font-medium">{signe(duMois.familles[f.id])}</div>
-                <div className="text-xs text-muted-foreground">{pct(duMois.familles[f.id], duMois.brut)} du brut</div>
-              </div>
+            {FAMILLES_VERSEES.map((f) => (
+              <PaieCase
+                key={f.id}
+                libelle={f.libelle}
+                valeur={duMois.familles[f.id]}
+                note={`${pct(duMois.familles[f.id], duMois.brut)} du brut versé`}
+                couleur={COULEURS[f.id]}
+                detail={detailFamille(f.id, duMois, natures, parDepot, parFonction)}
+              />
             ))}
             <div className="col-span-2 rounded-md border bg-slate-50 px-3 py-2 md:col-span-3 lg:col-span-6">
-              <span className="text-xs text-muted-foreground">Total brut </span>
+              <span className="text-xs text-muted-foreground">Brut versé </span>
               <span className="font-medium">{formatEuros(duMois.brut)}</span>
               <span className="text-xs text-muted-foreground"> · {duMois.n.toLocaleString("fr-FR")} lignes{duMois.nonPeriodiques > 0 ? `, dont ${duMois.nonPeriodiques} non périodique${duMois.nonPeriodiques > 1 ? "s" : ""} (soldes de sortie)` : ""}</span>
+              {Math.abs(duMois.familles.non_verse) >= 0.5 && (
+                <span className="block text-xs text-muted-foreground md:inline" title={FAMILLES.find((f) => f.id === "non_verse")?.description}>
+                  {" "}· hors avantage en nature non versé {formatEuros(duMois.familles.non_verse)} (total brut fiscal {formatEuros(duMois.brut + duMois.familles.non_verse)})
+                </span>
+              )}
             </div>
           </div>
         ) : (
@@ -129,7 +183,7 @@ export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepo
               />
               <Legend />
               <ReferenceLine y={0} stroke="var(--border)" />
-              {FAMILLES.map((f) => (
+              {FAMILLES_VERSEES.map((f) => (
                 <Bar key={f.id} dataKey={f.id} name={f.libelle} stackId="brut" fill={COULEURS[f.id]} />
               ))}
             </BarChart>
@@ -137,7 +191,7 @@ export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepo
         )}
 
         {duMois && (
-          <Tabs defaultValue="natures">
+          <Tabs defaultValue="natures" id="decomposition-paie-tableaux">
             <TabsList className="mb-4">
               <TabsTrigger value="natures">Par nature</TabsTrigger>
               <TabsTrigger value="depot">Par dépôt</TabsTrigger>
@@ -150,7 +204,7 @@ export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepo
                     <TableHead className="text-xs">Nature</TableHead>
                     <TableHead className="text-xs">Famille</TableHead>
                     <TableHead className="text-xs text-right">Montant</TableHead>
-                    <TableHead className="text-xs text-right">Part du brut</TableHead>
+                    <TableHead className="text-xs text-right">Part du brut versé</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -165,7 +219,7 @@ export function PaieDecomposition({ moisLabel, parMois, duMois, natures, parDepo
                       <TableCell className="text-sm">{n.libelle}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{FAMILLES.find((f) => f.id === n.famille)?.libelle}</TableCell>
                       <TableCell className="text-sm text-right">{signe(n.montant)}</TableCell>
-                      <TableCell className="text-sm text-right">{pct(n.montant, duMois.brut)}</TableCell>
+                      <TableCell className="text-sm text-right">{n.famille === "non_verse" ? "non versé" : pct(n.montant, duMois.brut)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

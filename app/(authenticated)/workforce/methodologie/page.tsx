@@ -112,7 +112,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
   const [periodeReference, dernierMoisStats, salaryLines, dernierMoisPaie] = await Promise.all([
     supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
-    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur, avantages_nature").eq("annee", selectedYear)),
     supabase.from("wp_salary_lines").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
   ]);
   const periodeRef = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
@@ -124,7 +124,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
     dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cout_employeur").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cout_employeur, avantages_nature").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
   // Même fusion des deux exports de paie que la page Coûts

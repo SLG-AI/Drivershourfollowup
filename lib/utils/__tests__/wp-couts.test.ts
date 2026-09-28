@@ -142,6 +142,15 @@ describe("calculerCoefficientCharges", () => {
     expect(r.coef).toBe(COEF_CHARGES_DEFAUT);
     expect(r.source).toBeNull();
   });
+
+  it("rapporte le coût au brut VERSÉ : l'avantage en nature, retiré du coût par la paie, sort aussi du brut", () => {
+    // Brut fiscal 3 300 dont 300 d'avantage voiture ; charges 450 ; coût paie = 3 300 + 450 − 300
+    const r = calculerCoefficientCharges([
+      ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 3300, charges_patronales: 450, cout_employeur: 3450, avantages_nature: 300 }),
+    ]);
+    expect(r.coef).toBeCloseTo(3450 / 3000, 6);
+    expect(r.source?.brut).toBe(3000);
+  });
 });
 
 describe("construireSourceSalaires", () => {

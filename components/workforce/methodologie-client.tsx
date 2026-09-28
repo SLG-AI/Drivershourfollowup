@@ -1227,7 +1227,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
         titre: "Coefficient de charges patronales",
         definition: "Le rapport entre le coût employeur (brut + charges patronales) et le salaire brut, lu sur la paie réelle.",
         valeur: coefTexte,
-        formule: "coefficient = Σ coût employeur / Σ Total brut, sur le dernier mois de paie qui porte les charges patronales (Liste des salaires : coût de la paie ; Statistiques rapides : total brut + charges patronales)",
+        formule: "coefficient = Σ coût employeur / Σ brut versé, sur le dernier mois de paie qui porte les charges patronales (Liste des salaires : coût de la paie, brut versé = total brut − avantages en nature non versés ; Statistiques rapides : total brut + charges patronales, sur le total brut)",
         operandes: c?.coefficientSource
           ? [
               { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
@@ -1397,10 +1397,10 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
               "Total brut : brut base + suppléments, colonne « Total brut » de la paie. Les retenues pour absence injustifiée et congés trop pris y sont déjà déduites (natures négatives).",
               "CM patronale : caisse maladie, part employeur — « CM Patr. soins » + « CM Patr. espèces ». CP patronale : caisse de pension, part employeur. Assurance accident, Santé au travail, Mutualité, Autres cotisations patronales : les colonnes du même nom.",
               "Charges patronales : la somme des cotisations patronales ci-dessus. Les cotisations SALARIALES (CM/CP salariales, assurance dépendance), l'impôt et le net ne sont pas importés : ils ne changent pas ce que l'employeur décaisse.",
-              "Avantages en nature (déduits) : ce que la paie retire du brut chargé pour obtenir son coût — voiture de fonction et compléments valorisés dans le brut pour l'impôt mais qui ne sont pas un décaissement de salaire. Calculé comme total brut + charges patronales − coût natures déduites.",
+              "Avantages en nature (non versés, déduits) : l'avantage voiture (N002) est valorisé dans le total brut pour l'impôt, retenu sur le net du salarié et retiré du coût par la paie : il n'est ni versé ni décaissé. Seules les charges patronales calculées dessus restent un coût. Calculé comme total brut + charges patronales − coût natures déduites ; la décomposition de la paie part du brut versé, sans lui.",
               "Soldes de sortie : les lignes « Rémun. np » (période 13 du SIRH), en pratique le décompte de congés versé à la sortie. Comptées dans le coût employeur réalisé (elles sont décaissées ce mois) mais données à part, hors masse salariale courante et hors coefficient.",
               "Coût employeur réalisé : colonne « Coût natures déduites » de la paie = total brut + charges patronales − avantages en nature. « Hors soldes de sortie » retire les lignes non périodiques.",
-              "Coefficient réel du mois : coût employeur réalisé / total brut, soldes compris — à comparer au coefficient de charges appliqué au contractuel.",
+              "Coefficient réel du mois : coût employeur réalisé / brut versé (total brut − avantages en nature non versés), soldes compris — à comparer au coefficient de charges appliqué au contractuel.",
               "Écart réalisé − payé contractuel : ce que le contractuel (brut indice × ETP × coefficient, absences non payées retirées) ne modélise pas — suppléments et heures supplémentaires, prorata des entrées et sorties en cours de mois, régularisations, soldes de sortie, écart entre brut indice et brut réellement payé.",
             ],
           },

@@ -7,10 +7,11 @@ import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstate
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
 import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
-import { NATURES, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
+import { NATURES, brutVerse, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
 import { reconcilierPaie } from "@/lib/utils/wp-reconciliation-paie";
+import { mentionCalendrierPaie } from "@/lib/utils/wp-calendrier-paie";
 import { injustifieesDuPerimetre } from "@/lib/utils/wp-paliers";
 import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
@@ -140,7 +141,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
     dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cout_employeur").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cout_employeur, avantages_nature").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
   // Une seule liste de paie : la Liste des salaires remplace les Statistiques
@@ -356,7 +357,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const paieDuMois = lignesPaieDuMois.length > 0
     ? {
       familles: decomposerParFamille(lignesPaieDuMois),
-      brut: lignesPaieDuMois.reduce((s, l) => s + Number(l.total_brut || 0), 0),
+      brut: brutVerse(lignesPaieDuMois),
       n: lignesPaieDuMois.length,
       nonPeriodiques: lignesPaieDuMois.filter((l) => l.type_remuneration === "non_periodique").length,
     }
@@ -471,7 +472,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
           ouvert: true,
           lignes: g.lignes.map((l) => ({ libelle: l.n > 0 ? `${l.libelle} (${l.n.toLocaleString("fr-FR")} sal.)` : l.libelle, montant: l.montant })),
         })),
-        note: `Réconciliation salarié par salarié : le payé contractuel est refait pour chacun (brut indice × ETP × jours sous contrat × (1 + compléments) × coefficient, moins suspension, CNS et injustifiées) et chaque euro de paie est rattaché à sa cause. Natures chargées au coefficient réel des lignes de salaire (${reconciliation.coefReel.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}). La somme des lignes vaut l'écart, exactement.`,
+        note: `${mentionCalendrierPaie(selectedMonth) ? `${mentionCalendrierPaie(selectedMonth)} ` : ""}Réconciliation salarié par salarié : le payé contractuel est refait pour chacun (brut indice × ETP × jours sous contrat × (1 + compléments) × coefficient, moins suspension, CNS et injustifiées) et chaque euro de paie est rattaché à sa cause. Natures chargées au coefficient réel des lignes de salaire (${reconciliation.coefReel.toLocaleString("fr-FR", { maximumFractionDigits: 3 })}). La somme des lignes vaut l'écart, exactement.`,
       };
     }
 
@@ -634,7 +635,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                 { libelle: "Charges patronales", valeur: duMois.realise.chargesPatronales, detail: detailsPaie?.charges },
                 ...(duMois.realise.source === "lignes"
                   ? [
-                    { libelle: "Avantages en nature (déduits)", valeur: duMois.realise.avantagesNature, detail: detailsPaie?.avantages },
+                    { libelle: "Avantages en nature (non versés, déduits)", valeur: duMois.realise.avantagesNature, detail: detailsPaie?.avantages },
                     { libelle: `Soldes de sortie (${duMois.realise.nonPeriodique.n} ligne${duMois.realise.nonPeriodique.n > 1 ? "s" : ""} non périodique${duMois.realise.nonPeriodique.n > 1 ? "s" : ""})`, valeur: duMois.realise.nonPeriodique.employeur, detail: detailsPaie?.soldes },
                   ]
                   : []),
@@ -646,8 +647,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                 accent
                 libelle={`Coût employeur réalisé${duMois.realise.employeurMesure ? "" : " (estimé)"}`}
                 valeur={stats.realise ?? 0}
-                note={duMois.realise.employeurMesure && duMois.realise.brut > 0
-                  ? `Coefficient réel du mois : ${(duMois.realise.employeur / duMois.realise.brut).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}${duMois.realise.nonPeriodique.n > 0 ? ` · hors soldes de sortie : ${formatEuros(duMois.realise.employeur - duMois.realise.nonPeriodique.employeur)}` : ""}`
+                note={duMois.realise.employeurMesure && duMois.realise.brutVerse > 0
+                  ? `Coefficient réel du mois : ${(duMois.realise.employeur / duMois.realise.brutVerse).toLocaleString("fr-FR", { maximumFractionDigits: 3 })}${duMois.realise.nonPeriodique.n > 0 ? ` · hors soldes de sortie : ${formatEuros(duMois.realise.employeur - duMois.realise.nonPeriodique.employeur)}` : ""}`
                   : undefined}
               />
               {(stats.paye_moyen ?? stats.paye) != null && stats.realise != null && (
@@ -678,6 +679,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
       {(paieParMois.length > 0 || paieDuMois) && (
         <PaieDecomposition
           moisLabel={moisLabel}
+          mentionCalendrier={mentionCalendrierPaie(selectedMonth)}
           parMois={paieParMois}
           duMois={paieDuMois}
           natures={naturesDuMois}
