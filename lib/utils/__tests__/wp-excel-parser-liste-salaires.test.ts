@@ -104,6 +104,20 @@ describe("parseSalaryLines — Liste des salaires", () => {
     expect(r.warnings.some((w) => w.includes("Rémun. np"))).toBe(true);
   });
 
+  it("additionne plusieurs « Rémun. np » d'un même salarié (périodes 13, 14…) : une seule ligne par clé unique", () => {
+    const np14 = ligne({ code: "SLA 0001", periode: 14, type: "Rémun. np", tache: 0, base: 0, dc: 100, cmS: 5, cmE: 1, cp: 8, acc: 1, sante: 0, mut: 2, cout: 100 + 17 });
+    const r = parseSalaryLines(classeur([BANDEAU, ENTETES, salaire, np, np14]));
+    expect(r.rowCount).toBe(2);
+    const l = r.data[1] as Record<string, unknown>;
+    expect(l.type_remuneration).toBe("non_periodique");
+    expect(l.nat_dc).toBe(1000);
+    expect(l.total_brut).toBe(1000);
+    expect(l.cout_employeur).toBe(1144);
+    expect(l.charges_patronales).toBe(144);
+    expect(l.avantages_nature).toBe(0);
+    expect(r.warnings.some((w) => w.includes("additionnée"))).toBe(true);
+  });
+
   it("signale une nature inconnue et l'écart brut qu'elle provoque, sans la lire dans une autre colonne", () => {
     const entetes = [...ENTETES];
     entetes.splice(10, 0, "XYZ - Nature nouvelle");

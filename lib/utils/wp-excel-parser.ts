@@ -610,6 +610,11 @@ export function parseSalaryLines(buffer: ArrayBuffer): WpParseResult {
   let ecartsBrut = 0;
   let ecartsCout = 0;
   const periodes = new Set<number>();
+  // Un salarié peut recevoir plusieurs rémunérations non périodiques le même
+  // mois (périodes SIRH 13, 14, 15…) : toutes tombent sur le mois de l'export,
+  // donc sur la même clé (salarié, mois, type). Elles sont additionnées.
+  const parCle = new Map<string, SalaryLineRow>();
+  let lignesFusionnees = 0;
 
   for (let i = header.index + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
@@ -675,12 +680,27 @@ export function parseSalaryLines(buffer: ArrayBuffer): WpParseResult {
     if (Math.abs(ligne.brut_base + sommeNatures(ligne) - ligne.total_brut) > 0.05) ecartsBrut++;
     if (ligne.avantages_nature < -0.05) ecartsCout++;
 
+    const cle = `${ligne.code_salarie}|${ligne.annee}|${ligne.mois}|${ligne.type_remuneration}`;
+    const existante = parCle.get(cle);
+    if (existante) {
+      const r = existante as unknown as Record<string, number>;
+      for (const [k, v] of Object.entries(ligne)) {
+        if (typeof v !== "number" || k === "mois" || k === "annee") continue;
+        r[k] = k === "tache_pct" ? Math.max(r[k], v) : Math.round((r[k] + v) * 100) / 100;
+      }
+      lignesFusionnees++;
+      continue;
+    }
+    parCle.set(cle, ligne);
     data.push(ligne);
   }
 
   if (lignesTotal > 0) warnings.push(`${lignesTotal} ligne${lignesTotal > 1 ? "s" : ""} de total ignorée${lignesTotal > 1 ? "s" : ""}.`);
   if (nonPeriodiques > 0) {
     warnings.push(`${nonPeriodiques} ligne${nonPeriodiques > 1 ? "s" : ""} « Rémun. np » (rémunération non périodique, période 13) rattachée${nonPeriodiques > 1 ? "s" : ""} au mois de l'export, hors masse salariale courante.`);
+  }
+  if (lignesFusionnees > 0) {
+    warnings.push(`${lignesFusionnees} ligne${lignesFusionnees > 1 ? "s" : ""} « Rémun. np » supplémentaire${lignesFusionnees > 1 ? "s" : ""} (même salarié, même mois) additionnée${lignesFusionnees > 1 ? "s" : ""} à la première.`);
   }
   if (lignesSansMois > 0) {
     warnings.push(`${lignesSansMois} ligne${lignesSansMois > 1 ? "s" : ""} sans période valide : le mois choisi à l'écran leur sera appliqué.`);
