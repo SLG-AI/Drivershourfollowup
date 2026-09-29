@@ -13,6 +13,7 @@ export const SERIES_COUTS: SeriesDef[] = [
   { key: "effectif_apres_injustifiees", label: "Payé (après injustifiées)", color: "hsl(45, 93%, 47%)", reportFlag: "injustifiees", parent: "effectif_reel" },
   { key: "effectif_apres_mct", label: "Disponible (après MCT)", color: "hsl(330, 70%, 55%)", reportFlag: "mct", parent: "effectif_apres_injustifiees" },
   { key: "realise", label: "Réalisé (paie du mois)", color: "hsl(215, 14%, 34%)", connectNulls: false },
+  { key: "realise_attendu", label: "Réalisé attendu (avec variable)", color: "hsl(215, 14%, 34%)", dashed: true },
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true, parent: "scenario_brut" },
   { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true, parent: "scenario_net" },

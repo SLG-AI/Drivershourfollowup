@@ -21,6 +21,8 @@
  * salaire ; il est reconnu par son libellé exact.
  */
 
+import { regrouperPetitsGroupes } from "./wp-anonymisation";
+
 export type FamilleNature = "structurel" | "planning" | "primes" | "regularisations" | "soldes" | "avantages" | "non_verse";
 
 export interface NaturePaie {
@@ -186,7 +188,10 @@ export interface VentilationLigne {
   cle: string;
   familles: MontantsParFamille;
   brut: number;
+  /** Lignes de paie (un salarié peut en avoir deux : salaire et non périodique). */
   n: number;
+  /** Salariés distincts : c'est sur eux que porte le seuil d'anonymat. */
+  salaries: number;
   /** Part du brut liée au planning, en % (null sans brut). */
   partPlanning: number | null;
 }
@@ -210,7 +215,28 @@ export function ventilerPar(
     .map(([cle, ls]) => {
       const familles = decomposerParFamille(ls);
       const brut = brutVerse(ls);
-      return { cle, familles, brut, n: ls.length, partPlanning: brut > 0 ? (familles.planning / brut) * 100 : null };
+      return { cle, familles, brut, n: ls.length, salaries: new Set(ls.map((l) => l.code_salarie)).size, partPlanning: brut > 0 ? (familles.planning / brut) * 100 : null };
     })
     .sort((a, b) => b.brut - a.brut);
+}
+
+/**
+ * Ventilation restituable : les groupes de moins de 3 salariés (dépôt ou
+ * fonction d'une ou deux personnes) sont fondus en une ligne « Autres » pour
+ * qu'aucun salaire individuel ne se lise (wp-anonymisation.ts).
+ */
+export function anonymiserVentilation(lignes: VentilationLigne[], libelleAutres: string): VentilationLigne[] {
+  return regrouperPetitsGroupes(lignes, (l) => l.salaries, (petits) => {
+    const familles = famillesVides();
+    for (const l of petits) for (const f of Object.keys(familles) as FamilleNature[]) familles[f] += l.familles[f];
+    const brut = petits.reduce((s, l) => s + l.brut, 0);
+    return {
+      cle: `${libelleAutres} (${petits.length})`,
+      familles,
+      brut,
+      n: petits.reduce((s, l) => s + l.n, 0),
+      salaries: petits.reduce((s, l) => s + l.salaries, 0),
+      partPlanning: brut > 0 ? (familles.planning / brut) * 100 : null,
+    };
+  });
 }

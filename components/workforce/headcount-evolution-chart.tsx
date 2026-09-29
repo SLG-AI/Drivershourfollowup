@@ -46,6 +46,8 @@ export interface HeadcountDataPoint {
   taux_appliques?: { cns: number | null; inj: number | null; mct: number | null };
   /** Page Coûts : paie réalisée du mois (brut + charges patronales), absente sur un mois sans montants. */
   realise?: number;
+  /** Page Coûts : réalisé prolongé sur les mois de paie à venir (payé + écart habituel + variable attendu). */
+  realise_attendu?: number;
   target?: number;
   scenario_brut?: number;
   scenario_net?: number;

@@ -1439,6 +1439,45 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
         source: "lib/utils/wp-cout-moyen.ts.",
       },
       {
+        cle: "variable-attendu",
+        titre: "Variable lié au planning attendu",
+        definition: "Les dimanches, fériés, nuits, amplitudes, dépannages, heures supplémentaires et primes de 6e jour des mois de paie pas encore importés, estimés à partir de leur déclencheur et recalés à chaque import.",
+        formule: "attendu du mois M = taux calé sur la paie importée × déclencheur du mois M − 1",
+        details: [
+          {
+            titre: "Un mois de décalage",
+            points: [
+              "Chaque nature est payée le mois SUIVANT l'événement qui la déclenche : la paie de septembre porte les dimanches, les fériés et le décompte de fin de période d'août. Vérifié sur la paie 2026 : le montant des dimanches suit le nombre de dimanches du mois précédent, celui des fériés le nombre de fériés du mois précédent.",
+            ],
+          },
+          {
+            titre: "Par poste",
+            points: [
+              "Dimanches : montant moyen par dimanche (4 derniers mois payés) × dimanches du mois précédent.",
+              "Fériés : montant par férié de semaine × fériés légaux luxembourgeois du mois précédent. Un férié de samedi compte 0,85 (0,6 à 1), un férié de dimanche 0,65 (0,4 à 0,9) : moins de services ces jours-là, et peu d'historique, d'où la fourchette.",
+              "Nuits, amplitudes, dépannages et permanences : pas de calendrier visible, moyenne des 6 derniers mois payés, fourchette min–max.",
+              "Heures supplémentaires : après une fin de période de référence (avril, août, décembre), € par heure calé sur les décomptes déjà payés × (heures payées du mois + solde positif du compteur, fichier d'heures). Les autres mois, moyenne des mois hors décompte.",
+              "Primes de 6e jour : 80 € par jour, payés en fin de période. Le nombre de jours réalisés n'est pas importé : le compteur du règlement (cumul mensuel, plancher 0, jours au-delà de 5 dus, solde final dû) est appliqué au solde d'heures converti en jours, calé sur les périodes déjà payées, puis ramené vers la moyenne historique au prorata de la corrélation salarié par salarié. Estimation grossière tant que les jours réels ne sont pas importés.",
+            ],
+          },
+          {
+            titre: "Lecture",
+            points: [
+              "Le réalisé des mois payés vient de la Liste des salaires ; les mois attendus sont grisés, leur total porte sa fourchette. Le coût employeur applique le coefficient de charges global.",
+              "Hors champ du variable : 13e mois des employés, primes et bonus, qui ne dépendent pas du planning (le 13e mois est projeté à part, voir ci-dessous).",
+            ],
+          },
+          {
+            titre: "Le réalisé attendu sur la courbe des coûts",
+            points: [
+              "La ligne du réalisé est prolongée en pointillé sur les mois de paie à venir : payé contractuel du mois (qui suit l'effectif projeté) + écart habituel entre réalisé et payé une fois le variable retiré (moyenne des 3 derniers mois payés, hors janvier, mai et décembre qui portent bonus, 13e mois ou reliquats) + variable attendu × coefficient de charges.",
+              "Décembre ajoute le 13e mois des employés : un mois de brut de base du dernier mois payé pour tous les salariés sauf les chauffeurs (fonction chauffeur ou complément CCT mensuel) et les cadres (avantage voiture ou car allowance, y compris une allowance saisie en « Autres CS » : même montant d'au moins 100 € sur 3 mois ou plus), ainsi que les étudiants, les accompagnateurs, les chefs de service et les key accounts. Les formateurs sans complément CCT ont le 13e mois, ceux qui ont le CCT non. Il est compté dans le structurel attendu, détaillé par fonction. Les autres primes de décembre n'y sont pas : décembre reste un plancher.",
+            ],
+          },
+        ],
+        source: "lib/utils/wp-variable-attendu.ts ; tables wp_salary_lines et monthly_records (fichier d'heures).",
+      },
+      {
         cle: "masse-annuelle",
         titre: "Masse salariale annuelle sous contrat",
         definition: "La somme des douze coûts mensuels sous contrat, mois mesurés et mois reportés confondus.",

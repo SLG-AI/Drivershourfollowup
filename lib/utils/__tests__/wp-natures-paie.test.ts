@@ -10,6 +10,7 @@ import {
   natureDepuisEntete,
   sommeNatures,
   ventilerPar,
+  anonymiserVentilation,
 } from "../wp-natures-paie";
 
 describe("natureDepuisEntete — reconnaissance par le code avant le tiret", () => {
@@ -122,5 +123,23 @@ describe("decomposerParMois / ventilerPar", () => {
     expect(sansCle).toHaveLength(1);
     expect(sansCle[0].cle).toBe("(nulle part)");
     expect(sansCle[0].partPlanning).toBeCloseTo((200 / 7700) * 100, 6);
+  });
+});
+
+describe("anonymiserVentilation", () => {
+  it("regroupe les fonctions de moins de 3 salariés distincts, familles et brut sommés", () => {
+    const l = (code: string, fonction: string, brut: number, type = "salaire") =>
+      ({ code_salarie: code, mois: 8, annee: 2026, fonction, type_remuneration: type, brut_base: brut, total_brut: brut });
+    const lignes = [
+      l("A", "EMPLOYE", 3_000), l("B", "EMPLOYE", 3_000), l("C", "EMPLOYE", 3_000),
+      l("D", "DIRECTEUR", 9_000), l("D", "DIRECTEUR", 500, "non_periodique"), // 2 lignes, 1 salarié
+      l("E", "DATA AN", 6_000), l("F", "DATA AN", 6_000),
+    ];
+    const v = anonymiserVentilation(ventilerPar(lignes, (x) => x.fonction), "Autres fonctions");
+    expect(v.map((x) => [x.cle, x.salaries, x.brut])).toEqual([
+      ["EMPLOYE", 3, 9_000],
+      ["Autres fonctions (2)", 3, 21_500],
+    ]);
+    expect(v[1].familles.structurel).toBe(21_500);
   });
 });

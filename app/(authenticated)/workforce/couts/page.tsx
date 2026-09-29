@@ -7,11 +7,13 @@ import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstate
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
 import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
-import { NATURES, brutVerse, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
+import { NATURES, anonymiserVentilation, brutVerse, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
 import { reconcilierPaie } from "@/lib/utils/wp-reconciliation-paie";
 import { mentionCalendrierPaie } from "@/lib/utils/wp-calendrier-paie";
+import { projeterDecomposition, projeterRealise, projeterVariable, treiziemeMoisEmployes, type HeuresMois, type LignePaieTreizieme, type LignePaieVariable } from "@/lib/utils/wp-variable-attendu";
+import { VariableAttendu } from "@/components/workforce/variable-attendu";
 import { injustifieesDuPerimetre } from "@/lib/utils/wp-paliers";
 import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
@@ -92,7 +94,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const anneeFuture = selectedYear > now.getFullYear();
   const colonnesPhoto = "code_salarie, code_employeur, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, brut_indice";
 
-  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie] = await Promise.all([
+  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie, heuresConducteurs] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*").eq("mois", rosterPeriode?.mois ?? -1).eq("annee", rosterPeriode?.annee ?? -1)),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, date_sortie, centre_cout, hrs_supp, total_brut, brut_base, supplements, cout_total_secu, charges_patronales, cm_patronale, cp_patronale, assurance_accident, allocation_familiale, sante_travail, mutualite, cot_pat_autres").eq("annee", selectedYear)),
@@ -113,6 +115,14 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     fetchAll(supabase.from("wp_salary_lines").select("*").eq("annee", selectedYear)),
     // Dernier mois de Liste des salaires avec charges, pour le coefficient
     supabase.from("wp_salary_lines").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
+    // Fichier d'heures des conducteurs, de la période de sept.–déc. précédente à l'année : variable attendu
+    fetchAll(
+      supabase
+        .from("monthly_records")
+        .select("month, year, buffer_hours, positive_hours, missing_hours, overtime_pay, counter_end, drivers!inner(code_salarie)")
+        .or(`year.eq.${selectedYear},and(year.eq.${selectedYear - 1},month.gte.9)`)
+        .order("id")
+    ),
   ]);
   // Scénarios : mêmes lignes brutes que le tableau de bord, plus les leviers de coût
   const scenarioOptions: ScenarioOption[] = allScenariosRaw.map((s) => ({ id: String(s.id), name: String(s.name) }));
@@ -370,8 +380,58 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   // Dépôt : le service du roster du mois (la paie n'en porte pas)
   const depotParCode = new Map<string, string>();
   (photoDuMois(selectedMonth) as SalarieCout[]).forEach((e) => depotParCode.set(e.code_salarie, e.description_service || ""));
-  const paieParDepot = ventilerPar(lignesPaieDuMois, (l) => depotParCode.get(l.code_salarie), "(hors photo roster)");
-  const paieParFonction = ventilerPar(lignesPaieDuMois, (l) => l.fonction, "(sans fonction)");
+  // Moins de 3 salariés dans un dépôt ou une fonction : regroupés en « Autres », aucun salaire individuel lisible
+  const paieParDepot = anonymiserVentilation(ventilerPar(lignesPaieDuMois, (l) => depotParCode.get(l.code_salarie), "(hors photo roster)"), "Autres dépôts");
+  const paieParFonction = anonymiserVentilation(ventilerPar(lignesPaieDuMois, (l) => l.fonction, "(sans fonction)"), "Autres fonctions");
+
+  // ---- Variable lié au planning : réalisé et attendu (wp-variable-attendu.ts)
+  const heuresVariable: HeuresMois[] = (heuresConducteurs as Record<string, unknown>[])
+    .map((h) => {
+      const driver = h.drivers as { code_salarie?: string } | { code_salarie?: string }[] | null;
+      const code = Array.isArray(driver) ? driver[0]?.code_salarie : driver?.code_salarie;
+      return {
+        code_salarie: String(code ?? ""),
+        annee: Number(h.year),
+        mois: Number(h.month),
+        buffer_hours: Number(h.buffer_hours),
+        positive_hours: Number(h.positive_hours),
+        missing_hours: Number(h.missing_hours),
+        overtime_pay: Number(h.overtime_pay),
+        counter_end: Number(h.counter_end),
+      };
+    })
+    .filter((h) => h.code_salarie && (!codesPerimetre || codesPerimetre.has(h.code_salarie)));
+  const projectionVariable = projeterVariable({
+    annee: selectedYear,
+    lignesPaie: lignesPaie.filter((l) => !codesPerimetre || codesPerimetre.has(l.code_salarie)) as unknown as LignePaieVariable[],
+    heures: heuresVariable,
+  });
+  // 13e mois des employés (ni chauffeurs, ni cadres), versé en décembre si décembre est attendu
+  const treizieme = projectionVariable.mois.some((m) => m.mois === 12 && m.estime)
+    ? treiziemeMoisEmployes(lignesPaie.filter((l) => !codesPerimetre || codesPerimetre.has(l.code_salarie)) as unknown as LignePaieTreizieme[], selectedYear)
+    : null;
+  const ponctuels = treizieme && treizieme.brut > 0 ? [treizieme] : [];
+  // Ligne du réalisé prolongée sur les mois à venir ; raccordée au dernier mois payé
+  const realiseAttendu = projeterRealise({
+    points: points.map((p) => ({ realise: p.realise, paye: p.effectif_apres_injustifiees })),
+    variable: projectionVariable,
+    coef: coefficient.coef,
+    ponctuels,
+  });
+  if (realiseAttendu.valeurs.some((v) => v != null)) {
+    points.forEach((p, i) => {
+      if (realiseAttendu.valeurs[i] != null) p.realise_attendu = realiseAttendu.valeurs[i];
+    });
+    const dernierPaye = projectionVariable.dernierMoisPaie;
+    if (dernierPaye && points[dernierPaye - 1]?.realise != null) points[dernierPaye - 1].realise_attendu = points[dernierPaye - 1].realise;
+  }
+  // Décomposition des mois attendus, cohérente avec le réalisé attendu
+  const paieAttendue = projeterDecomposition({ parMois: paieParMois, variable: projectionVariable, realiseAttendu: realiseAttendu.valeurs, coef: coefficient.coef, ponctuels });
+  const decompositionDuMoisAttendue = paieAttendue.find((a) => a.mois === selectedMonth);
+  const variableDuMoisAttendu = projectionVariable.mois.find((m) => m.mois === selectedMonth && m.estime);
+  const paieDuMoisAttendue = !paieDuMois && decompositionDuMoisAttendue && variableDuMoisAttendu
+    ? { decomposition: decompositionDuMoisAttendue, variable: variableDuMoisAttendu, hypotheses: projectionVariable.hypotheses }
+    : null;
 
   // ---- Détails des cases « Paie réalisée » (Liste des salaires seulement :
   // les Statistiques rapides n'ont qu'un bloc « Suppléments » indivisible)
@@ -680,6 +740,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
         <PaieDecomposition
           moisLabel={moisLabel}
           mentionCalendrier={mentionCalendrierPaie(selectedMonth)}
+          attendus={paieAttendue}
+          duMoisAttendu={paieDuMoisAttendue}
           parMois={paieParMois}
           duMois={paieDuMois}
           natures={naturesDuMois}
@@ -687,6 +749,10 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
           parFonction={paieParFonction}
           perimetreFiltre={filtres.actifs}
         />
+      )}
+
+      {projectionVariable.mois.length > 0 && (
+        <VariableAttendu projection={projectionVariable} coef={coefficient.coef} perimetreFiltre={filtres.actifs} />
       )}
 
       {!aucunSalaire && lignesCostCenter.length > 0 && (
