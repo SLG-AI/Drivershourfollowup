@@ -406,6 +406,8 @@ function WorkforceFilters() {
   const selectedYear = searchParams.get("year") || String(currentYear);
   const selectedMonth = searchParams.get("month") || String(currentMonth);
   const years = Array.from({ length: 4 }, (_, i) => currentYear + 1 - i);
+  // La vue jour par jour a sa propre plage de dates : ni mois ni année
+  const sansMoisAnnee = pathname.startsWith("/workforce/effectif-journalier");
 
   useEffect(() => {
     async function fetchOptions() {
@@ -463,6 +465,7 @@ function WorkforceFilters() {
 
   return (
     <>
+      {!sansMoisAnnee && (<>
       <Select value={selectedMonth} onValueChange={(v) => updateSimpleFilter("month", v, String(currentMonth))}>
         <SelectTrigger className="w-[130px] h-9 text-xs">
           <SelectValue placeholder="Mois" />
@@ -487,6 +490,7 @@ function WorkforceFilters() {
           ))}
         </SelectContent>
       </Select>
+      </>)}
       {societes.length > 0 && (
         <MultiSelectFilter
           label="Sociétés"

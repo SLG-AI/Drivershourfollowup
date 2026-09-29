@@ -598,6 +598,50 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
           ],
           source: "lib/utils/wp-effectif-moyen.ts.",
         },
+        {
+          cle: "effectif-journalier",
+          titre: "Effectif jour par jour",
+          definition:
+            "Pour chaque jour d'une plage choisie, passée ou future : les salariés sous contrat, puis ceux qui restent disponibles pour travailler une fois retirées les suspensions, la maladie (CNS), les MCT, les absences injustifiées et les congés. En têtes et en ETP.",
+          formule: "disponibles = sous contrat − suspendus − turnover attendu − CNS − MCT − injustifiées − congés",
+          details: [
+            {
+              titre: "Qui est sous contrat un jour donné",
+              points: [
+                "Mêmes règles que l'effectif moyen, évaluées sur un seul jour : entré au plus tard ce jour, pas sorti avant ce jour, un sorti en suspension restant dans le système.",
+                "Chaque jour passé se lit dans la photographie de son mois, avec les sortis du mois absents de la photo. Les jours futurs lisent la dernière photographie et ses dates connues (fins de contrat, retours de suspension).",
+                "Suspension : la fraction suspendue est retirée de l'ETP. En têtes, seul un salarié suspendu en entier cesse de compter ; un congé parental à mi-temps reste une tête disponible pour 0,5 ETP.",
+              ],
+            },
+            {
+              titre: "Absences : connues au passé, en taux au futur",
+              points: [
+                "Mois dont le fichier est importé : absences connues salarié par salarié. MCT au jour près, injustifiées sur les jours ouvrés de leur plage, maladie CNS en pourcentage du mois, faute de dates.",
+                "Mois sans fichier, dont tout le futur : taux appliqués au net. Maladie et congés viennent du scénario choisi. Sinon, et toujours pour MCT et injustifiées, on reprend le taux mesuré du même mois de l'an passé, à défaut la moyenne des 3 derniers mois mesurés.",
+                "Les taux mesurés sont rapportés à TOUS les jours du mois, puisqu'ils s'appliquent ensuite chaque jour, week-end compris. Un taux MCT d'environ 4 % ici correspond donc à environ 5 % dans le tableau de bord, qui rapporte les heures de MCT aux seules heures travaillables de semaine. Le volume d'absences du mois est le même.",
+                "Congés : aucune donnée datée. Seul le taux de congés d'un scénario les retire : réservoir annuel de 240 h / 173 h du net, réparti par le taux du mois. Sans scénario, ils ne sont pas déduits.",
+                "La liste d'un jour futur ne montre que des certitudes datées : les absences en taux ne désignent personne.",
+              ],
+            },
+            {
+              titre: "Scénario",
+              points: [
+                "Les hypothèses gardent leur jour : une arrivée le 15 compte dès le 15, un CDD jusqu'à son dernier jour, un départ après son jour, une sortie temporaire de son départ à la veille de son retour. Un départ posé sur un salarié réel remplace sa date de sortie.",
+                "Le turnover, sans date, retire chaque jour futur une fraction du sous contrat : taux annuel / 12, étalé sur les jours du mois, cumulé depuis le premier jour projeté.",
+                "Les hypothèses ne portent ni société ni équipe : elles restent comptées quand ces filtres sont actifs, et sont écartées dès qu'un salarié précis est demandé.",
+              ],
+            },
+            {
+              titre: "Lecture",
+              points: [
+                "Tous les jours sont affichés ; samedis, dimanches et fériés sont grisés, et les taux s'y appliquent comme en semaine.",
+                "La moyenne des jours d'un mois retrouve l'effectif moyen du mois (sous contrat et après suspension).",
+                "Une série « besoin » est prévue pour comparer, plus tard, les disponibles au besoin quotidien.",
+              ],
+            },
+          ],
+          source: "lib/utils/wp-effectif-journalier.ts ; page Effectif jour par jour.",
+        },
       ],
     },
     {

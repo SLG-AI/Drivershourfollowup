@@ -13,6 +13,7 @@ import {
   SlidersHorizontal,
   BookOpen,
   Euro,
+  CalendarDays,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,6 +53,7 @@ export const modules: NavModule[] = [
     items: [
       { href: "/workforce/dashboard", label: "Tableau de bord", icon: LayoutDashboard },
       { href: "/workforce/couts", label: "Coûts", icon: Euro },
+      { href: "/workforce/effectif-journalier", label: "Effectif jour par jour", icon: CalendarDays },
       { href: "/workforce/scenarios", label: "Scénarios", icon: SlidersHorizontal },
       { href: "/workforce/targets", label: "Besoins cibles", icon: Target },
       { href: "/workforce/history", label: "Analyse historique", icon: History },
