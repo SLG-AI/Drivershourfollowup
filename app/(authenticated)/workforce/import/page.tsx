@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock, ArrowLeftRight } from "lucide-react";
+import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock, ArrowLeftRight, Receipt } from "lucide-react";
 import { toast } from "sonner";
 
 const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: typeof Users; example: string }[] = [
@@ -29,6 +29,13 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
     description: "Données mensuelles : heures travaillées, ETP, coûts salariaux.",
     icon: FileSpreadsheet,
     example: "StatRapides_SLA_*.xlsx",
+  },
+  {
+    id: "salary_lines",
+    label: "Liste des salaires",
+    description: "Paie détaillée : brut par nature (nuit, dimanche, amplitudes, heures sup., primes), charges patronales et coût employeur.",
+    icon: Receipt,
+    example: "StatAvecCS*.xlsx",
   },
   {
     id: "absences_cns",
@@ -92,7 +99,7 @@ export default function WorkforceImportPage() {
   const [controleDureesEnCours, setControleDureesEnCours] = useState(false);
 
   // Types dont l'import est rattaché à une période.
-  const TYPES_AVEC_PERIODE: (WpFileType | null)[] = ["roster_rh", "salary_stats", "absences_cns", "absences_mct"];
+  const TYPES_AVEC_PERIODE: (WpFileType | null)[] = ["roster_rh", "salary_stats", "salary_lines", "absences_cns", "absences_mct"];
 
   useEffect(() => {
     getWpImportHistory().then((data) => setImportHistory(data as ImportHistoryItem[]));
@@ -236,7 +243,7 @@ export default function WorkforceImportPage() {
 
       {/* Stage: File type selection + upload */}
       {stage === "select" && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {FILE_TYPES.map((ft) => (
             <Card
               key={ft.id}

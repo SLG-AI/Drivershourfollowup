@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import type { WpFileType } from "@/lib/utils/wp-excel-parser";
-import { preparerStatsSalariales } from "@/lib/utils/wp-salary-import";
+import { preparerLignesPaie, preparerStatsSalariales } from "@/lib/utils/wp-salary-import";
 import {
   controlerDureesAbsence,
   messagesControleDurees,
@@ -54,6 +54,9 @@ export async function importWpData(input: WpImportInput) {
         break;
       case "salary_stats":
         rowCount = await importSalaryStats(supabase, input.data, importId, input.mois, input.annee);
+        break;
+      case "salary_lines":
+        rowCount = await importSalaryLines(supabase, input.data, importId, input.mois, input.annee);
         break;
       case "absences_cns":
         await importAbsencesCNS(supabase, input.data, importId, input.annee || new Date().getFullYear());
@@ -139,6 +142,29 @@ async function importSalaryStats(supabase: any, data: Record<string, unknown>[],
 
     const { error } = await supabase.from("wp_salary_stats").insert(batch);
     if (error) throw new Error(`Erreur insertion stats salariales (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
+  }
+
+  return lignes.length;
+}
+
+// Liste des salaires : chaque ligne porte sa période ; l'import remplace les
+// périodes présentes dans le fichier, et elles seules (comme les mouvements).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function importSalaryLines(supabase: any, data: Record<string, unknown>[], importId: string, mois?: number, annee?: number): Promise<number> {
+  if (data.length === 0) return 0;
+
+  const { lignes, periodes } = preparerLignesPaie(data, importId, mois, annee);
+  if (lignes.length === 0) return 0;
+
+  for (const p of periodes) {
+    const { error } = await supabase.from("wp_salary_lines").delete().eq("mois", p.mois).eq("annee", p.annee);
+    if (error) throw new Error(`Erreur remplacement de la paie ${p.mois}/${p.annee}: ${error.message}`);
+  }
+
+  for (let i = 0; i < lignes.length; i += 200) {
+    const batch = lignes.slice(i, i + 200);
+    const { error } = await supabase.from("wp_salary_lines").insert(batch);
+    if (error) throw new Error(`Erreur insertion liste des salaires (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
 
   return lignes.length;

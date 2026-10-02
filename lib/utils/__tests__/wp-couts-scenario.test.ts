@@ -101,3 +101,35 @@ describe("valoriserProjection", () => {
     expect(r.mois[1].scenario_brut).toBe(7200);
   });
 });
+
+// ============================================================
+// Compléments récurrents dans la projection
+// ============================================================
+import { calculerComplementsRecurrents } from "../wp-couts";
+
+describe("valoriserProjection — compléments récurrents", () => {
+  // Août 2026 : SLA202 porte 8 % de 13e mois + 2 % de prime de fonction, SLA210 5 % de 13e mois
+  const complements = calculerComplementsRecurrents([
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "SLA202", brut_base: 4000, nat_cct: 320, nat_pr_f: 80 },
+    { code_salarie: "B", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "SLA210", brut_base: 2000, nat_cct: 100, nat_pr_f: 0 },
+  ]);
+
+  it("le coût par ETP d'un mois projeté porte le taux du cost center, comme la chaîne des coûts réels", () => {
+    const sans = coutEtpDuMois(entrees(), PREMIER);
+    const avec = coutEtpDuMois({ ...entrees(), complements }, PREMIER);
+    // A : 4000 × 1,10 ; B : 2000 × 1,05 ; deux ETP
+    expect(avec.coutEtp).toBeCloseTo(((4000 * 1.1 + 2000 * 1.05) / 2) * COEF, 6);
+    expect(sans.coutEtp).toBeCloseTo(3000 * COEF, 6);
+  });
+
+  it("une hypothèse d'arrivée ne porte que la prime de fonction de son cost center, pas le 13e mois", () => {
+    const j = [journal(10, { arriveesHyp: [arrivee], arrivalsEtp: 1, scenario_brut: 3, scenario_net: 3, scenario_reel: 3, scenario_apres_mct: 3 })];
+    const sans = valoriserProjection(j, entrees());
+    const avec = valoriserProjection(j, { ...entrees(), complements });
+    // Masse de départ avec compléments : (4000 × 1,10 + 2000 × 1,05) × coef ; arrivée : brut moyen du profil SLA202 (4000) × (1 + 2 %) × coef
+    const departAvec = (4000 * 1.1 + 2000 * 1.05) * COEF;
+    const arriveeAvec = 4000 * 1.02 * COEF;
+    expect(avec.mois[0].scenario_brut).toBe(Math.round(departAvec + arriveeAvec));
+    expect(sans.mois[0].scenario_brut).toBe(Math.round(6000 * COEF + 4000 * COEF));
+  });
+});

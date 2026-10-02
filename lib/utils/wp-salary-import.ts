@@ -42,3 +42,42 @@ export function preparerStatsSalariales(
 
   return { lignes, ecartees, periode };
 }
+
+/**
+ * Liste des salaires : chaque ligne porte sa période (colonne « Période »,
+ * la ligne « Rémun. np » prenant le mois de l'export). Le mois et l'année
+ * choisis à l'écran ne servent qu'aux lignes sans période. Un fichier peut
+ * couvrir plusieurs mois : on rend TOUTES les périodes présentes, pour que
+ * l'import remplace chacune d'elles — et elles seules.
+ */
+export interface LignesPaiePreparees {
+  lignes: Record<string, unknown>[];
+  ecartees: number;
+  periodes: { mois: number; annee: number }[];
+}
+
+export function preparerLignesPaie(
+  data: Record<string, unknown>[],
+  importId: string,
+  moisChoisi?: number,
+  anneeChoisie?: number,
+): LignesPaiePreparees {
+  const lignes: Record<string, unknown>[] = [];
+  const periodes = new Map<string, { mois: number; annee: number }>();
+  let ecartees = 0;
+
+  for (const row of data) {
+    const moisLu = Number(row.mois);
+    const anneeLue = Number(row.annee);
+    const mois = moisLu >= 1 && moisLu <= 12 ? moisLu : moisChoisi ?? 0;
+    const annee = anneeLue > 2000 ? anneeLue : anneeChoisie ?? 0;
+    if (!(mois >= 1 && mois <= 12) || !(annee > 2000)) {
+      ecartees++;
+      continue;
+    }
+    periodes.set(`${annee}-${mois}`, { mois, annee });
+    lignes.push({ ...row, mois, annee, import_id: importId });
+  }
+
+  return { lignes, ecartees, periodes: [...periodes.values()] };
+}

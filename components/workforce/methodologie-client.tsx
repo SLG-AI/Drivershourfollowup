@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Printer, AlertTriangle, Info } from "lucide-react";
 import type { PaliersMois } from "@/lib/utils/wp-paliers";
 import type { CoutsMois } from "@/lib/utils/wp-couts";
+import { FAMILLES, NATURES } from "@/lib/utils/wp-natures-paie";
 
 const MOIS_LABELS: Record<number, string> = {
   1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
@@ -51,6 +52,8 @@ export interface DonneesMethodologie {
     periodeReference: { mois: number; annee: number } | null;
     aucunSalaire: boolean;
     realise: { employeur: number; brut: number; n: number; mesure: boolean };
+    /** Compléments récurrents mesurés sur la Liste des salaires, null sans mesure. */
+    complements: { mois: number; annee: number; taux: number; tauxCct: number; tauxPrf: number; n: number; brutBase: number; montant: number; costCenters: number } | null;
   };
 }
 
@@ -594,6 +597,50 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
             },
           ],
           source: "lib/utils/wp-effectif-moyen.ts.",
+        },
+        {
+          cle: "effectif-journalier",
+          titre: "Effectif jour par jour",
+          definition:
+            "Pour chaque jour d'une plage choisie, passée ou future : les salariés sous contrat, puis ceux qui restent disponibles pour travailler une fois retirées les suspensions, la maladie (CNS), les MCT, les absences injustifiées et les congés. En têtes et en ETP.",
+          formule: "disponibles = sous contrat − suspendus − turnover attendu − CNS − MCT − injustifiées − congés",
+          details: [
+            {
+              titre: "Qui est sous contrat un jour donné",
+              points: [
+                "Mêmes règles que l'effectif moyen, évaluées sur un seul jour : entré au plus tard ce jour, pas sorti avant ce jour, un sorti en suspension restant dans le système.",
+                "Chaque jour passé se lit dans la photographie de son mois, avec les sortis du mois absents de la photo. Les jours futurs lisent la dernière photographie et ses dates connues (fins de contrat, retours de suspension).",
+                "Suspension : la fraction suspendue est retirée de l'ETP. En têtes, seul un salarié suspendu en entier cesse de compter ; un congé parental à mi-temps reste une tête disponible pour 0,5 ETP.",
+              ],
+            },
+            {
+              titre: "Absences : connues au passé, en taux au futur",
+              points: [
+                "Mois dont le fichier est importé : absences connues salarié par salarié. MCT au jour près, injustifiées sur les jours ouvrés de leur plage, maladie CNS en pourcentage du mois, faute de dates.",
+                "Mois sans fichier, dont tout le futur : taux appliqués au net. Maladie et congés viennent du scénario choisi. Sinon, et toujours pour MCT et injustifiées, on reprend le taux mesuré du même mois de l'an passé, à défaut la moyenne des 3 derniers mois mesurés.",
+                "Les taux mesurés sont rapportés à TOUS les jours du mois, puisqu'ils s'appliquent ensuite chaque jour, week-end compris. Un taux MCT d'environ 4 % ici correspond donc à environ 5 % dans le tableau de bord, qui rapporte les heures de MCT aux seules heures travaillables de semaine. Le volume d'absences du mois est le même.",
+                "Congés : aucune donnée datée. Seul le taux de congés d'un scénario les retire : réservoir annuel de 240 h / 173 h du net, réparti par le taux du mois. Sans scénario, ils ne sont pas déduits.",
+                "La liste d'un jour futur ne montre que des certitudes datées : les absences en taux ne désignent personne.",
+              ],
+            },
+            {
+              titre: "Scénario",
+              points: [
+                "Les hypothèses gardent leur jour : une arrivée le 15 compte dès le 15, un CDD jusqu'à son dernier jour, un départ après son jour, une sortie temporaire de son départ à la veille de son retour. Un départ posé sur un salarié réel remplace sa date de sortie.",
+                "Le turnover, sans date, retire chaque jour futur une fraction du sous contrat : taux annuel / 12, étalé sur les jours du mois, cumulé depuis le premier jour projeté.",
+                "Les hypothèses ne portent ni société ni équipe : elles restent comptées quand ces filtres sont actifs, et sont écartées dès qu'un salarié précis est demandé.",
+              ],
+            },
+            {
+              titre: "Lecture",
+              points: [
+                "Tous les jours sont affichés ; samedis, dimanches et fériés sont grisés, et les taux s'y appliquent comme en semaine.",
+                "La moyenne des jours d'un mois retrouve l'effectif moyen du mois (sous contrat et après suspension).",
+                "Une série « besoin » est prévue pour comparer, plus tard, les disponibles au besoin quotidien.",
+              ],
+            },
+          ],
+          source: "lib/utils/wp-effectif-journalier.ts ; page Effectif jour par jour.",
         },
       ],
     },
@@ -1209,7 +1256,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
   const coefTexte = c
     ? c.coefficientSource
       ? `${nf(c.coefficient, 3)}, calculé sur ${MOIS_LONG[c.coefficientSource.mois]} ${c.coefficientSource.annee} (${nf(c.coefficientSource.n, 0)} lignes, ${c.coefficientSource.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
-      : `${nf(c.coefficient, 2)}, valeur par défaut faute de statistiques salariales avec montants`
+      : `${nf(c.coefficient, 2)}, valeur par défaut faute de paie avec charges patronales`
     : undefined;
   const reference = c?.periodeReference ? `${MOIS_LONG[c.periodeReference.mois]} ${c.periodeReference.annee}` : null;
 
@@ -1217,14 +1264,14 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
     cle: "sec-couts",
     titre: "Les coûts",
     chapeau:
-      "La même chaîne de paliers, en euros de coût employeur : ce que coûterait l'effectif sous contrat, ce qui n'est pas payé, ce qui l'est. Deux sources : le brut indice du roster pour le contractuel, les statistiques salariales pour le réalisé.",
+      "La même chaîne de paliers, en euros de coût employeur : ce que coûterait l'effectif sous contrat, ce qui n'est pas payé, ce qui l'est. Deux sources : le brut indice du roster pour le contractuel, la paie (Liste des salaires, sinon Statistiques rapides) pour le réalisé.",
     indicateurs: [
       {
         cle: "coefficient-charges",
         titre: "Coefficient de charges patronales",
         definition: "Le rapport entre le coût employeur (brut + charges patronales) et le salaire brut, lu sur la paie réelle.",
         valeur: coefTexte,
-        formule: "coefficient = Σ (Total brut + charges patronales) / Σ Total brut, sur le dernier mois de statistiques salariales qui porte les charges patronales",
+        formule: "coefficient = Σ coût employeur / Σ brut versé, sur le dernier mois de paie qui porte les charges patronales (Liste des salaires : coût de la paie, brut versé = total brut − avantages en nature non versés ; Statistiques rapides : total brut + charges patronales, sur le total brut)",
         operandes: c?.coefficientSource
           ? [
               { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
@@ -1249,18 +1296,31 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-sous-contrat",
         titre: "Coût employeur sous contrat",
-        definition: "Ce que coûterait, sur le mois, l'ensemble des salariés sous contrat : brut indice × taux d'occupation × coefficient de charges.",
+        definition: "Ce que coûterait, sur le mois, l'ensemble des salariés sous contrat : brut indice × (1 + compléments récurrents) × taux d'occupation × coefficient de charges.",
         valeur: p ? euros(p.sousContrat) : undefined,
         valeurNote: c?.salairesReportes && reference ? `salaires lus dans le roster de ${reference}` : undefined,
-        formule: "coût sous contrat = Σ actifs (brut indice plein temps × taux d'occupation / 100 × coefficient)",
+        formule: "coût sous contrat = Σ actifs (brut indice plein temps × (1 + taux de compléments récurrents) × taux d'occupation / 100 × coefficient)",
         operandes: p
           ? [
               { label: "Coût moyen par ETP", valeur: euros(p.coutMoyenEtp) },
+              { label: "Compléments récurrents", valeur: c?.complements ? `${nf(c.complements.taux * 100, 1)} % du brut de base` : "non mesurés" },
+              { label: "dont sous contrat", valeur: euros(p.complementsRecurrents) },
               { label: "Coefficient", valeur: nf(p.coef, 3) },
               { label: "Sous contrat", valeur: euros(p.sousContrat) },
             ]
           : undefined,
         details: [
+          {
+            titre: "Les compléments récurrents : 13e mois proratisé et prime de fonction",
+            points: [
+              "Le brut indice du roster ne porte ni le prorata mensuel du 13e mois (CCT / P001, versé aux chauffeurs de plus d'un an d'ancienneté) ni la prime de fonction (PR F : formateurs, team leaders, délégués du personnel dès octobre 2026). Les deux sont récurrents chaque mois : ils sont comptés dans le contractuel, pas dans le variable.",
+              "Le taux est mesuré sur le dernier mois de Liste des salaires : Σ (CCT + PR F) / Σ brut de base des lignes de salaire, globalement et par cost center (la prime de fonction est concentrée sur quelques fonctions ; le taux du cost center d'un salarié prime, sinon le global). Il s'applique au brut indice avant les charges.",
+              c?.complements
+                ? `Mesure : ${MOIS_LABELS[c.complements.mois]} ${c.complements.annee}, ${nf(c.complements.n, 0)} lignes, ${euros(c.complements.montant)} de compléments pour ${euros(c.complements.brutBase)} de brut de base ⇒ ${nf(c.complements.taux * 100, 2)} % (13e mois ${nf(c.complements.tauxCct * 100, 2)} %, prime de fonction ${nf(c.complements.tauxPrf * 100, 2)} %), ${nf(c.complements.costCenters, 0)} cost centers avec leur propre taux.`
+                : "Aucune Liste des salaires importée : le taux vaut 0 et le contractuel sous-estime la masse d'environ 6 %.",
+              "Dans les scénarios, les mêmes taux s'appliquent aux mois projetés (sinon la courbe sauterait entre le dernier mois réel et le premier projeté). Une hypothèse d'arrivée ne porte que la prime de fonction de son cost center : elle n'a pas l'ancienneté du 13e mois.",
+            ],
+          },
           {
             titre: "Le brut indice est un plein temps",
             points: [
@@ -1320,17 +1380,36 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-mct",
         titre: "Coût des absences payées (MCT)",
-        definition: "Les maladies non prises en charge sont payées par l'employeur : leur coût sort du disponible sans sortir du payé.",
+        definition: "Les maladies non prises en charge sont payées par l'employeur : leur coût sort du disponible sans sortir du payé. Chaque heure d'absence est valorisée au coût employeur d'un ETP du salarié concerné.",
         valeur: p ? euros(p.coutPerduMct) : undefined,
-        formule: "disponible = payé − MCT",
+        formule: "MCT = Σ (heures MCT du salarié / heures travaillables du mois) × brut plein temps du salarié × coefficient ; disponible = payé − MCT",
         operandes: p
           ? [
-              { label: "Payé", valeur: euros(p.apresInjustifiees) },
+              { label: "Heures MCT retenues", valeur: `${nf(p.heures.mct.heures, 1)} h (${nf(p.heures.mct.lignes, 0)} lignes)` },
+              { label: "Heures travaillables", valeur: `${nf(p.heures.travaillables, 0)} h` },
+              { label: "ETP équivalents", valeur: etp(p.heures.mct.etp) },
+              { label: "Coût moyen par ETP appliqué", valeur: p.heures.mct.etp > 0 ? euros(p.heures.mct.coutEtpApplique) : "—" },
               { label: "MCT", valeur: euros(p.coutPerduMct) },
+              { label: "Payé", valeur: euros(p.apresInjustifiees) },
               { label: "Disponible", valeur: euros(p.apresMct) },
             ]
           : undefined,
+        valeurNote: p && p.heures.mct.lignesAuRepli > 0 ? `${nf(p.heures.mct.lignesAuRepli, 0)} ligne${p.heures.mct.lignesAuRepli > 1 ? "s" : ""} valorisée${p.heures.mct.lignesAuRepli > 1 ? "s" : ""} au coût moyen par ETP du mois (salarié sans brut connu)` : undefined,
         details: [
+          {
+            titre: "Les heures retenues",
+            points: [
+              "Les lignes MCT du mois affiché, hors week-end (les heures travaillables ne comptent que du lundi au vendredi), restreintes aux salariés actifs en fin de mois dans la photo roster du périmètre. Un salarié en MCT sorti avant la fin du mois n'y figure pas.",
+              "Heures travaillables = jours ouvrés du mois (fériés luxembourgeois exclus) × 8 h. Une absence de 8 h vaut 1 / jours ouvrés d'ETP-mois.",
+            ],
+          },
+          {
+            titre: "Un coût par salarié, pas un taux moyen",
+            points: [
+              "Chaque fraction d'ETP est valorisée au brut plein temps du salarié (brut indice du roster) × coefficient de charges (celui de son cost center quand la paie le donne, sinon le global). Un absent bien payé pèse plus qu'un absent au salaire minimum ; le « coût moyen par ETP appliqué » ci-dessus est le résultat de cette pondération, pas une entrée.",
+              "Ce coût vient du contractuel (roster), pas de la paie réelle : la Liste des salaires ne porte pas les heures d'absence et ne change rien ici.",
+            ],
+          },
           {
             titre: "Pourquoi ce palier vient après le payé",
             points: [
@@ -1342,7 +1421,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
       {
         cle: "cout-realise",
         titre: "Réalisé du mois (coût employeur de la paie)",
-        definition: "La paie effective du mois telle que les statistiques salariales la donnent : total brut + charges patronales, toutes absences déjà déduites, suppléments et heures supplémentaires compris.",
+        definition: "La paie effective du mois telle que la paie la donne : coût employeur (Liste des salaires : total brut + charges patronales − avantages en nature ; Statistiques rapides : total brut + charges patronales), toutes absences déjà déduites, suppléments et heures supplémentaires compris. Les rémunérations non périodiques (soldes de sortie) y sont comprises.",
         valeur: c ? (c.realise.mesure ? euros(c.realise.employeur) : "aucun montant importé") : undefined,
         valeurNote: c && !c.realise.mesure && c.realise.n > 0 ? `${nf(c.realise.n, 0)} lignes présentes mais sans salaire` : undefined,
         formule: "réalisé = Σ (Total brut + charges patronales) des lignes du mois (périmètre filtré : salariés de la photo) ; sans charges patronales importées : Σ Total brut × coefficient, marqué estimé",
@@ -1355,19 +1434,41 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
           : undefined,
         details: [
           {
+            titre: "Ce que contient chaque case de la carte « Paie réalisée »",
+            points: [
+              "Brut base : colonne « Brut base » de la paie — le salaire de base du mois, déjà proratisé par le temps payé (« Tâche en % ») et par les entrées et sorties en cours de mois. C'est le pendant réel du brut indice × taux d'occupation du roster.",
+              "Suppléments : tout ce qui s'ajoute au brut de base pour former le total brut, c'est-à-dire la somme des natures de paie (voir la liste ci-dessous). Avec les Statistiques rapides, c'est la colonne « Suppléments » du fichier, non détaillée.",
+              "Total brut : brut base + suppléments, colonne « Total brut » de la paie. Les retenues pour absence injustifiée et congés trop pris y sont déjà déduites (natures négatives).",
+              "CM patronale : caisse maladie, part employeur — « CM Patr. soins » + « CM Patr. espèces ». CP patronale : caisse de pension, part employeur. Assurance accident, Santé au travail, Mutualité, Autres cotisations patronales : les colonnes du même nom.",
+              "Charges patronales : la somme des cotisations patronales ci-dessus. Les cotisations SALARIALES (CM/CP salariales, assurance dépendance), l'impôt et le net ne sont pas importés : ils ne changent pas ce que l'employeur décaisse.",
+              "Avantages en nature (non versés, déduits) : l'avantage voiture (N002) est valorisé dans le total brut pour l'impôt, retenu sur le net du salarié et retiré du coût par la paie : il n'est ni versé ni décaissé. Seules les charges patronales calculées dessus restent un coût. Calculé comme total brut + charges patronales − coût natures déduites ; la décomposition de la paie part du brut versé, sans lui.",
+              "Soldes de sortie : les lignes « Rémun. np » (période 13 du SIRH), en pratique le décompte de congés versé à la sortie. Comptées dans le coût employeur réalisé (elles sont décaissées ce mois) mais données à part, hors masse salariale courante et hors coefficient.",
+              "Coût employeur réalisé : colonne « Coût natures déduites » de la paie = total brut + charges patronales − avantages en nature. « Hors soldes de sortie » retire les lignes non périodiques.",
+              "Coefficient réel du mois : coût employeur réalisé / brut versé (total brut − avantages en nature non versés), soldes compris — à comparer au coefficient de charges appliqué au contractuel.",
+              "Écart réalisé − payé contractuel : ce que le contractuel (brut indice × ETP × coefficient, absences non payées retirées) ne modélise pas — suppléments et heures supplémentaires, prorata des entrées et sorties en cours de mois, régularisations, soldes de sortie, écart entre brut indice et brut réellement payé.",
+            ],
+          },
+          {
+            titre: "Les natures de paie qui composent les suppléments, par famille",
+            points: FAMILLES.map((f) => {
+              const natures = NATURES.filter((n) => n.famille === f.id).map((n) => (n.codes.length > 0 ? `${n.codes.join(" / ")} (${n.libelle})` : n.libelle)).join(", ");
+              return `${f.libelle} — ${f.description} Natures : ${natures}.${f.id === "structurel" ? " Le brut de base compte aussi dans cette famille." : ""}`;
+            }),
+          },
+          {
             titre: "Une 6e courbe, pas un palier",
             points: [
               "Le réalisé ne se découpe pas en paliers : il intègre déjà toutes les absences, les suppléments et les heures supplémentaires. Il est tracé à part, en gris, sur les seuls mois qui portent des montants.",
-              "L'écart entre réalisé et payé contractuel se lit sur la carte : il mesure ce que le contractuel ne modélise pas (suppléments, heures supplémentaires, chômage partiel, régularisations).",
+              "L'écart entre réalisé et payé contractuel se lit sur la carte, contre le payé MOYEN du mois (jour par jour, au prorata des entrées et sorties datées) : la paie est un flux du mois entier, pas une photo au 31. Il mesure ce que le contractuel ne modélise pas (suppléments variables, régularisations, soldes de sortie, écart brut indice / brut payé).",
             ],
           },
         ],
-        source: "Table wp_salary_stats (Total brut, Brut base, Suppléments, cotisations patronales par nature, centre de coût).",
+        source: "Table wp_salary_lines (Liste des salaires : brut par nature, cotisations patronales, coût employeur) quand le mois y est, sinon wp_salary_stats (Statistiques rapides).",
       },
       {
         cle: "cout-moyen-etp",
         titre: "Coût moyen par ETP",
-        definition: "Le coût employeur d'un équivalent temps plein, sur le périmètre et le mois affichés.",
+        definition: "Le coût employeur d'un équivalent temps plein, sur le périmètre et le mois affichés, compléments récurrents compris.",
         valeur: p ? euros(p.coutMoyenEtp) : undefined,
         formule: "coût moyen par ETP = coût sous contrat / Σ ETP sous contrat",
         details: [
@@ -1380,6 +1481,45 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
           },
         ],
         source: "lib/utils/wp-cout-moyen.ts.",
+      },
+      {
+        cle: "variable-attendu",
+        titre: "Variable lié au planning attendu",
+        definition: "Les dimanches, fériés, nuits, amplitudes, dépannages, heures supplémentaires et primes de 6e jour des mois de paie pas encore importés, estimés à partir de leur déclencheur et recalés à chaque import.",
+        formule: "attendu du mois M = taux calé sur la paie importée × déclencheur du mois M − 1",
+        details: [
+          {
+            titre: "Un mois de décalage",
+            points: [
+              "Chaque nature est payée le mois SUIVANT l'événement qui la déclenche : la paie de septembre porte les dimanches, les fériés et le décompte de fin de période d'août. Vérifié sur la paie 2026 : le montant des dimanches suit le nombre de dimanches du mois précédent, celui des fériés le nombre de fériés du mois précédent.",
+            ],
+          },
+          {
+            titre: "Par poste",
+            points: [
+              "Dimanches : montant moyen par dimanche (4 derniers mois payés) × dimanches du mois précédent.",
+              "Fériés : montant par férié de semaine × fériés légaux luxembourgeois du mois précédent. Un férié de samedi compte 0,85 (0,6 à 1), un férié de dimanche 0,65 (0,4 à 0,9) : moins de services ces jours-là, et peu d'historique, d'où la fourchette.",
+              "Nuits, amplitudes, dépannages et permanences : pas de calendrier visible, moyenne des 6 derniers mois payés, fourchette min–max.",
+              "Heures supplémentaires : après une fin de période de référence (avril, août, décembre), € par heure calé sur les décomptes déjà payés × (heures payées du mois + solde positif du compteur, fichier d'heures). Les autres mois, moyenne des mois hors décompte.",
+              "Primes de 6e jour : 80 € par jour, payés en fin de période. Le nombre de jours réalisés n'est pas importé : le compteur du règlement (cumul mensuel, plancher 0, jours au-delà de 5 dus, solde final dû) est appliqué au solde d'heures converti en jours, calé sur les périodes déjà payées, puis ramené vers la moyenne historique au prorata de la corrélation salarié par salarié. Estimation grossière tant que les jours réels ne sont pas importés.",
+            ],
+          },
+          {
+            titre: "Lecture",
+            points: [
+              "Le réalisé des mois payés vient de la Liste des salaires ; les mois attendus sont grisés, leur total porte sa fourchette. Le coût employeur applique le coefficient de charges global.",
+              "Hors champ du variable : 13e mois des employés, primes et bonus, qui ne dépendent pas du planning (le 13e mois est projeté à part, voir ci-dessous).",
+            ],
+          },
+          {
+            titre: "Le réalisé attendu sur la courbe des coûts",
+            points: [
+              "La ligne du réalisé est prolongée en pointillé sur les mois de paie à venir : payé contractuel du mois (qui suit l'effectif projeté) + écart habituel entre réalisé et payé une fois le variable retiré (moyenne des 3 derniers mois payés, hors janvier, mai et décembre qui portent bonus, 13e mois ou reliquats) + variable attendu × coefficient de charges.",
+              "Décembre ajoute le 13e mois des employés : un mois de brut de base du dernier mois payé pour tous les salariés sauf les chauffeurs (fonction chauffeur ou complément CCT mensuel) et les cadres (avantage voiture ou car allowance, y compris une allowance saisie en « Autres CS » : même montant d'au moins 100 € sur 3 mois ou plus), ainsi que les étudiants, les accompagnateurs, les chefs de service et les key accounts. Les formateurs sans complément CCT ont le 13e mois, ceux qui ont le CCT non. Il est compté dans le structurel attendu, détaillé par fonction. Les autres primes de décembre n'y sont pas : décembre reste un plancher.",
+            ],
+          },
+        ],
+        source: "lib/utils/wp-variable-attendu.ts ; tables wp_salary_lines et monthly_records (fichier d'heures).",
       },
       {
         cle: "masse-annuelle",

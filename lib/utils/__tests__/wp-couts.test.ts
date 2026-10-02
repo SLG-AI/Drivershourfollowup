@@ -142,6 +142,15 @@ describe("calculerCoefficientCharges", () => {
     expect(r.coef).toBe(COEF_CHARGES_DEFAUT);
     expect(r.source).toBeNull();
   });
+
+  it("rapporte le coût au brut VERSÉ : l'avantage en nature, retiré du coût par la paie, sort aussi du brut", () => {
+    // Brut fiscal 3 300 dont 300 d'avantage voiture ; charges 450 ; coût paie = 3 300 + 450 − 300
+    const r = calculerCoefficientCharges([
+      ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 3300, charges_patronales: 450, cout_employeur: 3450, avantages_nature: 300 }),
+    ]);
+    expect(r.coef).toBeCloseTo(3450 / 3000, 6);
+    expect(r.source?.brut).toBe(3000);
+  });
 });
 
 describe("construireSourceSalaires", () => {
@@ -461,5 +470,152 @@ describe("appliquerTauxReporte", () => {
     expect(sansInj.apresCns).toBeCloseTo(9000, 10);
     expect(sansInj.apresInjustifiees).toBeUndefined();
     expect(sansInj.apresMct).toBeUndefined();
+  });
+});
+
+// ============================================================
+// Liste des salaires : fusion des deux sources de paie
+// ============================================================
+import { fusionnerSourcesPaie, ligneStatDepuisPaie, coutEmployeurDeLaLigne, calculerCoefficientsParCostCenter, type LignePaieDetaillee } from "../wp-couts";
+
+describe("fusionnerSourcesPaie — la Liste des salaires remplace les Statistiques rapides sur ses mois", () => {
+  const stats: LigneStatSalariale[] = [
+    ligne({ code_salarie: "A", mois: 7, annee: 2026, total_brut: 4000, charges_patronales: 600, centre_cout: "CC1" }),
+    ligne({ code_salarie: "A", mois: 8, annee: 2026, total_brut: 4100, charges_patronales: 0 }),
+    ligne({ code_salarie: "B", mois: 8, annee: 2026, total_brut: 3000, charges_patronales: 0 }),
+  ];
+  const lignes: LignePaieDetaillee[] = [
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 3800, total_brut: 4200, charges_patronales: 630, cout_employeur: 4830 },
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "non_periodique", centre_cout: "CC1", brut_base: 0, total_brut: 900, charges_patronales: 135, cout_employeur: 1035 },
+    { code_salarie: "C", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC2", brut_base: 6000, total_brut: 6250, charges_patronales: 900, cout_employeur: 6900 },
+  ];
+
+  it("garde les mois non couverts, remplace les mois couverts, marque la source", () => {
+    const paie = fusionnerSourcesPaie(stats, lignes);
+    const juillet = paie.filter((l) => Number(l.mois) === 7);
+    const aout = paie.filter((l) => Number(l.mois) === 8);
+    expect(juillet).toHaveLength(1);
+    expect(juillet[0].source).toBe("stats");
+    expect(aout).toHaveLength(3);
+    expect(aout.every((l) => l.source === "lignes")).toBe(true);
+    expect(aout.some((l) => l.code_salarie === "B")).toBe(false);
+  });
+
+  it("convertit une ligne de paie : suppléments = total − base, coût employeur = celui de la paie", () => {
+    const l = ligneStatDepuisPaie(lignes[2]);
+    expect(l.supplements).toBe(250);
+    expect(l.charges_patronales).toBe(900);
+    expect(coutEmployeurDeLaLigne(l)).toBe(6900); // et non 6250 + 900 = 7150 : les avantages en nature sont retirés
+    expect(coutEmployeurDeLaLigne(ligne({ code_salarie: "X", mois: 1, annee: 2026, total_brut: 100, charges_patronales: 15 }))).toBe(115);
+  });
+
+  it("realiseDuMois compte le non périodique dans le coût du mois et le donne à part, avec les avantages en nature", () => {
+    const r = realiseDuMois(fusionnerSourcesPaie(stats, lignes), 8, 2026);
+    expect(r.source).toBe("lignes");
+    expect(r.n).toBe(3);
+    expect(r.brut).toBe(4200 + 900 + 6250);
+    expect(r.employeur).toBe(4830 + 1035 + 6900);
+    expect(r.employeurMesure).toBe(true);
+    expect(r.nonPeriodique).toEqual({ brut: 900, employeur: 1035, n: 1 });
+    expect(r.avantagesNature).toBeCloseTo(250, 6);
+    const juillet = realiseDuMois(fusionnerSourcesPaie(stats, lignes), 7, 2026);
+    expect(juillet.source).toBe("stats");
+    expect(juillet.avantagesNature).toBe(0);
+    expect(realiseDuMois([], 8, 2026).source).toBeNull();
+  });
+
+  it("le coefficient (global et par cost center) ignore les rémunérations non périodiques", () => {
+    const paie = fusionnerSourcesPaie(stats, lignes);
+    const { coef, source } = calculerCoefficientCharges(paie);
+    expect(source?.mois).toBe(8);
+    expect(source?.n).toBe(2);
+    expect(coef).toBeCloseTo((4830 + 6900) / (4200 + 6250), 9);
+    const parCc = calculerCoefficientsParCostCenter(paie);
+    expect(parCc.get("CC1")?.coef).toBeCloseTo(4830 / 4200, 9);
+    expect(parCc.get("CC2")?.coef).toBeCloseTo(6900 / 6250, 9);
+  });
+});
+
+describe("calculerCoutsPaliers — opérandes de la valorisation des heures (méthodologie)", () => {
+  it("expose heures retenues, heures travaillables, ETP équivalents, coût moyen appliqué et lignes au repli", () => {
+    const photo = [
+      salarie({ code_salarie: "A", taux_occupation: 100, brut_indice: 4000 }),
+      salarie({ code_salarie: "B", taux_occupation: 100 }), // sans brut ⇒ repli
+    ];
+    const travaillables = getWorkableHoursInMonth(2026, 8);
+    const mct = [
+      { code_salarie: "A", mois: 8, duree_hrs: 16 },
+      { code_salarie: "B", mois: 8, duree_hrs: 8 },
+      { code_salarie: "A", mois: 7, duree_hrs: 99 }, // autre mois, ignorée
+    ];
+    const c = calculerCoutsPaliers(photo, [], mct, [], 8, 2026, { coef: 1.15, source: sourceDe(photo), coutEtpRepli: 2300 });
+    expect(c.heures.travaillables).toBe(travaillables);
+    expect(c.heures.mct.lignes).toBe(2);
+    expect(c.heures.mct.heures).toBe(24);
+    expect(c.heures.mct.etp).toBeCloseTo(24 / travaillables, 9);
+    expect(c.heures.mct.lignesAuRepli).toBe(1);
+    const attendu = (16 / travaillables) * 4000 * 1.15 + (8 / travaillables) * 2300;
+    expect(c.heures.mct.cout).toBe(Math.round(attendu));
+    expect(c.heures.mct.coutEtpApplique).toBeCloseTo(attendu / (24 / travaillables), 6);
+    expect(c.heures.injustifiees).toEqual({ lignes: 0, heures: 0, etp: 0, cout: 0, coutEtpApplique: 0, lignesAuRepli: 0 });
+  });
+});
+
+// ============================================================
+// Compléments récurrents (13e mois proratisé, prime de fonction)
+// ============================================================
+import { calculerComplementsRecurrents, tauxComplementsDe } from "../wp-couts";
+
+describe("calculerComplementsRecurrents — taux mesuré sur le dernier mois de Liste des salaires", () => {
+  const lignes: LignePaieDetaillee[] = [
+    // juillet : un autre taux, ignoré (pas le dernier mois)
+    { code_salarie: "A", mois: 7, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 4000, nat_cct: 1000, nat_pr_f: 0 },
+    // août : CC1 = deux chauffeurs avec 13e mois, CC2 = un formateur avec prime de fonction
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 4000, nat_cct: 320, nat_pr_f: 0 },
+    { code_salarie: "B", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 4000, nat_cct: 0, nat_pr_f: 0 },
+    { code_salarie: "C", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC2", brut_base: 5000, nat_cct: 400, nat_pr_f: 200 },
+    // soldes de sortie et lignes sans brut de base : hors mesure
+    { code_salarie: "A", mois: 8, annee: 2026, type_remuneration: "non_periodique", centre_cout: "CC1", brut_base: 0, nat_cct: 0, nat_pr_f: 0, nat_dc: 900 },
+    { code_salarie: "D", mois: 8, annee: 2026, type_remuneration: "salaire", centre_cout: "CC1", brut_base: 0, nat_cct: 50, nat_pr_f: 0 },
+  ];
+
+  it("prend le dernier mois, lignes de salaire avec brut de base seulement, global et par cost center", () => {
+    const c = calculerComplementsRecurrents(lignes)!;
+    expect(c.mois).toBe(8);
+    expect(c.global.n).toBe(3);
+    expect(c.global.brutBase).toBe(13000);
+    expect(c.global.complements).toBe(920);
+    expect(c.global.taux).toBeCloseTo(920 / 13000, 9);
+    expect(c.global.tauxCct).toBeCloseTo(720 / 13000, 9);
+    expect(c.global.tauxPrf).toBeCloseTo(200 / 13000, 9);
+    expect(c.parCc.get("CC1")?.taux).toBeCloseTo(320 / 8000, 9);
+    expect(c.parCc.get("CC2")?.taux).toBeCloseTo(600 / 5000, 9);
+    expect(c.parCc.get("CC2")?.tauxPrf).toBeCloseTo(200 / 5000, 9);
+  });
+
+  it("tauxComplementsDe : cost center s'il est mesuré, sinon global ; 0 sans mesure ; sans 13e mois pour une arrivée", () => {
+    const c = calculerComplementsRecurrents(lignes);
+    expect(tauxComplementsDe(c, "CC2")).toBeCloseTo(600 / 5000, 9);
+    expect(tauxComplementsDe(c, "CC9")).toBeCloseTo(920 / 13000, 9);
+    expect(tauxComplementsDe(c, null)).toBeCloseTo(920 / 13000, 9);
+    expect(tauxComplementsDe(c, "CC2", { sansCct: true })).toBeCloseTo(200 / 5000, 9);
+    expect(tauxComplementsDe(null, "CC2")).toBe(0);
+    expect(calculerComplementsRecurrents([])).toBeNull();
+  });
+
+  it("calculerCoutsPaliers applique le taux au brut avant les charges et isole la part des compléments", () => {
+    const c = calculerComplementsRecurrents(lignes);
+    const photo = [
+      salarie({ code_salarie: "A", taux_occupation: 100, brut_indice: 4000, centre_cout: "CC1" }),
+      salarie({ code_salarie: "C", taux_occupation: 50, brut_indice: 5000, centre_cout: "CC2" }),
+    ];
+    const sans = calculerCoutsPaliers(photo, [], [], [], 8, 2026, { coef: 1.15, source: sourceDe(photo) });
+    const avec = calculerCoutsPaliers(photo, [], [], [], 8, 2026, { coef: 1.15, source: sourceDe(photo), complements: c });
+    const attenduA = 4000 * (1 + 320 / 8000) * 1.15;
+    const attenduC = 5000 * (1 + 600 / 5000) * 0.5 * 1.15;
+    expect(avec.sousContrat).toBe(Math.round(attenduA + attenduC));
+    expect(avec.complementsRecurrents).toBe(Math.round(4000 * (320 / 8000) * 1.15 + 5000 * (600 / 5000) * 0.5 * 1.15));
+    expect(sans.complementsRecurrents).toBe(0);
+    expect(avec.sousContrat).toBeGreaterThan(sans.sousContrat);
   });
 });

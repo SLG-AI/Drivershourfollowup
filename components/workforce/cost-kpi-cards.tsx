@@ -30,6 +30,11 @@ export interface CoutsStats {
   coefficient_source: string | null;
   cout_moyen_etp: number;
   brut_plein_temps_moyen: number;
+  /** Part du sous contrat due aux compléments récurrents (13e mois proratisé, prime de fonction). */
+  complements_recurrents?: number;
+  /** Taux global mesuré (Σ compléments / Σ brut de base), null sans Liste des salaires. */
+  taux_complements?: number | null;
+  complements_source?: string | null;
   etp_sous_contrat: number;
   /** Somme des douze mois sous contrat, mesurés et reportés. */
   masse_annuelle: number;
@@ -47,17 +52,22 @@ const euros = (n: number | undefined | null) => (n == null ? "—" : formatEuros
 const pct = (n: number) => `${n.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
 
 export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; lienMethodologie: string }) {
-  const ecart = stats.realise != null && stats.paye != null ? stats.realise - stats.paye : null;
-  const ecartPct = ecart != null && stats.paye ? (ecart / stats.paye) * 100 : null;
+  // La paie est un flux du mois : l'écart se lit contre le payé MOYEN (prorata
+  // des entrées et sorties) quand il existe, sinon contre la fin de mois.
+  const payeReference = stats.paye_moyen ?? stats.paye;
+  const ecart = stats.realise != null && payeReference != null ? stats.realise - payeReference : null;
+  const ecartPct = ecart != null && payeReference ? (ecart / payeReference) * 100 : null;
 
   const cards = [
     {
       title: "Coût employeur sous contrat",
       ancre: "cout-sous-contrat",
       value: euros(stats.sous_contrat),
-      description: `${stats.etp_sous_contrat.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ETP × ${euros(stats.cout_moyen_etp)} par ETP`,
+      description: `${stats.etp_sous_contrat.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ETP × ${euros(stats.cout_moyen_etp)} par ETP${stats.taux_complements != null && stats.complements_recurrents ? ` · dont compléments récurrents ${euros(stats.complements_recurrents)}` : ""}`,
       average: stats.sous_contrat_moyen != null ? `Moyenne du mois : ${euros(stats.sous_contrat_moyen)}` : null,
-      note: stats.codes_sans_salaire > 0 ? `${stats.codes_sans_salaire} salarié${stats.codes_sans_salaire > 1 ? "s" : ""} sans salaire connu, au coût moyen` : null,
+      note: stats.codes_sans_salaire > 0
+        ? `${stats.codes_sans_salaire} salarié${stats.codes_sans_salaire > 1 ? "s" : ""} sans salaire connu, au coût moyen`
+        : stats.taux_complements == null ? "Sans Liste des salaires : 13e mois proratisé et prime de fonction non comptés" : null,
       icon: Euro, iconColor: "text-blue-600", iconBg: "bg-blue-50",
     },
     {
@@ -93,7 +103,7 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       value: stats.realise != null ? euros(stats.realise) : "—",
       description:
         stats.realise != null
-          ? `${stats.realise_lignes.toLocaleString("fr-FR")} lignes de paie${ecart != null ? ` · écart vs payé contractuel ${ecart >= 0 ? "+" : "−"}${euros(Math.abs(ecart))}${ecartPct != null ? ` (${ecartPct >= 0 ? "+" : "−"}${pct(Math.abs(ecartPct))})` : ""}` : ""}`
+          ? `${stats.realise_lignes.toLocaleString("fr-FR")} lignes de paie${ecart != null ? ` · écart vs payé contractuel${stats.paye_moyen != null ? " moyen" : ""} ${ecart >= 0 ? "+" : "−"}${euros(Math.abs(ecart))}${ecartPct != null ? ` (${ecartPct >= 0 ? "+" : "−"}${pct(Math.abs(ecartPct))})` : ""}` : ""}`
           : `Aucun montant importé pour ${stats.mois_label}`,
       average: null,
       note:
@@ -108,16 +118,16 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       title: "Coefficient de charges patronales",
       ancre: "coefficient-charges",
       value: stats.coefficient.toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }),
-      description: stats.coefficient_source ?? "Valeur par défaut : aucun mois de statistiques salariales avec montants",
+      description: stats.coefficient_source ?? "Valeur par défaut : aucun mois de paie avec charges patronales",
       average: null,
-      note: stats.coefficient_source ? null : "À affiner en important des Statistiques rapides avec salaires",
+      note: stats.coefficient_source ? null : "À affiner en important une Liste des salaires",
       icon: Percent, iconColor: stats.coefficient_source ? "text-emerald-600" : "text-amber-600", iconBg: stats.coefficient_source ? "bg-emerald-50" : "bg-amber-50",
     },
     {
       title: "Coût moyen par ETP",
       ancre: "cout-moyen-etp",
       value: euros(stats.cout_moyen_etp),
-      description: `Brut plein temps moyen ${euros(stats.brut_plein_temps_moyen)} × coefficient`,
+      description: `Brut plein temps moyen ${euros(stats.brut_plein_temps_moyen)}${stats.taux_complements != null ? ` × (1 + ${pct(stats.taux_complements * 100)} de compléments récurrents)` : ""} × coefficient`,
       average: null,
       note: stats.reference_label ? `Salaires lus dans le roster de ${stats.reference_label}` : null,
       icon: Users, iconColor: "text-violet-600", iconBg: "bg-violet-50",

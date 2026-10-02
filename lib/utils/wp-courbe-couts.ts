@@ -24,6 +24,7 @@ import {
   calculerCoutsPaliers,
   construireSourceSalaires,
   realiseDuMois,
+  type ComplementsRecurrents,
   type CoutsMois,
   type LigneStatSalariale,
   type SalarieCout,
@@ -41,6 +42,8 @@ export interface EntreesCourbeCouts {
   coef: number;
   /** Coefficient par cost center lu dans la paie (voir calculerCoefficientsParCostCenter), optionnel. */
   coefParCc?: Map<string, { coef: number }>;
+  /** Compléments récurrents mesurés sur la Liste des salaires (voir calculerComplementsRecurrents), optionnel. */
+  complements?: ComplementsRecurrents | null;
   absences: LigneCns[];
   mctHorsWeekEnd: LigneHeures[];
   absencesInjustifiees: LigneHeures[];
@@ -71,7 +74,7 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       injustifieesDuPerimetre(e.absencesInjustifiees, e.filtresActifs, codes),
       m,
       e.selectedYear,
-      { coef: e.coef, source, coefParCc: e.coefParCc }
+      { coef: e.coef, source, coefParCc: e.coefParCc, complements: e.complements }
     );
 
     // Un palier suit la règle de son homologue ETP : mesuré ⇒ valorisé
