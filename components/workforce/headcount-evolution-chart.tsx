@@ -39,11 +39,17 @@ export interface HeadcountDataPoint {
   base_scenario_apres_mct?: number;
   effectif_apres_injustifiees?: number;
   projected_apres_injustifiees?: number;
+  /** Disponible après congés et congés extraordinaires/récup : mesuré seulement, jamais repris d'un autre mois. */
+  effectif_apres_conges?: number;
+  /** Idem sur un mois aux congés PARTIELS (chauffeurs non importés) ou à base reportée : tracé en pointillé. */
+  projected_apres_conges?: number;
+  /** Congés du mois : true complets, false partiels (supports seuls), null sans congés. */
+  conges_complet?: boolean | null;
   is_projection: boolean;
   /** Par ligne, la valeur du mois est REPORTÉE (photo reconduite ou taux repris) : tracée en pointillé. */
   reporte?: Reporte;
   /** Taux d'absence effectivement appliqués au mois (mesurés ou repris), en % : nécessaires à la page Coûts. */
-  taux_appliques?: { cns: number | null; inj: number | null; mct: number | null };
+  taux_appliques?: { cns: number | null; inj: number | null; mct: number | null; conges?: number | null; extra?: number | null };
   /** Page Coûts : paie réalisée du mois (brut + charges patronales), absente sur un mois sans montants. */
   realise?: number;
   /** Page Coûts : réalisé prolongé sur les mois de paie à venir (payé + écart habituel + variable attendu). */
@@ -78,7 +84,7 @@ export interface ScenarioProjectionData {
 
 /** Drapeaux de report d'un point : une clé par ligne mesurée (+ `cout` pour la page Coûts). */
 export interface Reporte {
-  brut?: boolean; net?: boolean; reel?: boolean; injustifiees?: boolean; mct?: boolean; cout?: boolean;
+  brut?: boolean; net?: boolean; reel?: boolean; injustifiees?: boolean; mct?: boolean; conges?: boolean; cout?: boolean;
 }
 
 export interface SeriesDef {
@@ -101,20 +107,22 @@ export interface SeriesDef {
 const mesureKey = (key: string) => `mesure_${key}`;
 const reportKey = (key: string) => `report_${key}`;
 
-/** Les 5 paliers d'effectif, la cible et les séries de scénario. Les clés servent aussi, en euros, à la page Coûts. */
+/** Les 6 paliers d'effectif, la cible et les séries de scénario. Les clés servent aussi, en euros, à la page Coûts. */
 export const ALL_SERIES: SeriesDef[] = [
   { key: "effectif_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", reportFlag: "brut" },
   { key: "effectif_net", label: "Net", color: "hsl(262, 83%, 58%)", reportFlag: "net", parent: "effectif_brut" },
   { key: "effectif_reel", label: "Réel (après maladie)", color: "hsl(142, 71%, 45%)", reportFlag: "reel", parent: "effectif_net" },
   // Ordre de la chaîne : réel −injustifiées→ payé −MCT→ disponible (wp-paliers.ts)
   { key: "effectif_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)", reportFlag: "injustifiees", parent: "effectif_reel" },
-  { key: "effectif_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", reportFlag: "mct", parent: "effectif_apres_injustifiees" },
+  { key: "effectif_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", reportFlag: "mct", parent: "effectif_apres_injustifiees" },
+  // Congés : mesurés ou rien (jamais de taux repris, ils sont saisonniers)
+  { key: "effectif_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", reportFlag: "conges", parent: "effectif_apres_mct" },
   { key: "target", label: "Cible", color: "hsl(0, 84%, 60%)", dashed: true },
   { key: "scenario_brut", label: "Sous contrat", color: "hsl(221, 83%, 53%)", dashed: true, isScenario: true },
   { key: "scenario_net", label: "Net", color: "hsl(262, 83%, 58%)", dashed: true, isScenario: true, parent: "scenario_brut" },
   { key: "scenario_reel", label: "Réel (après CNS)", color: "hsl(142, 71%, 45%)", dashed: true, isScenario: true, parent: "scenario_net" },
   { key: "scenario_apres_injustifiees", label: "Après abs. injustifiées (payé)", color: "hsl(45, 93%, 47%)", dashed: true, isScenario: true, parent: "scenario_reel" },
-  { key: "scenario_apres_mct", label: "Après MCT (disponible)", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_apres_injustifiees" },
+  { key: "scenario_apres_mct", label: "Après MCT", color: "hsl(330, 70%, 55%)", dashed: true, isScenario: true, parent: "scenario_apres_injustifiees" },
   { key: "scenario_apres_conges", label: "Disponible (après congés)", color: "hsl(30, 90%, 50%)", dashed: true, isScenario: true, parent: "scenario_apres_mct" },
 ];
 
@@ -282,7 +290,7 @@ export function HeadcountEvolutionChart({
     scenario_reel: (d) => d.effectif_reel,
     scenario_apres_injustifiees: (d) => d.effectif_apres_injustifiees ?? d.projected_apres_injustifiees,
     scenario_apres_mct: (d) => d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
-    scenario_apres_conges: (d) => d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
+    scenario_apres_conges: (d) => d.effectif_apres_conges ?? d.projected_apres_conges ?? d.effectif_apres_mct ?? d.projected_apres_mct ?? d.effectif_reel,
   };
   /** Valeur de FIN du mois d'indice `i` pour une série de scénario : celle du scénario s'il couvre ce mois, sinon la mesure. */
   const finDuMois = (i: number, key: string): number | undefined => {
@@ -307,6 +315,9 @@ export function HeadcountEvolutionChart({
     if (merged.projected_apres_injustifiees != null && merged.effectif_apres_injustifiees == null) {
       merged = { ...merged, effectif_apres_injustifiees: merged.projected_apres_injustifiees };
     }
+    if (merged.projected_apres_conges != null && merged.effectif_apres_conges == null) {
+      merged = { ...merged, effectif_apres_conges: merged.projected_apres_conges };
+    }
     if (!showScenario || !selectedProjection) return merged;
     const monthIndex = idx + 1;
 
@@ -325,6 +336,7 @@ export function HeadcountEvolutionChart({
         scenario_reel: merged.effectif_reel,
         scenario_apres_injustifiees: merged.effectif_apres_injustifiees,
         scenario_apres_mct: merged.effectif_apres_mct ?? merged.effectif_reel,
+        scenario_apres_conges: merged.effectif_apres_conges ?? merged.effectif_apres_mct ?? merged.effectif_reel,
       };
     }
 
@@ -337,6 +349,7 @@ export function HeadcountEvolutionChart({
       effectif_reel: undefined,
       effectif_apres_mct: undefined,
       effectif_apres_injustifiees: undefined,
+      effectif_apres_conges: undefined,
       scenario_brut: moyenneProjetee(idx, "scenario_brut", monthData.scenario_brut),
       scenario_net: moyenneProjetee(idx, "scenario_net", monthData.scenario_net),
       scenario_reel: moyenneProjetee(idx, "scenario_reel", monthData.scenario_reel),
@@ -623,7 +636,11 @@ export function HeadcountEvolutionChart({
                         <div key={key} style={{ color: serie.color, padding: "2px 0" }}>
                           {libelle(serie)} : {formatValue(val)}
                           {delta != null && <span style={{ fontSize: "0.75em", color: "#999" }}> ({delta >= 0 ? "+" : "−"}{formatValue(Math.abs(delta))})</span>}
-                          {reporte && <span style={{ fontSize: "0.75em", color: "#999", fontStyle: "italic" }}> reporté</span>}
+                          {reporte && (
+                            <span style={{ fontSize: "0.75em", color: "#999", fontStyle: "italic" }}>
+                              {key === "effectif_apres_conges" && row.conges_complet === false ? " partiel — congés chauffeurs non importés" : " reporté"}
+                            </span>
+                          )}
                         </div>
                       );
                     })}

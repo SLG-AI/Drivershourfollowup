@@ -6,6 +6,7 @@ import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
+import { COLONNES_CONGES, congesHorsWeekEnd, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
 import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 import { NATURES, anonymiserVentilation, brutVerse, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
@@ -94,7 +95,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const anneeFuture = selectedYear > now.getFullYear();
   const colonnesPhoto = "code_salarie, code_employeur, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, brut_indice";
 
-  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie, heuresConducteurs] = await Promise.all([
+  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie, heuresConducteurs, congesAnnee, importsMct] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*").eq("mois", rosterPeriode?.mois ?? -1).eq("annee", rosterPeriode?.annee ?? -1)),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, date_sortie, centre_cout, hrs_supp, total_brut, brut_base, supplements, cout_total_secu, charges_patronales, cm_patronale, cp_patronale, assurance_accident, allocation_familiale, sante_travail, mutualite, cot_pat_autres").eq("annee", selectedYear)),
@@ -123,6 +124,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
         .or(`year.eq.${selectedYear},and(year.eq.${selectedYear - 1},month.gte.9)`)
         .order("id")
     ),
+    // Congés de l'année, et les imports MCT qui disent quels mois sont complets
+    fetchAll(supabase.from("wp_conges").select(COLONNES_CONGES).eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_imports").select("mois, annee, imported_at, conges_chauffeurs_inclus").eq("file_type", "absences_mct").eq("status", "completed").eq("annee", selectedYear)),
   ]);
   // Scénarios : mêmes lignes brutes que le tableau de bord, plus les leviers de coût
   const scenarioOptions: ScenarioOption[] = allScenariosRaw.map((s) => ({ id: String(s.id), name: String(s.name) }));
@@ -169,6 +173,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const employeeCodes = new Set<string>(allEmployees.map((e) => String(e.code_salarie)));
   const allAbsences = absences.filter((a) => employeeCodes.has(String(a.code_salarie)));
   const mctHorsWeekEnd = horsWeekEnd(absencesMct);
+  const congesHorsWeekEndAnnee = congesHorsWeekEnd(congesAnnee as LigneConge[]);
+  const complets = moisCongesComplets(importsMct, selectedYear);
   const codesMaladieAnneePrec = anneeFuture
     ? absencesAnneePrec.filter((a) => Number(a.hrs_maladie || 0) > 0).map((a) => String(a.code_salarie))
     : [];
@@ -226,6 +232,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     absencesAnneePrec,
     mctAnneePrec,
     injAnneePrec,
+    congesHorsWeekEnd: congesHorsWeekEndAnnee,
+    moisCongesComplets: complets,
   });
 
   // ---- Valorisation
@@ -246,6 +254,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,
+    congesHorsWeekEnd: congesHorsWeekEndAnnee,
     stats: paie,
   });
   const points = courbeCouts.map((p) => p.point);
@@ -312,6 +321,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     paye: duMois.point.effectif_apres_injustifiees,
     cout_perdu_mct: duMois.point.effectif_apres_injustifiees != null && duMois.point.effectif_apres_mct != null ? duMois.point.effectif_apres_injustifiees - duMois.point.effectif_apres_mct : undefined,
     disponible: duMois.point.effectif_apres_mct,
+    cout_perdu_conges: duMois.point.effectif_apres_conges != null ? duMois.couts.coutPerduConges + duMois.couts.coutPerduExtra : undefined,
+    disponible_apres_conges: duMois.point.effectif_apres_conges,
+    conges_complet: duMois.point.conges_complet ?? null,
     sous_contrat_moyen: moyenne?.effectif_brut,
     apres_suspension_moyen: moyenne?.effectif_net,
     paye_moyen: moyenne?.effectif_apres_injustifiees,

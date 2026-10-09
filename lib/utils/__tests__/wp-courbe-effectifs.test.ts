@@ -46,8 +46,8 @@ describe("construireCourbeEffectifs", () => {
     expect(aout.effectif_reel).toBe(0.5); // A absent à 50 %
     expect(aout.effectif_apres_injustifiees).toBeUndefined(); // aucun fichier, aucun taux connu
     expect(aout.effectif_apres_mct).toBe(0); // 84 h MCT = 0,5 ETP
-    expect(aout.reporte).toEqual({ brut: false, net: false, reel: false, injustifiees: true, mct: true });
-    expect(aout.taux_appliques).toEqual({ cns: 50, inj: null, mct: 50 });
+    expect(aout.reporte).toEqual({ brut: false, net: false, reel: false, injustifiees: true, mct: true, conges: true });
+    expect(aout.taux_appliques).toEqual({ cns: 50, inj: null, mct: 50, conges: null, extra: null });
   });
 
   it("reporte photo et taux sur un mois sans données, en gardant les taux appliqués", () => {
@@ -55,8 +55,8 @@ describe("construireCourbeEffectifs", () => {
     expect(sept.effectif_reel).toBe(0.5); // taux CNS d'août repris
     expect(sept.projected_apres_mct).toBe(0);
     expect(sept.effectif_apres_mct).toBeUndefined();
-    expect(sept.reporte).toEqual({ brut: true, net: true, reel: true, injustifiees: true, mct: true });
-    expect(sept.taux_appliques).toEqual({ cns: 50, inj: null, mct: 50 });
+    expect(sept.reporte).toEqual({ brut: true, net: true, reel: true, injustifiees: true, mct: true, conges: true });
+    expect(sept.taux_appliques).toEqual({ cns: 50, inj: null, mct: 50, conges: null, extra: null });
   });
 
   it("rend les taux repris, le taux CNS du mois affiché et le point de départ des projections", () => {
@@ -73,5 +73,63 @@ describe("construireCourbeEffectifs", () => {
     const r2 = construireCourbeEffectifs(entrees({ selectedMonth: 9 }));
     expect(r2.avgAbsenteeism).toBe(50);
     expect(r2.cnsEstimatedFromMonth).toEqual({ mois: 8, annee: 2026 });
+  });
+});
+
+describe("construireCourbeEffectifs — congés (mesurés ou rien)", () => {
+  // A seul disponible (B suspendu), CNS mesurée à 0 % : après MCT août = 0,5
+  const base = entrees({ absences: [{ code_salarie: "A", mois: 8, pct_absenteisme: 0 }] });
+  const conges = [
+    { code_salarie: "A", mois: 8, duree_hrs: heuresAout / 5, categorie: "conges" },
+    { code_salarie: "A", mois: 8, duree_hrs: heuresAout / 10, categorie: "extraordinaire" },
+    { code_salarie: "HORS_PHOTO", mois: 8, duree_hrs: heuresAout, categorie: "conges" },
+  ];
+
+  it("mois complet : disponible = après MCT − congés − extraordinaires (salariés de la photo)", () => {
+    const r = construireCourbeEffectifs({ ...base, congesHorsWeekEnd: conges, moisCongesComplets: new Set([8]) });
+    const aout = r.headcountData[7];
+    expect(aout.effectif_apres_mct).toBe(0.5);
+    expect(aout.effectif_apres_conges).toBe(0.2); // 0,5 − 0,2 − 0,1
+    // Injustifiées sans fichier : le palier hérite du report de ses entrées
+    expect(aout.reporte?.conges).toBe(true);
+    expect(aout.conges_complet).toBe(true);
+    expect(aout.taux_appliques?.conges).toBeCloseTo(20, 10);
+    expect(aout.taux_appliques?.extra).toBeCloseTo(10, 10);
+  });
+
+  it("mois complet avec un après-MCT mesuré : point plein", () => {
+    const r = construireCourbeEffectifs({
+      ...base,
+      absencesInjustifiees: [{ code_salarie: "A", mois: 8, duree_hrs: 0.0001 }],
+      congesHorsWeekEnd: conges,
+      moisCongesComplets: new Set([8]),
+    });
+    const aout = r.headcountData[7];
+    expect(aout.effectif_apres_mct).toBe(0.5);
+    expect(aout.effectif_apres_conges).toBe(0.2);
+    expect(aout.reporte?.conges).toBe(false);
+  });
+
+  it("mois partiel (chauffeurs non importés) : pointillé et signalé", () => {
+    const r = construireCourbeEffectifs({
+      ...base,
+      absencesInjustifiees: [{ code_salarie: "A", mois: 8, duree_hrs: 0.0001 }],
+      congesHorsWeekEnd: conges,
+      moisCongesComplets: new Set(),
+    });
+    const aout = r.headcountData[7];
+    expect(aout.effectif_apres_conges).toBeUndefined();
+    expect(aout.projected_apres_conges).toBe(0.2);
+    expect(aout.conges_complet).toBe(false);
+    expect(aout.reporte?.conges).toBe(true);
+  });
+
+  it("mois sans congés : aucun point, jamais de taux repris d'un autre mois", () => {
+    const r = construireCourbeEffectifs({ ...base, congesHorsWeekEnd: conges, moisCongesComplets: new Set([8]) });
+    const sept = r.headcountData[8];
+    expect(sept.effectif_apres_conges).toBeUndefined();
+    expect(sept.projected_apres_conges).toBeUndefined();
+    expect(sept.conges_complet).toBeNull();
+    expect(sept.taux_appliques?.conges).toBeNull();
   });
 });

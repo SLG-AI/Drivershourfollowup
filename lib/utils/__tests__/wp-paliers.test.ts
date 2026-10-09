@@ -205,8 +205,9 @@ describe("calculerPaliers", () => {
     // (effectif PAYÉ), MCT ensuite (effectif DISPONIBLE).
     expect(p.apresCns).toBeCloseTo(1.5, 10);
     expect(p.apresInjustifiees).toBeCloseTo(1, 10); // payé : le MCT l'est encore
-    expect(p.apresMct).toBeCloseTo(0, 10); // disponible
-    expect(p.etapes.map((e) => e.cle).slice(-2)).toEqual(["taux-injustifiees", "taux-mct"]);
+    expect(p.apresMct).toBeCloseTo(0, 10); // après MCT (sans congés, c'est aussi le disponible)
+    expect(p.apresConges).toBeCloseTo(0, 10);
+    expect(p.etapes.map((e) => e.cle).slice(-3)).toEqual(["taux-injustifiees", "taux-mct", "taux-conges"]);
   });
 
   it("restreint les injustifiées au périmètre seulement quand un filtre est actif", () => {
@@ -247,9 +248,24 @@ describe("calculerPaliers", () => {
       "effectif-apres-suspension",
       "taux-cns",
       "taux-injustifiees", // effectif payé
-      "taux-mct", // effectif disponible
+      "taux-mct",
+      "taux-conges", // effectif disponible
     ]);
     expect(p.etapes[1].retire).toBe(1);
+  });
+
+  it("retire les congés de l'après-MCT sans les compter dans le taux global", () => {
+    const heures = getWorkableHoursInMonth(ANNEE, MOIS);
+    const sans = calculerPaliers(roster, [], [], [], MOIS, ANNEE);
+    const p = calculerPaliers(roster, [], [], [], MOIS, ANNEE, [
+      { code_salarie: roster[0].code_salarie, mois: MOIS, duree_hrs: heures / 2, categorie: "conges" },
+      { code_salarie: roster[0].code_salarie, mois: MOIS, duree_hrs: heures / 4, categorie: "extraordinaire" },
+      { code_salarie: "HORS_PHOTO", mois: MOIS, duree_hrs: heures, categorie: "conges" },
+    ]);
+    expect(p.congesMesure).toBe(true);
+    expect(p.etpPerduConges).toBeCloseTo(0.75, 10); // le salarié hors photo est écarté
+    expect(p.apresConges).toBeCloseTo(p.apresMct - 0.75, 10);
+    expect(p.tauxGlobal).toBe(sans.tauxGlobal);
   });
 
   it("date l'effectif au dernier jour du mois", () => {

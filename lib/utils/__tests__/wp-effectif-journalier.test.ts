@@ -211,3 +211,28 @@ describe("hypothesesDuScenario", () => {
     expect(hypotheses).toHaveLength(0);
   });
 });
+
+describe("congés datés", () => {
+  const conges = new Map([["A|2026-09-07", 1], ["B|2026-09-07", 0.5]]);
+
+  it("mois complet : retire chaque salarié son jour de congé, au prorata des heures, et le liste en congé", () => {
+    const e = entrees([p("A"), p("B"), p("C")], {
+      moisMesures: { cns: new Set(), mct: new Set(), inj: new Set(), conges: new Set(["2026-09"]) },
+      congesJours: conges,
+      tauxDuMois: () => ({ ...SANS_TAUX, conges: 50 }),
+    });
+    const r = calculerEffectifJournalier(e);
+    expect(jour(r, "2026-09-07").absences.conges).toEqual({ tetes: 1.5, etp: 1.5 });
+    expect(jour(r, "2026-09-07").disponibles.tetes).toBe(1.5);
+    expect(jour(r, "2026-09-08").absences.conges.tetes).toBe(0); // le taux du scénario ne s'applique plus
+    expect(listerJour(e, "2026-09-07").find((l) => l.code_salarie === "A")?.motif).toBe("conge");
+  });
+
+  it("mois incomplet : les jours datés sont ignorés, le taux s'applique", () => {
+    const r = calculerEffectifJournalier(entrees([p("A"), p("B")], {
+      congesJours: conges,
+      tauxDuMois: () => ({ ...SANS_TAUX, conges: 50 }),
+    }));
+    expect(jour(r, "2026-09-07").absences.conges.tetes).toBe(1);
+  });
+});

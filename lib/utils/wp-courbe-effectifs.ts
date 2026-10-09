@@ -17,7 +17,10 @@
  *  - un mois sans fichier d'absence reprend le DERNIER taux connu (l'année
  *    précédente amorce une année future) et se trace en pointillé ;
  *  - `taux_appliques` garde le taux effectivement utilisé, mesuré ou repris :
- *    c'est ce que la page Coûts applique à sa propre chaîne.
+ *    c'est ce que la page Coûts applique à sa propre chaîne ;
+ *  - disponible après congés = après MCT − congés − congés extraordinaires et
+ *    récup (wp-conges.ts). Mesuré ou rien : jamais de taux repris ; un mois
+ *    aux congés partiels (chauffeurs non importés) se trace en pointillé.
  */
 
 import type { HeadcountDataPoint } from "@/components/workforce/headcount-evolution-chart";
@@ -25,6 +28,7 @@ import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { getWorkableHoursInMonth, horsWeekEnd, isTempExitAt, lastDayOfMonth } from "./wp-calculations";
 import { computeEffectifMoyen, estActifLe, paliersEnMoyenne, type SortiHorsPhoto } from "./wp-effectif-moyen";
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type LigneCns, type LigneHeures, type SalariePaliers } from "./wp-paliers";
+import { congesDuMois, type LigneConge } from "./wp-conges";
 
 export interface MoisAnnee {
   mois: number;
@@ -60,6 +64,10 @@ export interface EntreesCourbe {
   absencesAnneePrec: LigneCns[];
   mctAnneePrec: (LigneHeures & { date_absence?: string | null })[];
   injAnneePrec: LigneHeures[];
+  /** Congés de l'année affichée, hors week-end (congesHorsWeekEnd). */
+  congesHorsWeekEnd?: LigneConge[];
+  /** Mois de l'année affichée aux congés COMPLETS (moisCongesComplets). */
+  moisCongesComplets?: Set<number>;
 }
 
 export interface SortieCourbe {
@@ -281,6 +289,21 @@ export function construireCourbeEffectifs(e: EntreesCourbe): SortieCourbe {
       tauxMctApplique = lastKnownMctRate;
     }
 
+    // Disponible après congés : mesuré ou rien. La base est l'après-MCT,
+    // mesuré ou repris ; une base reprise, ou des congés partiels, rendent le
+    // point pointillé (projected_apres_conges).
+    const conges = congesDuMois(e.congesHorsWeekEnd ?? [], m, selectedYear, codesDuMois, e.moisCongesComplets ?? new Set());
+    let effectifApresConges: number | undefined;
+    let projectedApresConges: number | undefined;
+    const baseConges = effectifApresMct ?? projectedApresMct;
+    if (conges.mesure && baseConges !== undefined) {
+      const valeur = Math.max(0, arrondi1(baseConges - conges.etpConges - conges.etpExtra));
+      if (conges.complet && effectifApresMct !== undefined) effectifApresConges = valeur;
+      else projectedApresConges = valeur;
+    }
+    const tauxCongesApplique = conges.mesure && netEtpAtMonth > 0 ? (conges.etpConges / netEtpAtMonth) * 100 : null;
+    const tauxExtraApplique = conges.mesure && netEtpAtMonth > 0 ? (conges.etpExtra / netEtpAtMonth) * 100 : null;
+
     headcountData.push({
       month: FRENCH_MONTHS_SHORT[m],
       effectif_brut: arrondi1(brutEtpAtMonth),
@@ -292,6 +315,9 @@ export function construireCourbeEffectifs(e: EntreesCourbe): SortieCourbe {
       moyenne_brute: { brut: moyenneDuMois.brut, net: moyenneDuMois.net },
       effectif_apres_injustifiees: effectifApresInjustifiees,
       projected_apres_injustifiees: projectedApresInjustifiees,
+      effectif_apres_conges: effectifApresConges,
+      projected_apres_conges: projectedApresConges,
+      conges_complet: conges.mesure ? conges.complet : null,
       is_projection: isProjection,
       target: targetTotal > 0 ? targetTotal : undefined,
       // Valeurs REPORTÉES (tracées en pointillé) : photo reconduite d'un autre
@@ -302,9 +328,10 @@ export function construireCourbeEffectifs(e: EntreesCourbe): SortieCourbe {
         const reel = brut || !hasAbsenceData;
         const injustifiees = reel || monthInj.length === 0;
         const mct = injustifiees || monthMct.length === 0;
-        return { brut, net: brut, reel, injustifiees, mct };
+        const congesReporte = mct || !conges.complet;
+        return { brut, net: brut, reel, injustifiees, mct, conges: congesReporte };
       })(),
-      taux_appliques: { cns: tauxCnsApplique, inj: tauxInjApplique, mct: tauxMctApplique },
+      taux_appliques: { cns: tauxCnsApplique, inj: tauxInjApplique, mct: tauxMctApplique, conges: tauxCongesApplique, extra: tauxExtraApplique },
     });
   }
 

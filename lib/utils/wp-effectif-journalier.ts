@@ -19,8 +19,10 @@
  *  - un mois sans fichier (futur) : TAUX appliqués au net, fournis par
  *    l'appelant (scénario choisi, sinon historique). La liste d'un jour futur
  *    ne montre donc que des certitudes datées ; les taux restent des nombres.
- *  - congés : aucune donnée datée n'existe ; seul le taux de congés d'un
- *    scénario les retire, passé comme futur.
+ *  - congés : un mois aux congés COMPLETS (chauffeurs importés, voir
+ *    wp-conges.ts) retire chaque salarié ses jours de congé datés, au prorata
+ *    des heures (une demi-journée de 4 h vaut 0,5) ; un autre mois, passé
+ *    comme futur, garde le taux de congés du scénario.
  *
  * Scénario (facultatif) : les hypothèses gardent leur JOUR — une arrivée le 15
  * compte dès le 15, un départ après son jour, une sortie temporaire de son
@@ -86,14 +88,16 @@ export interface EntreesEffectifJournalier {
   /** Population à évaluer pour un mois : sa photo de roster (reconduite à défaut), plus les sortis du mois absents de la photo. */
   populationDuMois: (annee: number, mois: number) => PersonneEffectif[];
   /** Mois dont le fichier est importé, par type d'absence (clé « AAAA-MM »). */
-  moisMesures: { cns: Set<string>; mct: Set<string>; inj: Set<string> };
+  moisMesures: { cns: Set<string>; mct: Set<string>; inj: Set<string>; conges?: Set<string> };
   /** % d'absence CNS du salarié pour un mois mesuré (clé « code|AAAA-MM »). */
   cnsParSalarieMois: Map<string, number>;
   /** Jours de MCT (clé « code|AAAA-MM-JJ »), week-ends écartés. */
   mctJours: Set<string>;
+  /** Jours de congé des mois complets (clé « code|AAAA-MM-JJ ») → part de la journée (heures / 8, plafonnée à 1). */
+  congesJours?: Map<string, number>;
   /** Absences injustifiées, plages de dates. */
   injustifiees: { code_salarie: string; debut: string; fin: string }[];
-  /** Taux d'un mois NON mesuré (et taux de congés, qui ne se mesurent jamais). */
+  /** Taux d'un mois NON mesuré (congés : mois sans congés complets). */
   tauxDuMois: (annee: number, mois: number) => TauxMois;
   /** Hypothèses datées du scénario choisi (vide sans scénario). */
   hypotheses?: HypotheseJour[];
@@ -135,6 +139,7 @@ export type MotifJour =
   | "suspendu_partiel"
   | "mct"
   | "injustifiee"
+  | "conge"
   | "cns_partiel";
 
 export interface LigneJour {
@@ -263,6 +268,8 @@ export function calculerEffectifJournalier(e: EntreesEffectifJournalier): JourEf
       const inj = !mct && e.moisMesures.inj.has(km) && !weekEnd && (injParCode.get(p.code_salarie) ?? []).some((i) => dansPlage(date, i.debut, i.fin));
       if (mct) { abs.mct.tetes += 1; abs.mct.etp += dispo; continue; }
       if (inj) { abs.inj.tetes += 1; abs.inj.etp += dispo; continue; }
+      const partConge = e.moisMesures.conges?.has(km) ? e.congesJours?.get(`${p.code_salarie}|${date}`) ?? 0 : 0;
+      if (partConge > 0) { abs.conges.tetes += partConge; abs.conges.etp += dispo * partConge; if (partConge >= 1) continue; }
       if (e.moisMesures.cns.has(km)) {
         const pct = Math.min(100, e.cnsParSalarieMois.get(`${p.code_salarie}|${km}`) ?? 0) / 100;
         abs.cns.tetes += pct;
@@ -300,13 +307,13 @@ export function calculerEffectifJournalier(e: EntreesEffectifJournalier): JourEf
     net.tetes = sousContrat.tetes - suspendus.tetes - turnover.tetes;
     net.etp = sousContrat.etp - suspendus.etp - turnover.etp;
 
-    // Taux : absences d'un mois non mesuré, et congés (jamais mesurés)
+    // Taux : absences d'un mois non mesuré, et congés d'un mois sans congés complets
     const taux = e.tauxDuMois(annee, mois);
     const parTaux = (pct: number): Compte => ({ tetes: (net.tetes * pct) / 100, etp: (net.etp * pct) / 100 });
     if (!e.moisMesures.cns.has(km)) abs.cns = parTaux(taux.cns);
     if (!e.moisMesures.mct.has(km)) abs.mct = parTaux(taux.mct);
     if (!e.moisMesures.inj.has(km)) abs.inj = parTaux(taux.inj);
-    abs.conges = parTaux(taux.conges);
+    if (!e.moisMesures.conges?.has(km)) abs.conges = parTaux(taux.conges);
 
     const retire = (k: keyof Compte) => abs.cns[k] + abs.mct[k] + abs.inj[k] + abs.conges[k];
     const disponibles = { tetes: Math.max(0, net.tetes - retire("tetes")), etp: Math.max(0, net.etp - retire("etp")) };
@@ -351,7 +358,8 @@ function veilleDe(date: string): string {
 
 /**
  * Salariés d'un jour : présents et absents CONNUS, avec leur motif. Les
- * absences en taux (futur, congés) ne désignent personne et n'y figurent pas.
+ * absences en taux (futur, congés d'un mois incomplet) ne désignent personne
+ * et n'y figurent pas.
  */
 export function listerJour(e: EntreesEffectifJournalier, date: string): LigneJour[] {
   const annee = Number(date.slice(0, 4));
@@ -368,6 +376,7 @@ export function listerJour(e: EntreesEffectifJournalier, date: string): LigneJou
     if (et.suspendu >= 1) motif = "suspendu";
     else if (e.moisMesures.mct.has(km) && e.mctJours.has(`${p.code_salarie}|${date}`)) motif = "mct";
     else if (e.moisMesures.inj.has(km) && !weekEnd && e.injustifiees.some((i) => i.code_salarie === p.code_salarie && dansPlage(date, i.debut, i.fin))) motif = "injustifiee";
+    else if (e.moisMesures.conges?.has(km) && (e.congesJours?.get(`${p.code_salarie}|${date}`) ?? 0) > 0) motif = "conge";
     else if (et.suspendu > 0) motif = "suspendu_partiel";
     else if (cnsMois && cnsMois > 0) motif = "cns_partiel";
     lignes.push({

@@ -427,7 +427,7 @@ describe("calculerCoutsPaliers", () => {
       { coef: 1, source: sourceDe(employes) }
     );
     expect(eur.apresMct).toBe(2000);
-    expect(eur.etapes.map((e) => e.mesure)).toEqual([true, true, false, false, false]);
+    expect(eur.etapes.map((e) => e.mesure)).toEqual([true, true, false, false, false, false]);
   });
 
   it("expose les mêmes étapes que la chaîne ETP, dans le même ordre", () => {
@@ -439,6 +439,7 @@ describe("calculerCoutsPaliers", () => {
       "taux-cns",
       "taux-injustifiees",
       "taux-mct",
+      "taux-conges",
     ]);
     expect(eur.etapes[0].retire).toBe(0);
     expect(eur.etapes[1].retire).toBe(3000);
@@ -450,6 +451,24 @@ describe("calculerCoutsPaliers", () => {
     expect(eur.coutMoyenEtp).toBe(0);
     expect(eur.apresMct).toBe(0);
     expect(Number.isNaN(eur.apresInjustifiees)).toBe(false);
+  });
+
+  it("valorise congés et extraordinaires comme le MCT, mesurés ou rien", () => {
+    const employes = [salarie({ code_salarie: "A", brut_indice: 3000 })];
+    const sans = calculerCoutsPaliers(employes, [], [], [], MOIS, ANNEE, { coef: 1, source: sourceDe(employes) });
+    expect(sans.apresConges).toBeUndefined();
+    const eur = calculerCoutsPaliers(employes, [], [], [], MOIS, ANNEE, {
+      coef: 1,
+      source: sourceDe(employes),
+      conges: [
+        { code_salarie: "A", mois: MOIS, duree_hrs: heuresTravaillables / 2, categorie: "conges" },
+        { code_salarie: "A", mois: MOIS, duree_hrs: heuresTravaillables / 10, categorie: "extraordinaire" },
+      ],
+    });
+    expect(eur.coutPerduConges).toBe(1500);
+    expect(eur.coutPerduExtra).toBe(300);
+    expect(eur.apresConges).toBe(3000 - 1800);
+    expect(eur.etapes.at(-1)).toMatchObject({ cle: "taux-conges", cout: 1200, retire: 1800, mesure: true });
   });
 });
 

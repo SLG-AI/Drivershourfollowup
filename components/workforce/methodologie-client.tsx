@@ -824,7 +824,7 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
             {
               titre: "Le dénominateur ne change pas",
               points: [
-                "Le taux est rapporté à l'effectif après suspension, pas au palier précédent. Le palier « après MCT », lui, se retire bien en cascade de l'effectif payé, et donne l'effectif disponible : le dernier de la chaîne.",
+                "Le taux est rapporté à l'effectif après suspension, pas au palier précédent. Le palier « après MCT », lui, se retire bien en cascade de l'effectif payé ; les congés s'en retirent ensuite pour donner l'effectif disponible, le dernier de la chaîne.",
               ],
             },
           ],
@@ -858,8 +858,8 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
             {
               titre: "Effectif disponible",
               points: [
-                "Le complément du taux global appliqué à l'effectif après suspension donne l'effectif réellement disponible : le dernier palier de la chaîne.",
-                p ? `Sur ${libelleMois} : ${etp(p.apresMct)} disponibles sur ${etp(p.sousContrat)} sous contrat.` : "",
+                "Le complément du taux global appliqué à l'effectif après suspension donne l'effectif après MCT. Les congés, qui ne sont pas de l'absentéisme, s'en retirent ensuite pour donner le disponible (voir « Congés »).",
+                p ? `Sur ${libelleMois} : ${etp(p.apresMct)} après MCT sur ${etp(p.sousContrat)} sous contrat.` : "",
               ].filter(Boolean),
             },
             {
@@ -869,6 +869,40 @@ function construireSections(d: DonneesMethodologie | null, libelleMois: string):
               ],
             },
           ],
+        },
+        {
+          cle: "taux-conges",
+          titre: "Congés et disponible après congés",
+          definition:
+            "Part de l'effectif en congé. Retirés de l'effectif après MCT, les congés donnent l'effectif réellement disponible : le dernier palier de la chaîne.",
+          formule:
+            "taux congés = (heures de congés hors week-end / heures travaillables) / effectif après suspension × 100 ; disponible = après MCT − congés − congés extraordinaires et récup",
+          details: [
+            {
+              titre: "Source et codes",
+              points: [
+                "Les congés viennent du même export que le MCT (« Recherche absences »), rangés à part : ils ne sont pas de l'absentéisme et n'entrent pas dans le taux global.",
+                "CONGES = congés. CDEMEN (déménagement), CGDEC (décès), CNOCES (noces) et RECUP (récupération) = congés extraordinaires et récup, détaillés à part. TT (télétravail) est ignoré : la personne travaille.",
+                "Le motif libre saisi par le salarié n'est pas conservé.",
+              ],
+            },
+            {
+              titre: "Mesurés ou rien",
+              points: [
+                "Les congés sont saisonniers : un mois sans fichier ne reprend jamais le taux d'un autre mois. La courbe « Disponible (après congés) » n'existe que sur les mois importés.",
+                "Les congés des chauffeurs sont saisis plus tard dans le mois que ceux des services supports. À l'import MCT, la case « Ce fichier contient les congés des chauffeurs » marque le mois comme complet ; sans elle, les congés sont partiels, la courbe se trace en pointillé et les cartes l'indiquent.",
+                "Un réimport du mois remplace ses absences MCT et ses congés, et reprend l'état de la case.",
+              ],
+            },
+            {
+              titre: "Conversion",
+              points: [
+                "Identique au MCT : week-ends écartés, heures additionnées puis divisées par les heures travaillables du mois, salariés de la photographie du mois seulement.",
+                "Dans l'effectif jour par jour, un mois complet retire chaque salarié ses jours de congé datés (une demi-journée de 4 h vaut 0,5). Les scénarios prennent les congés mesurés sur ces mois, au lieu de leur réservoir annuel × taux.",
+              ],
+            },
+          ],
+          source: "Table wp_conges ; drapeau wp_imports.conges_chauffeurs_inclus.",
         },
         exempleTempsPartiel(p, libelleMois),
       ],

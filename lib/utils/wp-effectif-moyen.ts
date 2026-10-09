@@ -114,6 +114,8 @@ export interface PaliersDuPoint {
   projected_apres_injustifiees?: number;
   effectif_apres_mct?: number;
   projected_apres_mct?: number;
+  effectif_apres_conges?: number;
+  projected_apres_conges?: number;
 }
 
 const arrondi1 = (n: number) => Math.round(n * 10) / 10;
@@ -140,6 +142,8 @@ export function paliersEnMoyenne(fin: PaliersDuPoint, moyenne: Pick<EffectifMoye
     projected_apres_injustifiees: echelle(fin.projected_apres_injustifiees),
     effectif_apres_mct: echelle(fin.effectif_apres_mct),
     projected_apres_mct: echelle(fin.projected_apres_mct),
+    effectif_apres_conges: echelle(fin.effectif_apres_conges),
+    projected_apres_conges: echelle(fin.projected_apres_conges),
   };
 }
 

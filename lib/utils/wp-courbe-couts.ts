@@ -19,6 +19,7 @@
 import type { HeadcountDataPoint, Reporte } from "@/components/workforce/headcount-evolution-chart";
 import { paliersEnMoyenne } from "./wp-effectif-moyen";
 import { injustifieesDuPerimetre, type LigneCns, type LigneHeures } from "./wp-paliers";
+import type { LigneConge } from "./wp-conges";
 import {
   appliquerTauxReporte,
   calculerCoutsPaliers,
@@ -47,6 +48,8 @@ export interface EntreesCourbeCouts {
   absences: LigneCns[];
   mctHorsWeekEnd: LigneHeures[];
   absencesInjustifiees: LigneHeures[];
+  /** Congés de l'année, hors week-end : valorisés comme le MCT, mesurés ou rien. */
+  congesHorsWeekEnd?: LigneConge[];
   /** Statistiques salariales de l'année (paie réalisée). */
   stats: LigneStatSalariale[];
 }
@@ -74,7 +77,7 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       injustifieesDuPerimetre(e.absencesInjustifiees, e.filtresActifs, codes),
       m,
       e.selectedYear,
-      { coef: e.coef, source, coefParCc: e.coefParCc, complements: e.complements }
+      { coef: e.coef, source, coefParCc: e.coefParCc, complements: e.complements, conges: e.congesHorsWeekEnd }
     );
 
     // Un palier suit la règle de son homologue ETP : mesuré ⇒ valorisé
@@ -89,6 +92,8 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
     const apresInj = apresCns != null && perduInj != null ? apresCns - perduInj : undefined;
     const perduMct = mesure("taux-mct") ? couts.coutPerduMct : taux.mct != null ? net * (taux.mct / 100) : undefined;
     const apresMct = apresInj != null && perduMct != null ? apresInj - perduMct : undefined;
+    // Congés : mesurés ou rien, retirés de l'après-MCT (mesuré ou repris) comme en ETP
+    const apresConges = mesure("taux-conges") && apresMct != null ? apresMct - couts.coutPerduConges - couts.coutPerduExtra : undefined;
 
     const realise = realiseDuMois(e.stats, m, e.selectedYear, e.filtresActifs ? codes : undefined);
 
@@ -99,6 +104,7 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       reel: rep.reel || source.reporte,
       injustifiees: rep.injustifiees || source.reporte,
       mct: rep.mct || source.reporte,
+      conges: rep.conges || source.reporte,
       cout: source.reporte,
     };
 
@@ -109,6 +115,8 @@ export function construireCourbeCouts(e: EntreesCourbeCouts): PointCouts[] {
       effectif_reel: arrondi(apresCns),
       effectif_apres_injustifiees: arrondi(apresInj),
       effectif_apres_mct: arrondi(apresMct),
+      effectif_apres_conges: arrondi(apresConges),
+      conges_complet: etp.conges_complet,
       // Réalisé employeur : brut + charges patronales quand la paie les porte,
       // sinon le brut réel × coefficient (estimation)
       realise: realise.mesure ? Math.round(realise.employeurMesure ? realise.employeur : realise.brut * e.coef) : undefined,

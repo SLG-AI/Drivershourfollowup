@@ -17,6 +17,10 @@ interface WpImportInput {
   data: Record<string, unknown>[];
   mois?: number;
   annee?: number;
+  /** Export MCT : congés et congés extraordinaires/récup, rangés dans wp_conges. */
+  conges?: Record<string, unknown>[];
+  /** Export MCT : le fichier contient les congés des chauffeurs (mois complet). */
+  congesChauffeursInclus?: boolean;
 }
 
 export async function importWpData(input: WpImportInput) {
@@ -38,6 +42,7 @@ export async function importWpData(input: WpImportInput) {
       imported_by: user.id,
       status: "processing",
       row_count: 0,
+      conges_chauffeurs_inclus: input.fileType === "absences_mct" && !!input.congesChauffeursInclus,
     })
     .select("id")
     .single();
@@ -62,7 +67,7 @@ export async function importWpData(input: WpImportInput) {
         await importAbsencesCNS(supabase, input.data, importId, input.annee || new Date().getFullYear());
         break;
       case "absences_mct":
-        await importAbsencesMCT(supabase, input.data, importId, input.mois, input.annee || new Date().getFullYear());
+        await importAbsencesMCT(supabase, input.data, input.conges ?? [], importId, input.mois, input.annee || new Date().getFullYear());
         break;
       case "absences_injustifiees":
         await importAbsencesInjustifiees(supabase, input.data, importId);
@@ -206,19 +211,36 @@ async function importAbsencesCNS(supabase: any, data: Record<string, unknown>[],
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function importAbsencesMCT(supabase: any, data: Record<string, unknown>[], importId: string, mois?: number, annee?: number) {
-  if (data.length === 0) return;
+async function importAbsencesMCT(supabase: any, data: Record<string, unknown>[], conges: Record<string, unknown>[], importId: string, mois?: number, annee?: number) {
+  const premiere = data[0] ?? conges[0];
+  if (!premiere) return;
 
-  const targetMois = mois || (data[0].mois as number);
-  const targetAnnee = annee || (data[0].annee as number);
+  const targetMois = mois || (premiere.mois as number);
+  const targetAnnee = annee || (premiere.annee as number);
 
-  // Delete existing data for the same month/year
+  // Un réimport du mois remplace ses absences ET ses congés : le fichier mis à
+  // jour avec les congés des chauffeurs reprend ceux des supports.
   if (targetMois && targetAnnee) {
     await supabase
       .from("wp_absences_mct")
       .delete()
       .eq("mois", targetMois)
       .eq("annee", targetAnnee);
+    await supabase
+      .from("wp_conges")
+      .delete()
+      .eq("mois", targetMois)
+      .eq("annee", targetAnnee);
+  }
+
+  for (let i = 0; i < conges.length; i += 200) {
+    const batch = conges.slice(i, i + 200).map((row) => ({
+      ...row,
+      import_id: importId,
+    }));
+
+    const { error } = await supabase.from("wp_conges").insert(batch);
+    if (error) throw new Error(`Erreur insertion congés (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
 
   for (let i = 0; i < data.length; i += 200) {

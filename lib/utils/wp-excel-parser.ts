@@ -89,6 +89,8 @@ export interface WpParseResult {
    * dans son bloc « Contrôles du fichier ». Consultatifs : l'import reste possible.
    */
   controles?: string[];
+  /** Export MCT seulement : congés et congés extraordinaires/récup, hors absentéisme (table wp_conges). */
+  conges?: CongeRow[];
   detectedMonth?: number;
   detectedYear?: number;
 }
@@ -950,12 +952,43 @@ export interface AbsenceMctRow {
   annee: number;
 }
 
+export type CategorieConge = "conges" | "extraordinaire";
+
+export interface CongeRow {
+  code_salarie: string;
+  nom_salarie: string;
+  equipe: string;
+  prestation: string;
+  categorie: CategorieConge;
+  date_conge: string;
+  duree_hrs: number;
+  mois: number;
+  annee: number;
+}
+
 /**
  * Codes de prestation considérés comme de véritables absences.
  * CMALAD = maladie, ACCIDE = accident, RAIFAM = raisons familiales.
- * Tout autre code est importé mais signalé ; CONGES est écarté d'office.
+ * Tout autre code est importé mais signalé, sauf les congés (rangés à part
+ * dans wp_conges) et le télétravail (ignoré : la personne travaille).
  */
 const PRESTATIONS_ABSENCE = new Set(["CMALAD", "ACCIDE", "RAIFAM"]);
+
+/**
+ * Congés de l'export MCT. Ce ne sont pas des absences : ils alimentent la
+ * courbe « Disponible (après congés) », jamais l'absentéisme.
+ * CDEMEN = déménagement, CGDEC = décès, CNOCES = noces, RECUP = récupération.
+ */
+export const PRESTATIONS_CONGES: Record<string, CategorieConge> = {
+  CONGES: "conges",
+  CDEMEN: "extraordinaire",
+  CGDEC: "extraordinaire",
+  CNOCES: "extraordinaire",
+  RECUP: "extraordinaire",
+};
+
+/** Télétravail : ni absence ni congé. */
+const PRESTATIONS_IGNOREES = new Set(["TT"]);
 
 export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
   const errors: string[] = [];
@@ -997,9 +1030,10 @@ export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
   }
 
   const data: AbsenceMctRow[] = [];
+  const conges: CongeRow[] = [];
   let totalRows = 0;
   let filteredOut = 0;
-  let congesEcartes = 0;
+  let teletravailIgnore = 0;
   const codesInconnus = new Map<string, number>();
 
   for (let i = header.index + 1; i < rows.length; i++) {
@@ -1020,22 +1054,40 @@ export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
       continue;
     }
 
-    // Les congés ne sont pas des absences : certains exports les incluent, ce
-    // qui gonflait l'absentéisme (jusqu'à +22 % sur un mois observé). On les
-    // écarte, et on inventorie tout code non reconnu pour le signaler.
+    // Les congés ne sont pas des absences : comptés dans le MCT, ils
+    // gonflaient l'absentéisme (jusqu'à +22 % sur un mois observé). Ils sont
+    // rangés à part ; tout autre code non reconnu est inventorié et signalé.
     const prestation = colPrestation >= 0 ? String(row[colPrestation] || "").trim().toUpperCase() : "";
-    if (prestation === "CONGES") {
-      congesEcartes++;
+    if (PRESTATIONS_IGNOREES.has(prestation)) {
+      teletravailIgnore++;
       continue;
-    }
-    if (prestation && !PRESTATIONS_ABSENCE.has(prestation)) {
-      codesInconnus.set(prestation, (codesInconnus.get(prestation) ?? 0) + 1);
     }
 
     const dateAbsence = colDate >= 0 ? excelDateToDate(row[colDate]) : null;
     // Lecture en UTC : les dates de ce module sont toutes calées sur minuit UTC.
     const mois = dateAbsence ? dateAbsence.getUTCMonth() + 1 : 0;
     const annee = dateAbsence ? dateAbsence.getUTCFullYear() : 0;
+
+    const categorie = PRESTATIONS_CONGES[prestation];
+    if (categorie) {
+      // Un congé sans date ne peut être rattaché à aucun jour ni aucun mois.
+      if (!dateAbsence) continue;
+      conges.push({
+        code_salarie: codeSalarie,
+        nom_salarie: colNom >= 0 ? String(row[colNom] || "") : "",
+        equipe: colEquipe >= 0 ? String(row[colEquipe] || "") : "",
+        prestation,
+        categorie,
+        date_conge: dateToISO(dateAbsence) as string,
+        duree_hrs: dureeHrs,
+        mois,
+        annee,
+      });
+      continue;
+    }
+    if (prestation && !PRESTATIONS_ABSENCE.has(prestation)) {
+      codesInconnus.set(prestation, (codesInconnus.get(prestation) ?? 0) + 1);
+    }
 
     data.push({
       code_salarie: codeSalarie,
@@ -1060,11 +1112,16 @@ export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
     warnings.push(`${data.length} absences MCT retenues sur ${totalRows} lignes (${filteredOut} filtrées).`);
   }
 
-  if (congesEcartes > 0) {
+  if (conges.length > 0) {
+    const nConges = conges.filter((c) => c.categorie === "conges").length;
+    const nExtra = conges.length - nConges;
     warnings.push(
-      `${congesEcartes} ligne(s) de type CONGES écartée(s) : les congés ne sont pas des absences ` +
-      "et fausseraient le taux d'absentéisme."
+      `${nConges} jour(s) de congés et ${nExtra} congé(s) extraordinaire(s) / récup retenus à part, ` +
+      "hors absentéisme."
     );
+  }
+  if (teletravailIgnore > 0) {
+    warnings.push(`${teletravailIgnore} ligne(s) de télétravail (TT) ignorée(s) : ni absence, ni congé.`);
   }
 
   if (codesInconnus.size > 0) {
@@ -1078,13 +1135,14 @@ export function parseAbsencesMCT(buffer: ArrayBuffer): WpParseResult {
     );
   }
 
-  // Detect month/year from data
-  const monthSet = new Set(data.map((d) => d.mois).filter((m) => m > 0));
-  const yearSet = new Set(data.map((d) => d.annee).filter((y) => y > 0));
+  // Detect month/year from data (absences et congés : un fichier de congés seuls reste daté)
+  const periodes = [...data, ...conges];
+  const monthSet = new Set(periodes.map((d) => d.mois).filter((m) => m > 0));
+  const yearSet = new Set(periodes.map((d) => d.annee).filter((y) => y > 0));
   const detectedMonth = monthSet.size === 1 ? [...monthSet][0] : undefined;
   const detectedYear = yearSet.size === 1 ? [...yearSet][0] : undefined;
 
-  return { fileType: "absences_mct", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, detectedMonth, detectedYear };
+  return { fileType: "absences_mct", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, conges, detectedMonth, detectedYear };
 }
 
 // ============================================================
@@ -1102,9 +1160,23 @@ export interface AbsenceInjustifieeRow {
   complete: boolean;
 }
 
+/**
+ * Séparateur d'un CSV, lu sur sa première ligne non vide. L'export d'origine
+ * est séparé par des virgules ; le même fichier ouvert puis réenregistré par
+ * Excel en français l'est par des points-virgules, et chaque ligne tenait
+ * alors en une seule cellule : aucune absence n'était retenue.
+ */
+function detectCsvSeparator(text: string): string {
+  const premiere = text.split(/\r?\n/).find((l) => l.trim()) ?? "";
+  const horsGuillemets = premiere.replace(/"[^"]*"/g, "");
+  const compte = (c: string) => horsGuillemets.split(c).length - 1;
+  return compte(";") > compte(",") ? ";" : ",";
+}
+
 /** Simple CSV parser that preserves all values as strings (no auto type-detection) */
 function parseCsvText(text: string): string[][] {
   const rows: string[][] = [];
+  const separateur = detectCsvSeparator(text);
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -1125,7 +1197,7 @@ function parseCsvText(text: string): string[][] {
       } else {
         if (ch === '"') {
           inQuotes = true;
-        } else if (ch === ",") {
+        } else if (ch === separateur) {
           cells.push(current);
           current = "";
         } else {
@@ -1146,7 +1218,8 @@ const MONTH_NAME_TO_NUM: Record<string, number> = {
 
 function parseDateDDMMYYYY(val: string): Date | null {
   if (!val) return null;
-  const parts = val.trim().split(".");
+  // JJ.MM.AAAA à l'export, JJ/MM/AAAA une fois passé par Excel.
+  const parts = val.trim().split(/[./]/);
   if (parts.length !== 3) return null;
   const day = parseInt(parts[0], 10);
   const month = parseInt(parts[1], 10);
@@ -1471,6 +1544,14 @@ export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
   }
   if (allText.includes("sortie temporaire") || allText.includes("motif de sortie") || allText.includes("type contrat")) {
     return "roster_rh";
+  }
+
+  // CSV UTF-8 sans BOM (le fichier d'absences injustifiées réenregistré par
+  // Excel) : XLSX le lit en Latin-1, « Complète » et « Salarié » arrivent
+  // déformés et aucune règle ci-dessus ne s'applique. On relit le début en UTF-8.
+  const debut = normalizeText(new TextDecoder("utf-8").decode(buffer.slice(0, 2000)));
+  if (debut.includes("injustifi") || (debut.includes("complete") && debut.includes("nombre") && debut.includes("heure"))) {
+    return "absences_injustifiees";
   }
 
   return null;

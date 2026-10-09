@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Upload, FileSpreadsheet, Users, Activity, AlertTriangle, CheckCircle2, AlertCircle, Clock, ArrowLeftRight, Receipt } from "lucide-react";
@@ -47,7 +48,7 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
   {
     id: "absences_mct",
     label: "Absences MCT",
-    description: "Maladies court terme non prises en charge CNS.",
+    description: "Maladies court terme non prises en charge CNS, et congés pris (hors absentéisme).",
     icon: Activity,
     example: "ExportRechercheAbsences_*.xlsx",
   },
@@ -97,6 +98,9 @@ export default function WorkforceImportPage() {
   // Consultatifs : ils n'empêchent jamais de confirmer l'import.
   const [avertissementsControle, setAvertissementsControle] = useState<string[]>([]);
   const [controleDureesEnCours, setControleDureesEnCours] = useState(false);
+  // Export MCT : les congés des chauffeurs arrivent plus tard dans le mois que
+  // ceux des supports. Tant que cette case n'est pas cochée, le mois est partiel.
+  const [congesChauffeursInclus, setCongesChauffeursInclus] = useState(false);
 
   // Types dont l'import est rattaché à une période.
   const TYPES_AVEC_PERIODE: (WpFileType | null)[] = ["roster_rh", "salary_stats", "salary_lines", "absences_cns", "absences_mct"];
@@ -115,6 +119,7 @@ export default function WorkforceImportPage() {
       const buffer = await file.arrayBuffer();
       setFileBuffer(buffer);
       setFileName(file.name);
+      setCongesChauffeursInclus(false);
 
       // Auto-detect or use forced type
       let fileType = forceType || selectedType;
@@ -187,7 +192,7 @@ export default function WorkforceImportPage() {
   );
 
   const handleImport = async () => {
-    if (!parseResult || !selectedType || parseResult.data.length === 0) return;
+    if (!parseResult || !selectedType || (parseResult.data.length === 0 && !parseResult.conges?.length)) return;
 
     setStage("importing");
     setProgress(20);
@@ -200,6 +205,8 @@ export default function WorkforceImportPage() {
         data: parseResult.data,
         mois: overrideMonth || parseResult.detectedMonth,
         annee: overrideYear || parseResult.detectedYear,
+        conges: parseResult.conges as unknown as Record<string, unknown>[] | undefined,
+        congesChauffeursInclus,
       });
 
       setProgress(100);
@@ -220,6 +227,7 @@ export default function WorkforceImportPage() {
     setFileBuffer(null);
     setProgress(0);
     setOverrideMonth(0);
+    setCongesChauffeursInclus(false);
   };
 
   const fileTypeMeta = selectedType ? FILE_TYPES.find((ft) => ft.id === selectedType) : null;
@@ -358,7 +366,33 @@ export default function WorkforceImportPage() {
                   <p className="text-2xl font-bold">{parseResult.detectedYear}</p>
                 </div>
               )}
+              {selectedType === "absences_mct" && (
+                <div className="rounded-lg border p-4">
+                  <p className="text-sm text-muted-foreground">Congés (jours, hors absentéisme)</p>
+                  <p className="text-2xl font-bold">{parseResult.conges?.length ?? 0}</p>
+                </div>
+              )}
             </div>
+
+            {selectedType === "absences_mct" && (
+              <div className="flex items-start gap-2 rounded-lg border p-3">
+                <Checkbox
+                  id="conges-chauffeurs"
+                  checked={congesChauffeursInclus}
+                  onCheckedChange={(v) => setCongesChauffeursInclus(v === true)}
+                  className="mt-0.5"
+                />
+                <div>
+                  <Label htmlFor="conges-chauffeurs" className="text-sm font-medium">
+                    Ce fichier contient les congés des chauffeurs
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Décochée, les congés du mois sont tenus pour partiels (services supports seuls) et
+                    la courbe « Disponible (après congés) » est tracée en pointillés.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Month/Year override for salary_stats and absences */}
             {TYPES_AVEC_PERIODE.includes(selectedType) && (
@@ -433,7 +467,7 @@ export default function WorkforceImportPage() {
 
             {/* Actions */}
             <div className="flex gap-3">
-              <Button onClick={handleImport} disabled={parseResult.data.length === 0 || parseResult.errors.length > 0}>
+              <Button onClick={handleImport} disabled={(parseResult.data.length === 0 && !parseResult.conges?.length) || parseResult.errors.length > 0}>
                 Confirmer l&apos;importation ({parseResult.rowCount} lignes)
               </Button>
               <Button variant="outline" onClick={resetImport}>

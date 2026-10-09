@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3, Repeat, HelpCircle } from "lucide-react";
+import { Users, UserMinus, TrendingDown, Activity, Thermometer, AlertTriangle, Target, BarChart3, Repeat, HelpCircle, CalendarRange, CalendarCheck } from "lucide-react";
 import Link from "next/link";
 
 export interface WpDashboardStats {
@@ -21,6 +21,17 @@ export interface WpDashboardStats {
   heures_cns?: number | null;
   heures_mct?: number | null;
   heures_injustifiees?: number | null;
+  /**
+   * Congés (CONGES) et congés extraordinaires/récup (CDEMEN, CGDEC, CNOCES,
+   * RECUP), en % des heures travaillables ajustées. Mesurés ou rien : null
+   * sans congés importés pour le mois. Hors taux d'absentéisme global.
+   */
+  taux_conges?: number | null;
+  taux_conges_extra?: number | null;
+  heures_conges?: number | null;
+  heures_conges_extra?: number | null;
+  /** Congés complets (chauffeurs importés), partiels (supports seuls), ou null sans congés. */
+  conges_complet?: boolean | null;
   etp_total: number;
   departs_prevus: number;
   /** Sorties définitives du mois hors fins de CDD (ETP) / effectif moyen du mois (ETP), en % */
@@ -33,7 +44,7 @@ export interface WpDashboardStats {
   target_total: number | null;
   /**
    * Effectif MOYEN du mois en ETP (pondéré par les jours), par palier :
-   * sous contrat, après suspensions, après CNS, après injustifiées (payé), après MCT (disponible).
+   * sous contrat, après suspensions, après CNS, après injustifiées (payé), après MCT, après congés (disponible).
    * Absents quand un scénario remplace les KPI.
    */
   effectif_brut_moyen?: number;
@@ -41,6 +52,7 @@ export interface WpDashboardStats {
   effectif_apres_cns_moyen?: number;
   effectif_apres_mct_moyen?: number;
   effectif_apres_injustifiees_moyen?: number;
+  effectif_apres_conges_moyen?: number;
 }
 
 function formatMoyenne(label: string, etp: number | undefined): string | null {
@@ -126,7 +138,7 @@ export function WpKpiCards({ stats, lienMethodologie }: { stats: WpDashboardStat
       value: `${stats.taux_mct.toFixed(1)}%`,
       description: "heures MCT hors week-end / heures travaillables ajustées",
       hours: formatHeures(stats.heures_mct),
-      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_mct_moyen),
+      average: formatMoyenne("Effectif moyen après MCT", stats.effectif_apres_mct_moyen),
       note: stats.taux_mct_estime ? `Estimé — repris de ${stats.taux_mct_estime}` : null,
       icon: Thermometer,
       iconColor: "text-pink-600",
@@ -138,13 +150,37 @@ export function WpKpiCards({ stats, lienMethodologie }: { stats: WpDashboardStat
       value: `${(stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees).toFixed(1)}%`,
       description: `CNS ${stats.taux_absenteisme.toFixed(1)}% + MCT ${stats.taux_mct.toFixed(1)}% + Injust. ${stats.taux_injustifiees.toFixed(1)}%`,
       hours: formatHeures(heuresTotal),
-      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_mct_moyen),
+      average: formatMoyenne("Effectif moyen après MCT", stats.effectif_apres_mct_moyen),
       note: (stats.taux_absenteisme_estime || stats.taux_mct_estime || stats.taux_injustifiees_estime)
         ? "Inclut au moins un taux estimé"
         : null,
       icon: BarChart3,
       iconColor: (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 15 ? "text-red-600" : (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 10 ? "text-amber-600" : "text-emerald-600",
       iconBg: (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 15 ? "bg-red-50" : (stats.taux_absenteisme + stats.taux_mct + stats.taux_injustifiees) > 10 ? "bg-amber-50" : "bg-emerald-50",
+    },
+    // Congés : hors absentéisme, à la suite de la chaîne (disponible après congés)
+    {
+      title: "Taux de congés",
+      ancre: "taux-conges",
+      value: stats.taux_conges != null ? `${stats.taux_conges.toFixed(1)}%` : "—",
+      description: stats.taux_conges != null ? "heures de congés hors week-end / heures travaillables ajustées" : "Aucun congé importé pour ce mois",
+      hours: formatHeures(stats.heures_conges),
+      average: formatMoyenne("Effectif moyen disponible", stats.effectif_apres_conges_moyen),
+      note: stats.conges_complet === false ? "Partiel — congés chauffeurs non importés" : null,
+      icon: CalendarRange,
+      iconColor: "text-orange-600",
+      iconBg: "bg-orange-50",
+    },
+    {
+      title: "Congés extraordinaires et récup",
+      ancre: "taux-conges",
+      value: stats.taux_conges_extra != null ? `${stats.taux_conges_extra.toFixed(2)}%` : "—",
+      description: "Déménagement, décès, noces, récupération",
+      hours: formatHeures(stats.heures_conges_extra),
+      note: stats.conges_complet === false ? "Partiel — congés chauffeurs non importés" : null,
+      icon: CalendarCheck,
+      iconColor: "text-orange-600",
+      iconBg: "bg-orange-50",
     },
     {
       title: "Départs prévisibles",

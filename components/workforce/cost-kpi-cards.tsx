@@ -15,6 +15,11 @@ export interface CoutsStats {
   paye: number | undefined;
   cout_perdu_mct: number | undefined;
   disponible: number | undefined;
+  /** Congés et congés extraordinaires/récup valorisés, undefined sans congés (mesurés ou rien). */
+  cout_perdu_conges?: number;
+  disponible_apres_conges?: number;
+  /** Congés du mois : complets, partiels (chauffeurs non importés), ou null sans congés. */
+  conges_complet?: boolean | null;
   /** Moyennes du mois (pondérées par les jours), absentes sans vue Moyenne. */
   sous_contrat_moyen?: number;
   apres_suspension_moyen?: number;
@@ -92,10 +97,22 @@ export function CostKpiCards({ stats, lienMethodologie }: { stats: CoutsStats; l
       title: "Coût des absences payées (MCT)",
       ancre: "cout-mct",
       value: euros(stats.cout_perdu_mct),
-      description: stats.disponible != null ? `Coût disponible après MCT : ${euros(stats.disponible)}` : "Taux MCT inconnu pour ce mois",
+      description: stats.disponible != null ? `Coût après MCT : ${euros(stats.disponible)}` : "Taux MCT inconnu pour ce mois",
       average: null,
       note: null,
       icon: Thermometer, iconColor: "text-pink-600", iconBg: "bg-pink-50",
+    },
+    {
+      title: "Coût des congés",
+      ancre: "cout-conges",
+      value: euros(stats.cout_perdu_conges),
+      description:
+        stats.disponible_apres_conges != null
+          ? `Coût disponible après congés et extraordinaires : ${euros(stats.disponible_apres_conges)}`
+          : `Congés non importés pour ${stats.mois_label}`,
+      average: null,
+      note: stats.conges_complet === false ? "Partiel — congés chauffeurs non importés" : null,
+      icon: CalendarRange, iconColor: "text-orange-600", iconBg: "bg-orange-50",
     },
     {
       title: "Réalisé du mois (paie)",

@@ -6,6 +6,7 @@ import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { reclassifierSortiesTemporaires } from "@/lib/utils/wp-suspension";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
+import { moisCongesComplets } from "@/lib/utils/wp-conges";
 import {
   CONGES_POOL_ANNUEL,
   calculerEffectifJournalier,
@@ -59,7 +60,7 @@ export default async function EffectifJournalierPage({ searchParams }: Props) {
   const periodeRecente = await getLatestRosterPeriod(supabase);
   const scenarioId = params.scenario || null;
 
-  const [photos, photoRecenteHorsPlage, mouvements, statsSalariales, cns, mct, injustifiees, scenarios, scParams, scConges, scTurnover, scArrivees, scSortiesTemp, scDeparts] = await Promise.all([
+  const [photos, photoRecenteHorsPlage, mouvements, statsSalariales, cns, mct, injustifiees, scenarios, scParams, scConges, scTurnover, scArrivees, scSortiesTemp, scDeparts, conges, importsMct] = await Promise.all([
     fetchAll<Ligne>(supabase.from("wp_employees").select(COLONNES_PHOTO).in("annee", annees).order("id")),
     periodeRecente && !annees.includes(periodeRecente.annee)
       ? fetchAll<Ligne>(supabase.from("wp_employees").select(COLONNES_PHOTO).eq("mois", periodeRecente.mois).eq("annee", periodeRecente.annee).order("id"))
@@ -76,6 +77,9 @@ export default async function EffectifJournalierPage({ searchParams }: Props) {
     scenarioId ? fetchAll<Ligne>(supabase.from("wp_scenario_arrival_hypotheses").select("*").eq("scenario_id", scenarioId)) : Promise.resolve([] as Ligne[]),
     scenarioId ? fetchAll<Ligne>(supabase.from("wp_scenario_temp_exit_hypotheses").select("*").eq("scenario_id", scenarioId)) : Promise.resolve([] as Ligne[]),
     scenarioId ? fetchAll<Ligne>(supabase.from("wp_scenario_departures").select("*").eq("scenario_id", scenarioId)) : Promise.resolve([] as Ligne[]),
+    // Congés datés, et les imports MCT qui disent quels mois sont complets (chauffeurs importés)
+    fetchAll<Ligne>(supabase.from("wp_conges").select("code_salarie, date_conge, duree_hrs").gte("date_conge", debutHistorique).lte("date_conge", fin).order("id")),
+    fetchAll<Ligne>(supabase.from("wp_imports").select("mois, annee, imported_at, conges_chauffeurs_inclus").eq("file_type", "absences_mct").eq("status", "completed").in("annee", annees)),
   ]);
   const scenario = scenarios.find((s) => s.id === scenarioId) ?? null;
 
@@ -128,12 +132,23 @@ export default async function EffectifJournalierPage({ searchParams }: Props) {
     cns: new Set(cns.map((a) => cleMois(a.annee, a.mois))),
     mct: new Set(mct.map((a) => String(a.date_absence).slice(0, 7))),
     inj: new Set(injustifiees.map((a) => cleMois(a.annee, a.mois))),
+    // Congés : seuls les mois COMPLETS retirent les jours datés ; les autres gardent le taux
+    conges: new Set(annees.flatMap((a) => [...moisCongesComplets(importsMct, a)].map((m) => cleMois(a, m)))),
   };
   const cnsParSalarieMois = new Map(cns.map((a) => [`${a.code_salarie}|${cleMois(a.annee, a.mois)}`, Number(a.pct_absenteisme || 0)]));
   const mctJours = new Set(
     mct.filter((a) => { const j = new Date(`${a.date_absence}T00:00:00Z`).getUTCDay(); return j !== 0 && j !== 6; })
       .map((a) => `${a.code_salarie}|${String(a.date_absence).slice(0, 10)}`)
   );
+  // Part de la journée en congé (heures / 8, plafonnée à 1), cumulée par jour ; week-ends écartés
+  const congesJours = new Map<string, number>();
+  conges.forEach((c) => {
+    const date = String(c.date_conge).slice(0, 10);
+    const j = new Date(`${date}T00:00:00Z`).getUTCDay();
+    if (j === 0 || j === 6) return;
+    const cle = `${c.code_salarie}|${date}`;
+    congesJours.set(cle, Math.min(1, (congesJours.get(cle) ?? 0) + Number(c.duree_hrs || 0) / 8));
+  });
   const plagesInj = injustifiees
     .filter((a) => a.date_debut)
     .map((a) => ({ code_salarie: String(a.code_salarie), debut: String(a.date_debut).slice(0, 10), fin: String(a.date_fin || a.date_debut).slice(0, 10) }));
@@ -149,6 +164,7 @@ export default async function EffectifJournalierPage({ searchParams }: Props) {
     moisMesures,
     cnsParSalarieMois,
     mctJours,
+    congesJours,
     injustifiees: plagesInj,
   };
 
@@ -181,7 +197,7 @@ export default async function EffectifJournalierPage({ searchParams }: Props) {
   const moisPlage = [...new Set(jours.map((j) => j.date.slice(0, 7)))];
   const tauxAffiches = moisPlage.map((k) => {
     const [a, m] = k.split("-").map(Number);
-    return { mois: k, mesure: { cns: moisMesures.cns.has(k), mct: moisMesures.mct.has(k), inj: moisMesures.inj.has(k) }, taux: tauxDuMois(a, m) };
+    return { mois: k, mesure: { cns: moisMesures.cns.has(k), mct: moisMesures.mct.has(k), inj: moisMesures.inj.has(k), conges: moisMesures.conges.has(k) }, taux: tauxDuMois(a, m) };
   });
 
   return (

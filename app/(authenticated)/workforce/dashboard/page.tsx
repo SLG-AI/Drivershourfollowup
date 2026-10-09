@@ -7,6 +7,7 @@ import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstate
 import { MovementsPanel } from "@/components/workforce/movements-panel";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
+import { COLONNES_CONGES, congesHorsWeekEnd, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { estCongeParentalTempsPartielParTaux, estFinDeMission, estSortieHorsTurnover, LABEL_PARENTAL_TEMPS_PARTIEL } from "@/lib/utils/wp-suspension";
 import { WpKpiCards, type WpDashboardStats } from "@/components/workforce/kpi-cards";
@@ -20,6 +21,7 @@ import { HeadcountTable, type HeadcountItem } from "@/components/workforce/headc
 import { GapAnalysisChart, type GapDataPoint } from "@/components/workforce/gap-analysis-chart";
 import { AbsenteeismTable, type AbsenteeismItem } from "@/components/workforce/absenteeism-table";
 import { MctTable, type MctItem } from "@/components/workforce/mct-table";
+import { CongesTable, type CongeItem } from "@/components/workforce/conges-table";
 import { InjustifieesTable, type InjustifieeItem } from "@/components/workforce/injustifiees-table";
 import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { ScenarioHypothesesCard } from "@/components/workforce/scenario-hypotheses-card";
@@ -119,7 +121,7 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Année future : les taux d'absence repartent des derniers mois connus de
   // l'année précédente (chargée seulement dans ce cas).
   const anneeFuture = selectedYear > now.getFullYear();
-  const [employees, employeesMoisPrecedent, absences, salaryStats, absencesMct, absencesInjustifiees, targets, defaultScenarios, allScenariosRaw, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec] = await Promise.all([
+  const [employees, employeesMoisPrecedent, absences, salaryStats, absencesMct, absencesInjustifiees, targets, defaultScenarios, allScenariosRaw, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, congesAnnee, importsMct] = await Promise.all([
     fetchAll(
       supabase
         .from("wp_employees")
@@ -162,6 +164,9 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     anneeFuture ? fetchAll(supabase.from("wp_absences").select("code_salarie, mois, pct_absenteisme, hrs_maladie").eq("annee", selectedYear - 1)).then(plafonnerTauxCns) : Promise.resolve([] as Record<string, unknown>[]),
     anneeFuture ? fetchAll(supabase.from("wp_absences_mct").select("code_salarie, mois, date_absence, duree_hrs").eq("annee", selectedYear - 1)) : Promise.resolve([] as Record<string, unknown>[]),
     anneeFuture ? fetchAll(supabase.from("wp_absences_injustifiees").select("code_salarie, mois, duree_hrs").eq("annee", selectedYear - 1)) : Promise.resolve([] as Record<string, unknown>[]),
+    // Congés de l'année (hors absentéisme), et les imports MCT qui disent quels mois sont complets
+    fetchAll(supabase.from("wp_conges").select(COLONNES_CONGES).eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_imports").select("mois, annee, imported_at, conges_chauffeurs_inclus").eq("file_type", "absences_mct").eq("status", "completed").eq("annee", selectedYear)),
   ]);
 
   // Fetch scenario monthly params: prefer default, fallback to most recent
@@ -215,6 +220,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Week-ends écartés : le dénominateur (heures travaillables) ne compte que lundi-vendredi.
   const mctHorsWeekEnd = horsWeekEnd(absencesMct);
   const allAbsencesMct = mctHorsWeekEnd.filter((a: any) => employeeCodes.size === 0 || employeeCodes.has(a.code_salarie));
+  // Congés : mêmes règles que le MCT (hors week-end, salariés du périmètre)
+  const congesHorsWeekEndAnnee = congesHorsWeekEnd(congesAnnee as LigneConge[]);
+  const allConges = congesHorsWeekEndAnnee.filter((c) => employeeCodes.size === 0 || employeeCodes.has(c.code_salarie));
+  const complets = moisCongesComplets(importsMct, selectedYear);
   // Injustifiées : tout le fichier sans filtre (y compris un salarié absent du
   // roster), restreintes au périmètre dès qu'un filtre est actif.
   const allAbsencesInjustifiees = injustifieesDuPerimetre(absencesInjustifiees, filtres.actifs, employeeCodes);
@@ -548,6 +557,48 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const injTotalHrs = Math.round(injustifieesItems.reduce((sum, d) => sum + d.total_hrs, 0) * 10) / 10;
   const injEtpTotal = Math.round(injustifieesItems.reduce((sum, d) => sum + d.etp_perdu, 0) * 10) / 10;
 
+  // ============================================================
+  // Détail des congés pour le mois sélectionné (hors absentéisme)
+  // ============================================================
+
+  const selectedMonthConges = allConges.filter((c) => Number(c.mois) === selectedMonth);
+  const congesComplet = complets.has(selectedMonth);
+  // Une ligne par salarié ET par code : un même salarié peut cumuler congés et récupération
+  const congesByEmployee = new Map<string, { code: string; nom: string; equipe: string; prestation: string; categorie: string; totalHrs: number; nbJours: number }>();
+  for (const row of selectedMonthConges) {
+    const cle = `${row.code_salarie}|${row.prestation}`;
+    const existing = congesByEmployee.get(cle);
+    if (existing) {
+      existing.totalHrs += Number(row.duree_hrs || 0);
+      existing.nbJours += 1;
+    } else {
+      congesByEmployee.set(cle, {
+        code: row.code_salarie,
+        nom: row.nom_salarie || "",
+        equipe: row.equipe || "",
+        prestation: String(row.prestation || ""),
+        categorie: String(row.categorie),
+        totalHrs: Number(row.duree_hrs || 0),
+        nbJours: 1,
+      });
+    }
+  }
+  const congesItems: CongeItem[] = [...congesByEmployee.values()]
+    .map((d) => ({
+      code_salarie: d.code,
+      nom_salarie: d.nom,
+      vehicle_type: empVehicleMap.get(d.code) ?? "?",
+      description_equipe: d.equipe || empEquipeMap.get(d.code) || "",
+      prestation: d.prestation,
+      categorie: d.categorie,
+      total_hrs: Math.round(d.totalHrs * 10) / 10,
+      nb_jours: d.nbJours,
+      etp_perdu: workableHrsSelected > 0 ? Math.round((d.totalHrs / workableHrsSelected) * 100) / 100 : 0,
+    }))
+    .sort((a, b) => b.total_hrs - a.total_hrs);
+  const congesTotalHrs = Math.round(congesItems.reduce((sum, d) => sum + d.total_hrs, 0) * 10) / 10;
+  const congesEtpTotal = Math.round(congesItems.reduce((sum, d) => sum + d.etp_perdu, 0) * 10) / 10;
+
   // Départs prévisibles: employees with date_sortie after refDate but within the selected year
   const yearEnd = `${selectedYear}-12-31`;
   const departsPrevus = allEmployees.filter(
@@ -592,6 +643,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     absencesAnneePrec,
     mctAnneePrec,
     injAnneePrec,
+    congesHorsWeekEnd: congesHorsWeekEndAnnee,
+    moisCongesComplets: complets,
   });
   const { headcountData, etapesProjection, departProjection, avgAbsenteeism, cnsEstimatedFromMonth } = courbe;
   const lastKnownCnsRate = courbe.tauxRepris.cns?.taux ?? null;
@@ -710,6 +763,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   const heuresMct = scenarioKpiOverride == null && selectedMonthMct.length > 0 ? Math.round(totalMctHrsSelected) : null;
   const heuresInjustifiees = selectedMonthInjustifiees.length > 0 ? Math.round(totalInjHrsSelected) : null;
 
+  // Congés : même dénominateur que le MCT, mais mesurés ou rien (jamais repris)
+  const heuresCongesDuMois = (categorie: string) =>
+    selectedMonthConges.filter((c) => c.categorie === categorie).reduce((sum, c) => sum + Number(c.duree_hrs || 0), 0);
+  const congesMesures = selectedMonthConges.length > 0 && totalAdjustedWorkableHrs > 0;
+  const tauxConges = congesMesures ? (heuresCongesDuMois("conges") / totalAdjustedWorkableHrs) * 100 : null;
+  const tauxCongesExtra = congesMesures ? (heuresCongesDuMois("extraordinaire") / totalAdjustedWorkableHrs) * 100 : null;
+
   // ============================================================
   // Effectif MOYEN du mois en ETP (pondéré par les jours), à côté de la
   // valeur en fin de mois. Les sortis du mois absents de la photographie
@@ -758,8 +818,10 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         const net = effectifMoyen.net;
         const apresCns = net - net * (avgAbsenteeism / 100);
         const apresInj = apresCns - net * (tauxInjustifiees / 100); // payé
-        const apresMct = apresInj - net * (tauxMct / 100); // disponible
+        const apresMct = apresInj - net * (tauxMct / 100);
+        const apresConges = tauxConges != null && tauxCongesExtra != null ? apresMct - net * ((tauxConges + tauxCongesExtra) / 100) : null; // disponible
         return {
+          effectif_apres_conges_moyen: apresConges != null ? arrondi1(apresConges) : undefined,
           effectif_brut_moyen: arrondi1(effectifMoyen.brut),
           effectif_net_moyen: arrondi1(net),
           effectif_apres_cns_moyen: arrondi1(apresCns),
@@ -785,6 +847,11 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     heures_cns: heuresCns,
     heures_mct: heuresMct,
     heures_injustifiees: heuresInjustifiees,
+    taux_conges: tauxConges,
+    taux_conges_extra: tauxCongesExtra,
+    heures_conges: congesMesures ? Math.round(heuresCongesDuMois("conges")) : null,
+    heures_conges_extra: congesMesures ? Math.round(heuresCongesDuMois("extraordinaire")) : null,
+    conges_complet: congesMesures ? congesComplet : null,
     etp_total: scenarioKpiOverride?.effectif_brut ?? Math.round(effectifBrutEtp * 10) / 10,
     departs_prevus: departsPrevus.length,
     taux_turnover_mensuel: Math.round(tauxTurnoverMensuel * 100) / 100,
@@ -957,6 +1024,13 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
         items={injustifieesItems}
         totalHrs={injTotalHrs}
         etpPerdusTotal={injEtpTotal}
+      />
+
+      <CongesTable
+        items={congesItems}
+        totalHrs={congesTotalHrs}
+        etpTotal={congesEtpTotal}
+        complet={congesComplet}
       />
 
       {mouvements && (

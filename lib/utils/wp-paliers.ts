@@ -150,8 +150,17 @@ export interface PaliersMois {
   etpPerduMct: number;
   tauxMct: number;
   mctMesure: boolean;
-  /** Effectif DISPONIBLE : dernier palier, toutes absences retirées. */
+  /** Effectif après toutes les absences (MCT compris), avant congés. */
   apresMct: number;
+
+  /** Congés et congés extraordinaires/récup (wp-conges.ts), hors absentéisme ; 0 sans congés. */
+  heuresConges: number;
+  heuresCongesExtra: number;
+  etpPerduConges: number;
+  tauxConges: number;
+  congesMesure: boolean;
+  /** Effectif DISPONIBLE : après congés ; égal à apresMct sans congés ce mois. */
+  apresConges: number;
 
   /** Somme des trois taux : le « taux d'absentéisme global » du tableau de bord. */
   tauxGlobal: number;
@@ -197,7 +206,9 @@ export function calculerPaliers(
   absencesMct: LigneHeures[],
   absencesInjustifiees: LigneHeures[],
   mois: number,
-  annee: number
+  annee: number,
+  /** Congés de l'année, hors week-end : restreints aux actifs comme le MCT. */
+  conges: { code_salarie: string; mois?: number | string | null; duree_hrs?: number | string | null; categorie?: string | null }[] = []
 ): PaliersMois {
   const refDate = lastDayOfMonth(annee, mois);
   const joursOuvres = getWorkingDaysInMonth(annee, mois);
@@ -251,7 +262,16 @@ export function calculerPaliers(
 
   const apresCns = apresSuspension - etpPerduCns;
   const apresInjustifiees = apresCns - etpPerduInjustifiees; // effectif payé
-  const apresMct = apresInjustifiees - etpPerduMct; // effectif disponible
+  const apresMct = apresInjustifiees - etpPerduMct;
+
+  // --- Congés : même conversion que le MCT, hors absentéisme (pas dans le taux global)
+  const congesDuMois = duMois(conges).filter((a) => codes.size === 0 || codes.has(a.code_salarie));
+  const heuresConges = congesDuMois.filter((a) => a.categorie === "conges").reduce((s, a) => s + nombre(a.duree_hrs), 0);
+  const heuresCongesExtra = congesDuMois.filter((a) => a.categorie === "extraordinaire").reduce((s, a) => s + nombre(a.duree_hrs), 0);
+  const etpPerduConges = heuresTravaillables > 0 ? (heuresConges + heuresCongesExtra) / heuresTravaillables : 0;
+  const tauxConges = enPourcent(etpPerduConges);
+  const congesMesure = congesDuMois.length > 0;
+  const apresConges = apresMct - etpPerduConges; // effectif disponible
 
   const cnsMesure = cnsDuMois.length > 0;
   const mctMesure = mctDuMois.length > 0;
@@ -283,13 +303,20 @@ export function calculerPaliers(
     tauxMct,
     mctMesure,
     apresMct,
+    heuresConges,
+    heuresCongesExtra,
+    etpPerduConges,
+    tauxConges,
+    congesMesure,
+    apresConges,
     tauxGlobal: tauxCns + tauxMct + tauxInjustifiees,
     etapes: [
       { cle: "effectif-sous-contrat", libelle: "Effectif sous contrat", etp: sousContrat, retire: 0, taux: null, mesure: true },
       { cle: "effectif-apres-suspension", libelle: "Après suspension de contrat", etp: apresSuspension, retire: etpSuspendu, taux: null, mesure: true },
       { cle: "taux-cns", libelle: "Après absences CNS", etp: apresCns, retire: etpPerduCns, taux: tauxCns, mesure: cnsMesure },
       { cle: "taux-injustifiees", libelle: "Après absences injustifiées (payé)", etp: apresInjustifiees, retire: etpPerduInjustifiees, taux: tauxInjustifiees, mesure: injustifieesMesure },
-      { cle: "taux-mct", libelle: "Après MCT (disponible)", etp: apresMct, retire: etpPerduMct, taux: tauxMct, mesure: mctMesure },
+      { cle: "taux-mct", libelle: "Après MCT", etp: apresMct, retire: etpPerduMct, taux: tauxMct, mesure: mctMesure },
+      { cle: "taux-conges", libelle: "Après congés (disponible)", etp: apresConges, retire: etpPerduConges, taux: tauxConges, mesure: congesMesure },
     ],
   };
 }

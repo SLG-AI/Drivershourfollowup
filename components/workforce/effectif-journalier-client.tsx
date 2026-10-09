@@ -21,7 +21,7 @@ interface Props {
   scenarioId: string | null;
   hypotheses: { libelle: string; type: string; nbPersonnes: number; debut: string; fin: string | null }[];
   departsDonnees: number;
-  tauxAffiches: { mois: string; mesure: { cns: boolean; mct: boolean; inj: boolean }; taux: TauxMois }[];
+  tauxAffiches: { mois: string; mesure: { cns: boolean; mct: boolean; inj: boolean; conges?: boolean }; taux: TauxMois }[];
   jourChoisi: string | null;
   liste: LigneJour[] | null;
   filtresActifs: boolean;
@@ -42,6 +42,7 @@ const MOTIFS: Record<MotifJour, string> = {
   suspendu_partiel: "Suspendu partiel",
   mct: "MCT",
   injustifiee: "Absence injustifiée",
+  conge: "Congé",
   cns_partiel: "Présent (maladie CNS dans le mois)",
 };
 
@@ -299,7 +300,7 @@ export function EffectifJournalierClient(p: Props) {
             <div className="flex flex-wrap gap-2">
               {p.tauxAffiches.map((t) => (
                 <span key={t.mois} className="rounded-md border px-2 py-1">
-                  {MOIS[Number(t.mois.slice(5, 7)) - 1]} {t.mois.slice(0, 4)} : CNS {t.mesure.cns ? "mesurée" : pct(t.taux.cns)} · MCT {t.mesure.mct ? "mesurée" : pct(t.taux.mct)} · injust. {t.mesure.inj ? "mesurées" : pct(t.taux.inj)} · congés {pct(t.taux.conges)}
+                  {MOIS[Number(t.mois.slice(5, 7)) - 1]} {t.mois.slice(0, 4)} : CNS {t.mesure.cns ? "mesurée" : pct(t.taux.cns)} · MCT {t.mesure.mct ? "mesurée" : pct(t.taux.mct)} · injust. {t.mesure.inj ? "mesurées" : pct(t.taux.inj)} · congés {t.mesure.conges ? "mesurés" : pct(t.taux.conges)}
                 </span>
               ))}
             </div>

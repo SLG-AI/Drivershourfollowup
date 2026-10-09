@@ -786,6 +786,11 @@ export function projeterScenarios(e: EntreesProjection): SortieProjection {
           if (journalMois) journalMois.leaveFte = leaveFteMonth;
           const hd = headcountData[m - 1];
           if (hd) {
+            // Mois aux congés MESURÉS et complets : le réel prime sur réserve × taux
+            if (hd.effectif_apres_conges != null) {
+              hd.scenario_apres_conges = hd.effectif_apres_conges;
+              continue;
+            }
             // Base des mois réels : le disponible mesuré (injustifiées comprises, comme la projection)
             const base = hd.effectif_apres_mct ?? hd.base_scenario_apres_mct ?? hd.effectif_reel ?? hd.effectif_net;
             if (base != null) {

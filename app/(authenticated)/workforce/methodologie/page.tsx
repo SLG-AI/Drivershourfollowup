@@ -18,6 +18,7 @@ import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires } from "@/lib/utils/wp-movements";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
 import { estFinDeMission, estSortieHorsTurnover } from "@/lib/utils/wp-suspension";
+import { COLONNES_CONGES, congesHorsWeekEnd, type LigneConge } from "@/lib/utils/wp-conges";
 import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
@@ -85,7 +86,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     rosterPeriodeExacte &&
     periodesRoster.some((p) => p.mois === moisPrecedent.mois && p.annee === moisPrecedent.annee);
 
-  const [employees, employeesPrec, absences, absencesMct, absencesInj, mouvementsSirh, salaryStats] =
+  const [employees, employeesPrec, absences, absencesMct, absencesInj, mouvementsSirh, salaryStats, congesAnnee] =
     await Promise.all([
       fetchAll(
         supabase.from("wp_employees").select("*").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
@@ -106,6 +107,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
           .in("type", ["sortie", "sortie_temporaire"])
       ),
       fetchAll(supabase.from("wp_salary_stats").select("code_salarie, date_sortie, mois, annee, centre_cout, total_brut, brut_base, supplements, cout_total_secu, charges_patronales").eq("annee", selectedYear)),
+      fetchAll(supabase.from("wp_conges").select(COLONNES_CONGES).eq("annee", selectedYear)),
     ]);
   // Coûts : photo de référence salariale (dernière avec brut indice) et dernier
   // mois de statistiques salariales avec montants, comme sur la page Coûts.
@@ -155,7 +157,8 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     mct,
     injustifieesDuPerimetre(absencesInj, filtres.actifs, codesRoster),
     selectedMonth,
-    selectedYear
+    selectedYear,
+    congesHorsWeekEnd(congesAnnee as LigneConge[])
   );
 
   // Nombre de lignes MCT écartées parce qu'elles tombent un week-end : rend

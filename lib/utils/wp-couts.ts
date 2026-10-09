@@ -33,6 +33,7 @@ import { getWorkableHoursInMonth, isTempExitAt, lastDayOfMonth } from "./wp-calc
 import { estActifLe } from "./wp-effectif-moyen";
 import { etpDe, etpDisponibleDe, type LigneCns, type LigneHeures, type SalariePaliers } from "./wp-paliers";
 import { fractionSuspendueEmploye } from "./wp-suspension";
+import type { LigneConge } from "./wp-conges";
 
 /** Coefficient de charges patronales luxembourgeois retenu faute de statistiques salariales. */
 export const COEF_CHARGES_DEFAUT = 1.15;
@@ -522,8 +523,14 @@ export interface CoutsMois {
   apresInjustifiees: number;
 
   coutPerduMct: number;
-  /** Coût DISPONIBLE : dernier palier, toutes absences retirées. */
+  /** Coût après toutes les absences (MCT compris), avant congés. */
   apresMct: number;
+
+  /** Congés et congés extraordinaires/récup valorisés (wp-conges.ts) : 0 sans congés. */
+  coutPerduConges: number;
+  coutPerduExtra: number;
+  /** Coût DISPONIBLE après congés ; undefined sans congés ce mois (mesuré ou rien). */
+  apresConges?: number;
 
   /** Coût employeur moyen d'un ETP sous contrat ce mois = sousContrat / Σ ETP des actifs (0 si aucun). */
   coutMoyenEtp: number;
@@ -536,6 +543,8 @@ export interface CoutsMois {
     travaillables: number;
     mct: DetailHeuresValorisees;
     injustifiees: DetailHeuresValorisees;
+    conges: DetailHeuresValorisees;
+    extra: DetailHeuresValorisees;
   };
 
   etapes: EtapeCout[];
@@ -582,7 +591,15 @@ export function calculerCoutsPaliers(
   absencesInjustifiees: LigneHeures[],
   mois: number,
   annee: number,
-  opts: { coef: number; source: SourceSalaires; coutEtpRepli?: number; coefParCc?: Map<string, { coef: number }>; complements?: ComplementsRecurrents | null }
+  opts: {
+    coef: number;
+    source: SourceSalaires;
+    coutEtpRepli?: number;
+    coefParCc?: Map<string, { coef: number }>;
+    complements?: ComplementsRecurrents | null;
+    /** Congés de l'année, hors week-end (wp-conges.ts) : restreints aux actifs comme le MCT. */
+    conges?: LigneConge[];
+  }
 ): CoutsMois {
   const { coef, source, coutEtpRepli, coefParCc, complements } = opts;
   // Coefficient du cost center du salarié quand la paie le donne, sinon le global
@@ -675,7 +692,16 @@ export function calculerCoutsPaliers(
 
   const apresCns = apresSuspension - coutPerduCns;
   const apresInjustifiees = apresCns - coutPerduInjustifiees; // coût payé
-  const apresMct = apresInjustifiees - coutPerduMct; // coût disponible
+  const apresMct = apresInjustifiees - coutPerduMct;
+
+  // --- Congés : mêmes heures valorisées que le MCT, mesurés ou rien
+  const congesDuMoisActifs = duMois(opts.conges ?? []).filter((a) => codes.size === 0 || codes.has(a.code_salarie));
+  const lignesConges = congesDuMoisActifs.filter((a) => a.categorie === "conges");
+  const lignesExtra = congesDuMoisActifs.filter((a) => a.categorie === "extraordinaire");
+  const coutPerduConges = coutDesHeures(lignesConges);
+  const coutPerduExtra = coutDesHeures(lignesExtra);
+  const congesMesure = congesDuMoisActifs.length > 0;
+  const apresConges = congesMesure ? apresMct - coutPerduConges - coutPerduExtra : undefined; // coût disponible
 
   const cnsMesure = cnsDuMois.length > 0;
   const mctMesure = mctDuMois.length > 0;
@@ -697,19 +723,25 @@ export function calculerCoutsPaliers(
     apresInjustifiees: euro(apresInjustifiees),
     coutPerduMct: euro(coutPerduMct),
     apresMct: euro(apresMct),
+    coutPerduConges: euro(coutPerduConges),
+    coutPerduExtra: euro(coutPerduExtra),
+    apresConges: apresConges === undefined ? undefined : euro(apresConges),
     coutMoyenEtp: euro(coutMoyenEtp),
     complementsRecurrents: euro(complementsRecurrents),
     heures: {
       travaillables: heuresTravaillables,
       mct: detailHeures(mctDuMois, coutPerduMct),
       injustifiees: detailHeures(injDuMois, coutPerduInjustifiees),
+      conges: detailHeures(lignesConges, coutPerduConges),
+      extra: detailHeures(lignesExtra, coutPerduExtra),
     },
     etapes: [
       { cle: "effectif-sous-contrat", libelle: "Effectif sous contrat", cout: euro(sousContrat), retire: 0, mesure: true },
       { cle: "effectif-apres-suspension", libelle: "Après suspension de contrat", cout: euro(apresSuspension), retire: euro(coutSuspendu), mesure: true },
       { cle: "taux-cns", libelle: "Après absences CNS", cout: euro(apresCns), retire: euro(coutPerduCns), mesure: cnsMesure },
       { cle: "taux-injustifiees", libelle: "Après absences injustifiées (payé)", cout: euro(apresInjustifiees), retire: euro(coutPerduInjustifiees), mesure: injustifieesMesure },
-      { cle: "taux-mct", libelle: "Après MCT (disponible)", cout: euro(apresMct), retire: euro(coutPerduMct), mesure: mctMesure },
+      { cle: "taux-mct", libelle: "Après MCT", cout: euro(apresMct), retire: euro(coutPerduMct), mesure: mctMesure },
+      { cle: "taux-conges", libelle: "Après congés (disponible)", cout: euro(apresConges ?? apresMct), retire: euro(coutPerduConges + coutPerduExtra), mesure: congesMesure },
     ],
     reporte: { cout: source.reporte, codesManquants },
   };

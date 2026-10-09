@@ -9,6 +9,8 @@ import { analyserAbsenteisme } from "@/lib/utils/wp-absenteisme";
 import { lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { HistoryClient } from "./history-client";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
+import { COLONNES_CONGES, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
+import { analyserDisponibilite } from "@/lib/utils/wp-disponibilite";
 
 interface Props {
   searchParams: Promise<{ year?: string; societes?: string; fonctions?: string; cc?: string; depots?: string; equipes?: string; contrats?: string; employee?: string }>;
@@ -23,7 +25,7 @@ export default async function HistoryPage({ searchParams }: Props) {
   // Roster historisé : on se cale sur la photographie d'effectif la plus récente.
   const rosterPeriode = await getLatestRosterPeriod(supabase);
 
-  const [employeesBruts, absencesBrutes, salaryStatsBruts, photosBrutes, mouvementsBruts, mctBruts, injustifieesBrutes] = await Promise.all([
+  const [employeesBruts, absencesBrutes, salaryStatsBruts, photosBrutes, mouvementsBruts, mctBruts, injustifieesBrutes, congesBruts, importsMct] = await Promise.all([
     fetchAll(rosterPeriode
       ? supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement").eq("mois", rosterPeriode.mois).eq("annee", rosterPeriode.annee)
       : supabase.from("wp_employees").select("code_salarie, date_entree, date_sortie, vehicle_type, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_departement").limit(0)),
@@ -40,6 +42,10 @@ export default async function HistoryPage({ searchParams }: Props) {
     // Onglet Absentéisme : lignes MCT (une par jour) et absences injustifiées
     fetchAll(supabase.from("wp_absences_mct").select("code_salarie, nom_salarie, date_absence, duree_hrs, mois, annee")),
     fetchAll(supabase.from("wp_absences_injustifiees").select("code_salarie, nom_salarie, date_debut, date_fin, duree_hrs, mois, annee")),
+    // Onglet Disponibilité : congés pris et drapeau « congés des chauffeurs »
+    // des imports MCT (un mois n'est complet que si son dernier import l'a).
+    fetchAll(supabase.from("wp_conges").select(COLONNES_CONGES)),
+    fetchAll(supabase.from("wp_imports").select("mois, annee, imported_at, conges_chauffeurs_inclus").eq("file_type", "absences_mct").eq("status", "completed")),
   ]);
 
   // Périmètre des filtres de l'en-tête (fonctions, centres de coût, dépôts,
@@ -56,6 +62,7 @@ export default async function HistoryPage({ searchParams }: Props) {
   const mouvements = dansPerimetre(mouvementsBruts || []);
   const absencesMct = dansPerimetre(mctBruts || []);
   const absencesInjustifiees = dansPerimetre(injustifieesBrutes || []);
+  const conges = dansPerimetre((congesBruts || []) as unknown as LigneConge[]);
 
   if (!employeesBruts || employeesBruts.length === 0) {
     return (
@@ -266,6 +273,23 @@ export default async function HistoryPage({ searchParams }: Props) {
     .filter((yr) => moisCouverts(yr).length > 0)
     .map((yr) => analyserTurnover(yr, moisCouverts(yr), photos, mouvements || []));
 
+  // Onglet Disponibilité : sous contrat, après MCT et disponible après congés
+  // (mois aux congés complets seulement)
+  const disponibiliteAnalyses = allYears
+    .filter((yr) => moisCouverts(yr).length > 0)
+    .map((yr) => analyserDisponibilite(
+      yr,
+      moisCouverts(yr),
+      photos,
+      absences || [],
+      absencesMct || [],
+      absencesInjustifiees || [],
+      conges,
+      moisCongesComplets(importsMct || [], yr),
+      filtres.actifs
+    ))
+    .filter((an) => an.parMois.length > 0);
+
   const avgTurnover = turnoverByYear.length > 0
     ? turnoverByYear.reduce((sum, t) => sum + t.rate, 0) / turnoverByYear.length
     : 5;
@@ -290,6 +314,7 @@ export default async function HistoryPage({ searchParams }: Props) {
         years={allYears}
         turnoverAnalyses={turnoverAnalyses}
         absenteismeAnalyses={absenteismeAnalyses}
+        disponibiliteAnalyses={disponibiliteAnalyses}
         anneeChoisie={anneeChoisie}
       />
     </div>

@@ -19,7 +19,9 @@ import { FRENCH_MONTHS_SHORT } from "@/lib/constants";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TurnoverAnalysis } from "@/components/workforce/turnover-analysis";
 import { AbsenteeismAnalysis } from "@/components/workforce/absenteeism-analysis";
+import { DisponibiliteAnalysis } from "@/components/workforce/disponibilite-analysis";
 import type { AbsenteismeAnnee } from "@/lib/utils/wp-absenteisme";
+import type { DisponibiliteAnnee } from "@/lib/utils/wp-disponibilite";
 import type { TurnoverAnnee } from "@/lib/utils/wp-turnover";
 import { Activity, TrendingDown, Users, Info } from "lucide-react";
 
@@ -43,6 +45,7 @@ interface Props {
   years: number[];
   turnoverAnalyses: TurnoverAnnee[];
   absenteismeAnalyses: AbsenteismeAnnee[];
+  disponibiliteAnalyses: DisponibiliteAnnee[];
   /** Année de la barre de filtres, présélectionnée dans les onglets d'analyse */
   anneeChoisie: number | null;
 }
@@ -58,6 +61,7 @@ export function HistoryClient({
   years,
   turnoverAnalyses,
   absenteismeAnalyses,
+  disponibiliteAnalyses,
   anneeChoisie,
 }: Props) {
   // Build absenteeism chart data (months as rows, years as columns)
@@ -95,6 +99,7 @@ export function HistoryClient({
         <TabsTrigger value="apercu">Vue d&apos;ensemble</TabsTrigger>
         <TabsTrigger value="turnover">Turnover</TabsTrigger>
         <TabsTrigger value="absenteisme">Absentéisme</TabsTrigger>
+        <TabsTrigger value="disponibilite">Disponibilité</TabsTrigger>
       </TabsList>
 
       <TabsContent value="turnover" className="mt-4">
@@ -103,6 +108,10 @@ export function HistoryClient({
 
       <TabsContent value="absenteisme" className="mt-4">
         <AbsenteeismAnalysis analyses={absenteismeAnalyses} anneeInitiale={anneeChoisie} />
+      </TabsContent>
+
+      <TabsContent value="disponibilite" className="mt-4">
+        <DisponibiliteAnalysis analyses={disponibiliteAnalyses} anneeInitiale={anneeChoisie} />
       </TabsContent>
 
       <TabsContent value="apercu" className="mt-4 space-y-6">
