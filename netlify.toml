@@ -4,3 +4,8 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+# Analyste IA : la fonction de fond lit les logos de la charte SLG au rendu du deck
+[functions]
+  node_bundler = "esbuild"
+  included_files = ["lib/analyses/brand/**"]
