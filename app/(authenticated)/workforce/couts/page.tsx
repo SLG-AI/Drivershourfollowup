@@ -15,6 +15,10 @@ import { reconcilierPaie } from "@/lib/utils/wp-reconciliation-paie";
 import { mentionCalendrierPaie } from "@/lib/utils/wp-calendrier-paie";
 import { projeterDecomposition, projeterRealise, projeterVariable, treiziemeMoisEmployes, type HeuresMois, type LignePaieTreizieme, type LignePaieVariable } from "@/lib/utils/wp-variable-attendu";
 import { VariableAttendu } from "@/components/workforce/variable-attendu";
+import { AmplitudesPrimes } from "@/components/workforce/amplitudes-primes";
+import { SixiemesJours } from "@/components/workforce/sixiemes-jours";
+import { lignesDeLaPeriode, moisFinPeriode, periodeRegleeParLaPaie, sixiemesJoursParPeriode, tranchesSixiemesJours, ventilerSixiemesJours, type LigneSixiemeJour } from "@/lib/utils/wp-sixiemes-jours";
+import { amplitudesParMois, estChauffeur, tranchesParJournees, ventilerAmplitudes, type LigneAmplitude } from "@/lib/utils/wp-amplitudes";
 import { injustifieesDuPerimetre } from "@/lib/utils/wp-paliers";
 import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
@@ -95,7 +99,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const anneeFuture = selectedYear > now.getFullYear();
   const colonnesPhoto = "code_salarie, code_employeur, mois, annee, date_entree, date_sortie, date_debut_sortie_temporaire, date_fin_sortie_temporaire, taux_occupation, est_sortie_temporaire, description_motif_sortie, description_fonction, centre_cout, description_service, description_equipe, type_contrat, brut_indice";
 
-  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie, heuresConducteurs, congesAnnee, importsMct] = await Promise.all([
+  const [employees, absences, salaryStats, absencesMct, absencesInjustifiees, mouvementsSirh, photosAnnee, absencesAnneePrec, mctAnneePrec, injAnneePrec, periodeReference, dernierMoisStats, allScenariosRaw, salaryLines, dernierMoisPaie, heuresConducteurs, congesAnnee, importsMct, paieToutesAnnees] = await Promise.all([
     fetchAll(supabase.from("wp_employees").select("*").eq("mois", rosterPeriode?.mois ?? -1).eq("annee", rosterPeriode?.annee ?? -1)),
     fetchAll(supabase.from("wp_absences").select("*").eq("annee", selectedYear)).then(plafonnerTauxCns),
     fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, date_sortie, centre_cout, hrs_supp, total_brut, brut_base, supplements, cout_total_secu, charges_patronales, cm_patronale, cp_patronale, assurance_accident, allocation_familiale, sante_travail, mutualite, cot_pat_autres").eq("annee", selectedYear)),
@@ -127,6 +131,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     // Congés de l'année, et les imports MCT qui disent quels mois sont complets
     fetchAll(supabase.from("wp_conges").select(COLONNES_CONGES).eq("annee", selectedYear)),
     fetchAll(supabase.from("wp_imports").select("mois, annee, imported_at, conges_chauffeurs_inclus").eq("file_type", "absences_mct").eq("status", "completed").eq("annee", selectedYear)),
+    // Paie de toutes les années, colonnes minimales : les 6e jours se lisent par période de référence, à cheval sur deux années
+    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, fonction, nat_prr").order("id")),
   ]);
   // Scénarios : mêmes lignes brutes que le tableau de bord, plus les leviers de coût
   const scenarioOptions: ScenarioOption[] = allScenariosRaw.map((s) => ({ id: String(s.id), name: String(s.name) }));
@@ -395,6 +401,35 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   // Moins de 3 salariés dans un dépôt ou une fonction : regroupés en « Autres », aucun salaire individuel lisible
   const paieParDepot = anonymiserVentilation(ventilerPar(lignesPaieDuMois, (l) => depotParCode.get(l.code_salarie), "(hors photo roster)"), "Autres dépôts");
   const paieParFonction = anonymiserVentilation(ventilerPar(lignesPaieDuMois, (l) => l.fonction, "(sans fonction)"), "Autres fonctions");
+
+  // ---- Amplitudes de service, lues dans les primes AM1/AM2 (wp-amplitudes.ts)
+  const lignesAmplitude = lignesPaie as unknown as LigneAmplitude[];
+  const amplitudesMois = amplitudesParMois(lignesAmplitude, codesPerimetre);
+  const amplitudesDuMois = amplitudesMois.find((m) => m.mois === selectedMonth) ?? null;
+  const lignesAmplitudeDuMois = lignesPaieDuMois as unknown as LigneAmplitude[];
+  const tauxAmplitude = amplitudesDuMois?.taux ?? { am1: null, am2: null };
+  const amplitudesTranches = tranchesParJournees(lignesAmplitudeDuMois, tauxAmplitude);
+  const amplitudesParDepot = ventilerAmplitudes(lignesAmplitudeDuMois, tauxAmplitude, (l) => depotParCode.get(l.code_salarie), "(hors photo roster)", "Autres dépôts");
+  // Chauffeurs seulement : une autre fonction isolée (un ouvrier) absorberait sinon toute une fonction de chauffeurs dans « Autres »
+  const amplitudesParFonction = ventilerAmplitudes(lignesAmplitudeDuMois.filter((l) => estChauffeur(l.fonction)), tauxAmplitude, (l) => l.fonction, "(sans fonction)", "Autres fonctions");
+
+  // ---- Jours supplémentaires (6e jours, prime PRR) par période de référence (wp-sixiemes-jours.ts)
+  const lignesSixiemes = paieToutesAnnees as unknown as LigneSixiemeJour[];
+  const sixiemesPeriodes = sixiemesJoursParPeriode(lignesSixiemes, codesPerimetre);
+  const periodeReglee = periodeRegleeParLaPaie(selectedMonth, selectedYear);
+  const sixiemesSelection = sixiemesPeriodes.find((p) => p.annee === periodeReglee.annee && p.numero === periodeReglee.numero) ?? null;
+  const lignesSixiemesSelection = sixiemesSelection
+    ? lignesDeLaPeriode(lignesSixiemes.filter((l) => !codesPerimetre || codesPerimetre.has(l.code_salarie)), sixiemesSelection)
+    : [];
+  const depotFinPeriode = new Map<string, string>();
+  if (sixiemesSelection) {
+    (photoDuMoisDe(moisFinPeriode(sixiemesSelection), sixiemesSelection.annee) as SalarieCout[]).forEach((e) => depotFinPeriode.set(e.code_salarie, e.description_service || ""));
+  }
+  const sixiemesTranches = tranchesSixiemesJours(lignesSixiemesSelection);
+  const moisPaiePrincipal = sixiemesSelection ? { mois: sixiemesSelection.moisPaie, annee: sixiemesSelection.anneePaie } : { mois: selectedMonth, annee: selectedYear };
+  const sixiemesParDepot = ventilerSixiemesJours(lignesSixiemesSelection, moisPaiePrincipal, (l) => depotFinPeriode.get(l.code_salarie), "(hors photo roster)", "Autres dépôts");
+  // Chauffeurs seulement, comme pour les amplitudes : une fonction isolée absorberait sinon les chauffeurs dans « Autres »
+  const sixiemesParFonction = ventilerSixiemesJours(lignesSixiemesSelection.filter((l) => estChauffeur(l.fonction)), moisPaiePrincipal, (l) => l.fonction, "(sans fonction)", "Autres fonctions");
 
   // ---- Variable lié au planning : réalisé et attendu (wp-variable-attendu.ts)
   const heuresVariable: HeuresMois[] = (heuresConducteurs as Record<string, unknown>[])
@@ -759,6 +794,31 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
           natures={naturesDuMois}
           parDepot={paieParDepot}
           parFonction={paieParFonction}
+          perimetreFiltre={filtres.actifs}
+        />
+      )}
+
+      {amplitudesMois.length > 0 && (
+        <AmplitudesPrimes
+          annee={selectedYear}
+          moisLabel={moisLabel}
+          parMois={amplitudesMois}
+          duMois={amplitudesDuMois}
+          tranches={amplitudesTranches}
+          parDepot={amplitudesParDepot}
+          parFonction={amplitudesParFonction}
+          perimetreFiltre={filtres.actifs}
+        />
+      )}
+
+      {sixiemesPeriodes.length > 0 && (
+        <SixiemesJours
+          moisLabel={moisLabel}
+          periodes={sixiemesPeriodes}
+          selection={sixiemesSelection}
+          tranches={sixiemesTranches}
+          parDepot={sixiemesParDepot}
+          parFonction={sixiemesParFonction}
           perimetreFiltre={filtres.actifs}
         />
       )}
