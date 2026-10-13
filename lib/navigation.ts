@@ -14,6 +14,7 @@ import {
   BookOpen,
   Euro,
   CalendarDays,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -64,6 +65,7 @@ export const modules: NavModule[] = [
 ];
 
 export const globalNavItems: NavItem[] = [
+  { href: "/analyses", label: "Analyses IA", icon: Sparkles },
   { href: "/settings", label: "Paramètres", icon: Settings },
 ];
 

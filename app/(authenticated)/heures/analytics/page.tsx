@@ -88,7 +88,7 @@ export default async function AnalyticsPage({ searchParams }: Props) {
     // 3. Selected periods for month slots
     supabase
       .from("reference_periods")
-      .select("year, period_number")
+      .select("id, year, period_number")
       .in("id", periodIds)
       .order("year")
       .order("period_number")
@@ -203,7 +203,6 @@ export default async function AnalyticsPage({ searchParams }: Props) {
   allMonthSlots.sort((a, b) => a.key.localeCompare(b.key));
 
   // Index RPC results by year-month key
-  const PERIOD_END_MONTHS = new Set<number>(PERIODS.map((p) => p.endMonth));
   const monthlyMap = new Map<string, { sumCounterEnd: number; sumOvertimePay: number; sumMissingHours: number; sumPositiveHours: number; countDrivers: number }>();
   (monthlyData || []).forEach((r) => {
     const key = `${r.year}-${String(r.month).padStart(2, "0")}`;
@@ -216,21 +215,39 @@ export default async function AnalyticsPage({ searchParams }: Props) {
     });
   });
 
+  // Solde positif payé en fin de période : somme, conducteur par conducteur, du
+  // dernier compteur positif de la période (même règle que la comparaison par
+  // période). Rattaché au mois de fin, seulement si ce mois a des données — sinon
+  // la période est en cours et rien n'est encore payé.
+  // Pas d'équivalent côté manquantes : missing_hours est déjà mensuel, alors que
+  // counter_end cumule la période — l'ajouter recomptait les mois précédents.
+  const periodEndKeyById = new Map<string, string>();
+  for (const sp of selectedPeriods || []) {
+    const periodDef = PERIODS.find((p) => p.number === sp.period_number);
+    if (periodDef) {
+      periodEndKeyById.set(sp.id, `${sp.year}-${String(periodDef.endMonth).padStart(2, "0")}`);
+    }
+  }
+  const positiveEndByKey = new Map<string, number>();
+  distData.forEach((d) => {
+    const key = periodEndKeyById.get(d.period_id);
+    const counter = Number(d.latest_counter);
+    if (!key || counter <= 0) return;
+    positiveEndByKey.set(key, (positiveEndByKey.get(key) || 0) + counter);
+  });
+
   const monthlyAvg = allMonthSlots.map(({ month, year, key }) => {
     const data = monthlyMap.get(key);
     const totalOvertimePay = data?.sumOvertimePay || 0;
     const totalMissingHours = data?.sumMissingHours || 0;
     const sumCounterEnd = data?.sumCounterEnd || 0;
     const countDrivers = data?.countDrivers || 0;
-    const isPeriodEnd = PERIOD_END_MONTHS.has(month);
-    // For period-end months, positive/negative counters are approximated from the sum
-    const positiveCounters = isPeriodEnd ? Math.max(0, sumCounterEnd) : 0;
-    const negativeCounters = isPeriodEnd ? Math.abs(Math.min(0, sumCounterEnd)) : 0;
+    const positiveCounters = data ? positiveEndByKey.get(key) || 0 : 0;
     return {
       name: `${FRENCH_MONTHS_SHORT[month]} ${year}`,
       moyenne: countDrivers > 0 ? sumCounterEnd / countDrivers : 0,
       heuresPayees: totalOvertimePay + positiveCounters,
-      heuresManquantes: totalMissingHours + negativeCounters,
+      heuresManquantes: totalMissingHours,
     };
   });
 
