@@ -39,6 +39,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Upload } from "lucide-react";
+import { agregerInterimParCostCenter, type CoutInterim, type RattachementInterim } from "@/lib/utils/wp-interim";
+
+/** Composantes de l'export SLG Intérim, dans l'ordre de sa page Coûts. */
+const COMPOSANTES_INTERIM: { key: string; label: string }[] = [
+  { key: "base", label: "Base" },
+  { key: "overtime", label: "Heures sup." },
+  { key: "night", label: "Nuit" },
+  { key: "sunday", label: "Dimanche" },
+  { key: "holiday", label: "Férié" },
+  { key: "amplitude_11", label: "Amplitude 11" },
+  { key: "amplitude_12", label: "Amplitude 12" },
+  { key: "meal_voucher", label: "Chèques repas" },
+];
 
 const MONTH_LABELS: Record<number, string> = {
   1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril",
@@ -376,6 +389,32 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const lignesCostCenter = [...parCostCenter.entries()]
     .map(([cc, l]) => ({ cc, ...l, brutMoyen: l.avecBrut > 0 ? l.brutPleinTemps / l.avecBrut : null, coutEtp: l.etp > 0 ? l.cout / l.etp : null }))
     .sort((a, b) => b.cout - a.cout);
+
+  // ---- Intérim du mois : coût attendu (SLG Intérim) rattaché par le roster intérim
+  const [coutsInterim, rosterInterim] = await Promise.all([
+    fetchAll<CoutInterim>(supabase.from("wp_interim_costs").select("code_salarie, mois, annee, composante, quantite, montant_facturable").eq("annee", selectedYear).eq("mois", selectedMonth)),
+    fetchAll<RattachementInterim>(supabase.from("wp_interim_roster").select("code_salarie, mois, annee, type_contrat, code_employeur, centre_cout, description_service, description_fonction, description_equipe").eq("annee", selectedYear).eq("mois", selectedMonth)),
+  ]);
+  const interimParCc = agregerInterimParCostCenter(
+    coutsInterim.map((c) => ({ ...c, quantite: Number(c.quantite) || 0, montant_facturable: Number(c.montant_facturable) || 0 })),
+    rosterInterim,
+    selectedYear,
+    selectedMonth,
+    filtres
+  );
+  const interimDe = new Map(interimParCc.map((l) => [l.centre_cout, l]));
+  const afficherSalaries = !aucunSalaire && lignesCostCenter.length > 0;
+  // Une ligne par cost center présent d'un côté OU de l'autre
+  const lignesCcAvecInterim = [
+    ...(afficherSalaries ? lignesCostCenter : []).map((l) => ({ cc: l.cc, salaries: l as (typeof lignesCostCenter)[number] | null, interim: interimDe.get(l.cc) ?? null })),
+    ...interimParCc
+      .filter((l) => !afficherSalaries || !parCostCenter.has(l.centre_cout))
+      .map((l) => ({ cc: l.centre_cout, salaries: null, interim: l })),
+  ].sort((a, b) => ((b.salaries?.cout ?? 0) + (b.interim?.montant ?? 0)) - ((a.salaries?.cout ?? 0) + (a.interim?.montant ?? 0)));
+  const totalInterim = interimParCc.reduce(
+    (t, l) => ({ montant: t.montant + l.montant, heures: t.heures + l.heures, etp: t.etp + l.etp }),
+    { montant: 0, heures: 0, etp: 0 }
+  );
 
   // ---- Décomposition de la paie par famille de natures (Liste des salaires)
   const lignesPaie = salaryLines as unknown as LignePaieDecomposable[];
@@ -827,12 +866,15 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
         <VariableAttendu projection={projectionVariable} coef={coefficient.coef} perimetreFiltre={filtres.actifs} />
       )}
 
-      {!aucunSalaire && lignesCostCenter.length > 0 && (
+      {lignesCcAvecInterim.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Coût employeur par cost center — {moisLabel}</CardTitle>
             <CardDescription>
               Salariés sous contrat en fin de mois. Coût = brut plein temps × (1 + compléments récurrents{complements ? `, ${(complements.global.taux * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} % ou le taux du cost center` : ""}) × taux d&apos;occupation × coefficient de charges ({coefficient.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })} par défaut, ou celui du cost center lu dans la paie) ; un salarié sans brut est compté au coût moyen par ETP du périmètre.
+              {interimParCc.length > 0 && (
+                <> Intérim : coût attendu calculé par SLG Intérim (montant facturable, coefficient d&apos;agence compris), rattaché par le roster intérim du mois ; ETP = heures prestées ÷ (jours ouvrés du mois × 8 h).</>
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -845,17 +887,71 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                   <TableHead className="text-xs text-right">Brut plein temps moyen</TableHead>
                   <TableHead className="text-xs text-right">Coût par ETP</TableHead>
                   <TableHead className="text-xs text-right">Coût sous contrat</TableHead>
+                  {interimParCc.length > 0 && (
+                    <>
+                      <TableHead className="text-xs text-right">Heures intérim</TableHead>
+                      <TableHead className="text-xs text-right">ETP intérim</TableHead>
+                      <TableHead className="text-xs text-right">Coût intérim</TableHead>
+                      <TableHead className="text-xs text-right">Total</TableHead>
+                    </>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {lignesCostCenter.map((l) => (
-                  <TableRow key={l.cc}>
-                    <TableCell className="text-sm font-medium">{l.cc}</TableCell>
-                    <TableCell className="text-sm text-right">{l.n.toLocaleString("fr-FR")}{l.avecBrut < l.n ? <span className="ml-1 text-xs text-amber-600">({l.n - l.avecBrut} sans brut)</span> : null}</TableCell>
-                    <TableCell className="text-sm text-right">{l.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}</TableCell>
-                    <TableCell className="text-sm text-right">{l.brutMoyen != null ? formatEuros(l.brutMoyen) : "—"}</TableCell>
-                    <TableCell className="text-sm text-right">{l.coutEtp != null ? formatEuros(l.coutEtp) : "—"}</TableCell>
-                    <TableCell className="text-sm text-right font-medium">{formatEuros(l.cout)}</TableCell>
+                {lignesCcAvecInterim.map(({ cc, salaries: l, interim: it }) => (
+                  <TableRow key={cc}>
+                    <TableCell className="text-sm font-medium">{cc}</TableCell>
+                    <TableCell className="text-sm text-right">{l ? <>{l.n.toLocaleString("fr-FR")}{l.avecBrut < l.n ? <span className="ml-1 text-xs text-amber-600">({l.n - l.avecBrut} sans brut)</span> : null}</> : "—"}</TableCell>
+                    <TableCell className="text-sm text-right">{l ? l.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}</TableCell>
+                    <TableCell className="text-sm text-right">{l?.brutMoyen != null ? formatEuros(l.brutMoyen) : "—"}</TableCell>
+                    <TableCell className="text-sm text-right">{l?.coutEtp != null ? formatEuros(l.coutEtp) : "—"}</TableCell>
+                    <TableCell className="text-sm text-right font-medium">{l ? formatEuros(l.cout) : "—"}</TableCell>
+                    {interimParCc.length > 0 && (
+                      <>
+                        <TableCell className="text-sm text-right">{it ? it.heures.toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}</TableCell>
+                        <TableCell className="text-sm text-right">{it ? it.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}</TableCell>
+                        <TableCell className="text-sm text-right">{it ? formatEuros(it.montant) : "—"}</TableCell>
+                        <TableCell className="text-sm text-right font-medium">{formatEuros((l?.cout ?? 0) + (it?.montant ?? 0))}</TableCell>
+                      </>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {interimParCc.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Intérim par composante — {moisLabel}</CardTitle>
+            <CardDescription>
+              Montant facturable par composante du coût attendu (SLG Intérim). Total : {formatEuros(totalInterim.montant)},{" "}
+              {totalInterim.heures.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} h, {totalInterim.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ETP.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Cost center</TableHead>
+                  <TableHead className="text-xs text-right">Intérimaires</TableHead>
+                  {COMPOSANTES_INTERIM.map((c) => (
+                    <TableHead key={c.key} className="text-xs text-right">{c.label}</TableHead>
+                  ))}
+                  <TableHead className="text-xs text-right">Total</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {interimParCc.map((l) => (
+                  <TableRow key={l.centre_cout}>
+                    <TableCell className="text-sm font-medium">{l.centre_cout}</TableCell>
+                    <TableCell className="text-sm text-right">{l.intervenants.toLocaleString("fr-FR")}</TableCell>
+                    {COMPOSANTES_INTERIM.map((c) => (
+                      <TableCell key={c.key} className="text-sm text-right">{l.composantes[c.key] ? formatEuros(l.composantes[c.key].montant) : "—"}</TableCell>
+                    ))}
+                    <TableCell className="text-sm text-right font-medium">{formatEuros(l.montant)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

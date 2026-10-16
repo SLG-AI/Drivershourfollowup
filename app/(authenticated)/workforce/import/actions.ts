@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
 import type { WpFileType } from "@/lib/utils/wp-excel-parser";
 import { preparerLignesPaie, preparerStatsSalariales } from "@/lib/utils/wp-salary-import";
+import { controlerRattachement } from "@/lib/utils/wp-interim";
 import {
   controlerDureesAbsence,
   messagesControleDurees,
@@ -21,6 +22,8 @@ interface WpImportInput {
   conges?: Record<string, unknown>[];
   /** Export MCT : le fichier contient les congés des chauffeurs (mois complet). */
   congesChauffeursInclus?: boolean;
+  /** Roster : lignes intérim écartées des effectifs, rangées dans wp_interim_roster. */
+  interimRoster?: Record<string, unknown>[];
 }
 
 export async function importWpData(input: WpImportInput) {
@@ -55,7 +58,7 @@ export async function importWpData(input: WpImportInput) {
 
     switch (input.fileType) {
       case "roster_rh":
-        await importRosterRH(supabase, input.data, importId, input.mois, input.annee);
+        await importRosterRH(supabase, input.data, input.interimRoster ?? [], importId, input.mois, input.annee);
         break;
       case "salary_stats":
         rowCount = await importSalaryStats(supabase, input.data, importId, input.mois, input.annee);
@@ -75,6 +78,9 @@ export async function importWpData(input: WpImportInput) {
       case "mouvements":
         await importMouvements(supabase, input.data, importId);
         break;
+      case "interim_couts":
+        rowCount = await importInterimCosts(supabase, input.data, importId);
+        break;
     }
 
     // Update import status
@@ -93,12 +99,21 @@ export async function importWpData(input: WpImportInput) {
       })
       .eq("id", importRecord.id);
 
-    throw error;
+    // Rendu plutôt que levé : en production, Next masque le message d'une
+    // erreur levée par une action serveur, et l'écran n'afficherait pas la raison.
+    return { success: false as const, rowCount: 0, error: error instanceof Error ? error.message : "Erreur inconnue" };
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function importRosterRH(supabase: any, data: Record<string, unknown>[], importId: string, mois?: number, annee?: number) {
+async function importRosterRH(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  data: Record<string, unknown>[],
+  interimRoster: Record<string, unknown>[],
+  importId: string,
+  mois?: number,
+  annee?: number
+) {
   // Le roster est historisé : un import ne remplace QUE sa propre période.
   // Sans période, on effacerait un mois au hasard — on refuse plutôt.
   if (!mois || !annee) {
@@ -123,6 +138,75 @@ async function importRosterRH(supabase: any, data: Record<string, unknown>[], im
     const { error } = await supabase.from("wp_employees").insert(batch);
     if (error) throw new Error(`Erreur insertion roster (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
   }
+
+  // Intérimaires : remplacés avec leur photo, jamais mêlés à wp_employees.
+  await supabase.from("wp_interim_roster").delete().eq("mois", mois).eq("annee", annee);
+  const lignesInterim = interimRoster.map((r) => ({
+    code_salarie: String(r.code_salarie ?? ""),
+    type_contrat: r.type_contrat ?? null,
+    code_employeur: r.code_employeur ?? null,
+    centre_cout: r.centre_cout ?? null,
+    description_service: r.description_service ?? null,
+    description_fonction: r.description_fonction ?? null,
+    description_equipe: r.description_equipe ?? null,
+    mois,
+    annee,
+    import_id: importId,
+  }));
+  for (let i = 0; i < lignesInterim.length; i += 200) {
+    const { error } = await supabase.from("wp_interim_roster").insert(lignesInterim.slice(i, i + 200));
+    if (error) throw new Error(`Erreur insertion roster intérim: ${error.message}`);
+  }
+}
+
+/**
+ * Coûts intérim (export SLG Intérim). Bloqué si un code n'est pas dans le
+ * roster intérim de son mois (décision utilisateur) : le roster du mois doit
+ * être importé d'abord. Chaque mois présent dans le fichier est remplacé.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function importInterimCosts(supabase: any, data: Record<string, unknown>[], importId: string): Promise<number> {
+  // Colonnes listées une à une : rien d'autre que le fichier n'arrive en base.
+  const lignes = data.map((r) => ({
+    code_salarie: String(r.code_salarie ?? "").trim(),
+    mois: Number(r.mois),
+    annee: Number(r.annee),
+    agence: r.agence ? String(r.agence) : null,
+    population: r.population ? String(r.population) : null,
+    composante: String(r.composante ?? ""),
+    quantite: Number(r.quantite) || 0,
+    unite: r.unite ? String(r.unite) : null,
+    montant_avant_coefficient: Number(r.montant_avant_coefficient) || 0,
+    coefficient: r.coefficient === null || r.coefficient === undefined ? null : Number(r.coefficient),
+    montant_facturable: Number(r.montant_facturable) || 0,
+  }));
+  if (lignes.some((l) => !l.code_salarie || !(l.mois >= 1 && l.mois <= 12) || !l.annee || !l.composante)) {
+    throw new Error("Fichier de coûts intérim invalide : code, période ou composante manquant.");
+  }
+  if (lignes.length === 0) return 0;
+
+  const periodes = Array.from(new Map(lignes.map((l) => [`${l.annee}-${l.mois}`, { annee: l.annee, mois: l.mois }])).values());
+  const roster: { code_salarie: string; mois: number; annee: number }[] = [];
+  const salaries: { code_salarie: string; mois: number; annee: number }[] = [];
+  for (const p of periodes) {
+    roster.push(...(await fetchAll(supabase.from("wp_interim_roster").select("code_salarie, mois, annee").eq("mois", p.mois).eq("annee", p.annee))));
+    salaries.push(...(await fetchAll(supabase.from("wp_employees").select("code_salarie, mois, annee").eq("mois", p.mois).eq("annee", p.annee))));
+  }
+  const erreurs = controlerRattachement(lignes, roster, salaries);
+  if (erreurs.length > 0) {
+    throw new Error(`Import refusé, importez d'abord le roster HRIS du mois avec ces intérimaires. ${erreurs.join(" ")}`);
+  }
+
+  for (const p of periodes) {
+    const { error } = await supabase.from("wp_interim_costs").delete().eq("mois", p.mois).eq("annee", p.annee);
+    if (error) throw new Error(`Erreur suppression coûts intérim ${p.mois}/${p.annee}: ${error.message}`);
+  }
+  for (let i = 0; i < lignes.length; i += 200) {
+    const batch = lignes.slice(i, i + 200).map((l) => ({ ...l, import_id: importId }));
+    const { error } = await supabase.from("wp_interim_costs").insert(batch);
+    if (error) throw new Error(`Erreur insertion coûts intérim (batch ${Math.floor(i / 200) + 1}): ${error.message}`);
+  }
+  return lignes.length;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

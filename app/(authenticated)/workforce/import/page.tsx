@@ -60,6 +60,13 @@ const FILE_TYPES: { id: WpFileType; label: string; description: string; icon: ty
     example: "Absences injustifiées.csv",
   },
   {
+    id: "interim_couts",
+    label: "Coûts intérim (SLG Intérim)",
+    description: "Coût attendu des intérimaires par composante, exporté de la page Coûts de SLG Intérim (sans filtre). Rattaché au dépôt et au cost center par le roster du mois, à importer d'abord.",
+    icon: Receipt,
+    example: "couts-interimaires-*.xlsx",
+  },
+  {
     id: "mouvements",
     label: "Mouvements (IN/OUT)",
     description: "Entrées, sorties et sorties temporaires constatées, avec date et motif réels. Date les départs en cours de mois absents du roster.",
@@ -207,7 +214,9 @@ export default function WorkforceImportPage() {
         annee: overrideYear || parseResult.detectedYear,
         conges: parseResult.conges as unknown as Record<string, unknown>[] | undefined,
         congesChauffeursInclus,
+        interimRoster: parseResult.interimRoster as unknown as Record<string, unknown>[] | undefined,
       });
+      if (!result.success) throw new Error(result.error);
 
       setProgress(100);
       setStage("done");

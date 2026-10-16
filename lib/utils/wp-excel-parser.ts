@@ -6,6 +6,7 @@ import {
   messagesControleMontantsSalariaux,
 } from "./wp-controle-montants";
 import { NATURES, natureDepuisEntete, sommeNatures } from "./wp-natures-paie";
+import { estInterim } from "./wp-filtres";
 import * as XLSX from "xlsx";
 
 // ============================================================
@@ -75,7 +76,7 @@ function findCol(headers: string[], ...keywords: string[]): number {
 // Types
 // ============================================================
 
-export type WpFileType = "roster_rh" | "salary_stats" | "salary_lines" | "absences_cns" | "absences_mct" | "absences_injustifiees" | "mouvements";
+export type WpFileType = "roster_rh" | "salary_stats" | "salary_lines" | "absences_cns" | "absences_mct" | "absences_injustifiees" | "mouvements" | "interim_couts";
 
 export interface WpParseResult {
   fileType: WpFileType;
@@ -91,6 +92,8 @@ export interface WpParseResult {
   controles?: string[];
   /** Export MCT seulement : congés et congés extraordinaires/récup, hors absentéisme (table wp_conges). */
   conges?: CongeRow[];
+  /** Roster seulement : lignes intérim écartées de `data`, rangées dans wp_interim_roster. */
+  interimRoster?: InterimRosterRow[];
   detectedMonth?: number;
   detectedYear?: number;
 }
@@ -122,6 +125,17 @@ export interface RosterRow {
   description_service: string;
   description_departement: string;
   description_direction: string;
+}
+
+/** Ligne intérim du roster : de quoi rattacher un coût, rien de plus. */
+export interface InterimRosterRow {
+  code_salarie: string;
+  type_contrat: string;
+  code_employeur: string;
+  centre_cout: string;
+  description_service: string;
+  description_fonction: string;
+  description_equipe: string;
 }
 
 function deriveVehicleType(fonction: string, contrat: string): string {
@@ -227,6 +241,25 @@ export function parseRosterRH(buffer: ArrayBuffer): WpParseResult {
     });
   }
 
+  // Intérimaires : présents dans le HRIS pour leur dépôt et leur cost center,
+  // mais hors effectifs, ETP, turnover et paie. Écartés ici, à la source,
+  // pour qu'aucune lecture de wp_employees ne puisse les compter.
+  const interimRoster: InterimRosterRow[] = data
+    .filter((d) => estInterim(d.type_contrat))
+    .map((d) => ({
+      code_salarie: d.code_salarie,
+      type_contrat: d.type_contrat,
+      code_employeur: d.code_employeur,
+      centre_cout: d.centre_cout,
+      description_service: d.description_service,
+      description_fonction: d.description_fonction,
+      description_equipe: d.description_equipe,
+    }));
+  if (interimRoster.length > 0) {
+    for (let k = data.length - 1; k >= 0; k--) if (estInterim(data[k].type_contrat)) data.splice(k, 1);
+    warnings.push(`${interimRoster.length} intérimaire(s) écarté(s) des effectifs, conservés pour le rattachement des coûts intérim.`);
+  }
+
   if (data.length === 0) {
     errors.push("Aucun employé trouvé dans le fichier.");
   } else {
@@ -255,7 +288,7 @@ export function parseRosterRH(buffer: ArrayBuffer): WpParseResult {
   // Une cellule vide devient 0 sans bruit ; on le dit avant l'import.
   const controles = messagesControleBrutIndice(controlerBrutIndice(data, colBrut >= 0));
 
-  return { fileType: "roster_rh", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, controles };
+  return { fileType: "roster_rh", data: data as unknown as Record<string, unknown>[], rowCount: data.length, errors, warnings, controles, interimRoster };
 }
 
 // ============================================================
@@ -1503,6 +1536,131 @@ export function parseMouvements(buffer: ArrayBuffer): WpParseResult {
 // Auto-detect file type
 // ============================================================
 
+// ============================================================
+// Coûts intérim (export « Coûts » de SLG Intérim)
+// ============================================================
+
+export interface InterimCostRow {
+  code_salarie: string;
+  mois: number;
+  annee: number;
+  agence: string;
+  population: string;
+  composante: string;
+  quantite: number;
+  unite: string;
+  montant_avant_coefficient: number;
+  coefficient: number | null;
+  montant_facturable: number;
+}
+
+/**
+ * Export CSV (« ; », BOM) ou XLSX de SLG Intérim : une ligne par intérimaire,
+ * mois et composante. La colonne du nom de l'intérimaire n'est JAMAIS lue.
+ * Un export filtré (agence ou population) est refusé : importé, il
+ * remplacerait le mois entier par une partie seulement.
+ */
+export function parseInterimCosts(buffer: ArrayBuffer): WpParseResult {
+  const vide = (errors: string[]): WpParseResult => ({ fileType: "interim_couts", data: [], rowCount: 0, errors, warnings: [] });
+
+  let workbook: XLSX.WorkBook;
+  try {
+    // raw : garder « 2026-09 » et « SLA 12 » en texte dans un CSV.
+    workbook = XLSX.read(buffer, { type: "array", raw: true });
+  } catch {
+    return vide(["Impossible de lire le fichier."]);
+  }
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
+  const header = findHeaderRow(rows, ["montant_facturable"]);
+  if (!header) return vide(["En-têtes non détectés : colonnes « composante » et « montant_facturable » requises."]);
+
+  const h = header.headers.map((c) => c.replace(/^\uFEFF/, ""));
+  const col = (nom: string) => h.findIndex((c) => normalizeText(c) === nom);
+  const c = {
+    periode: col("periode"),
+    agence: col("agence"),
+    code: col("code_salarie"),
+    population: col("population"),
+    composante: col("composante"),
+    quantite: col("quantite"),
+    unite: col("unite"),
+    avant: col("montant_avant_coefficient"),
+    coefficient: col("coefficient"),
+    facturable: col("montant_facturable"),
+    perimetre: col("perimetre"),
+  };
+  const manquantes = (["periode", "code", "composante", "facturable"] as const).filter((k) => c[k] < 0);
+  if (manquantes.length > 0) return vide([`Colonnes manquantes : ${manquantes.join(", ")}.`]);
+  if (c.perimetre < 0) {
+    return vide(["Colonne « perimetre » absente : export d'une ancienne version de SLG Intérim. Réexportez le fichier."]);
+  }
+
+  const texte = (row: unknown[], i: number) => (i >= 0 ? String(row[i] ?? "").trim() : "");
+  const data: InterimCostRow[] = [];
+  const errors: string[] = [];
+  let filtrees = 0;
+
+  for (let i = header.index + 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[];
+    if (!row || row.length === 0) continue;
+    const code = texte(row, c.code);
+    const composante = texte(row, c.composante);
+    if (!code && !composante) continue;
+    if (texte(row, c.perimetre).toLowerCase() === "filtre") filtrees++;
+
+    const periode = texte(row, c.periode).match(/^(\d{4})-(\d{1,2})/);
+    const mois = periode ? Number(periode[2]) : 0;
+    if (!periode || mois < 1 || mois > 12) {
+      errors.push(`Ligne ${i + 1} : période illisible (attendu AAAA-MM).`);
+      continue;
+    }
+    if (!code) {
+      errors.push(`Ligne ${i + 1} : code salarié manquant.`);
+      continue;
+    }
+    const coef = texte(row, c.coefficient);
+    data.push({
+      code_salarie: code,
+      mois,
+      annee: Number(periode[1]),
+      agence: texte(row, c.agence),
+      population: texte(row, c.population),
+      composante,
+      quantite: parseNumeric(row[c.quantite]),
+      unite: texte(row, c.unite),
+      montant_avant_coefficient: parseNumeric(row[c.avant]),
+      coefficient: coef === "" ? null : parseNumeric(coef),
+      montant_facturable: parseNumeric(row[c.facturable]),
+    });
+  }
+
+  if (filtrees > 0) {
+    return vide([
+      "Export filtré (agence ou population) : il ne couvre qu'une partie du mois. " +
+        "Réexportez depuis SLG Intérim sans filtre, ou utilisez l'export de l'année.",
+    ]);
+  }
+  if (data.length === 0 && errors.length === 0) errors.push("Aucune ligne de coût dans le fichier.");
+
+  const periodes = Array.from(new Set(data.map((d) => d.annee * 100 + d.mois))).sort((a, b) => a - b);
+  const warnings = [
+    `${new Set(data.map((d) => d.code_salarie)).size} intérimaire(s), ${periodes.length} mois : ` +
+      periodes.map((p) => `${String(p % 100).padStart(2, "0")}/${Math.floor(p / 100)}`).join(", ") + ".",
+  ];
+  const unique = periodes.length === 1 ? periodes[0] : null;
+
+  return {
+    fileType: "interim_couts",
+    data: data as unknown as Record<string, unknown>[],
+    rowCount: data.length,
+    errors,
+    warnings,
+    detectedMonth: unique ? unique % 100 : undefined,
+    detectedYear: unique ? Math.floor(unique / 100) : undefined,
+  };
+}
+
 export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
   let workbook: XLSX.WorkBook;
   try {
@@ -1522,6 +1680,9 @@ export function detectFileType(buffer: ArrayBuffer): WpFileType | null {
     .map((c) => normalizeText(String(c || "")))
     .join(" ");
 
+  if (allText.includes("montant_facturable") && allText.includes("composante")) {
+    return "interim_couts";
+  }
   // Avant les statistiques salariales : l'export IN/OUT porte le même bandeau
   // « Statistiques rapides ».
   if (allText.includes("nb entree") || allText.includes("nb sortie")) {
@@ -1573,5 +1734,7 @@ export function parseWpFile(buffer: ArrayBuffer, fileType: WpFileType): WpParseR
       return parseAbsencesInjustifiees(buffer);
     case "mouvements":
       return parseMouvements(buffer);
+    case "interim_couts":
+      return parseInterimCosts(buffer);
   }
 }
