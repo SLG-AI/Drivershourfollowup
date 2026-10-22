@@ -61,5 +61,8 @@ describe("preparerPhotosAnnee", () => {
     // Mars n'a pas sa photo, avril compare à une photo reconduite : rien
     expect(p.sortisHorsPhotoPour(3)).toEqual([]);
     expect(p.sortisHorsPhotoPour(4)).toEqual([]);
+    // Les mêmes, en lignes de la photo précédente datées de leur sortie, sans toucher la photo
+    expect(p.salariesSortisHorsPhotoPour(2)).toEqual([{ ...lignes[1], date_sortie: "2026-02-14", est_sortie_temporaire: false }]);
+    expect(p.salariesSortisHorsPhotoPour(3)).toEqual([]);
   });
 });

@@ -53,17 +53,30 @@ export function preparerPhotosAnnee<T extends MovementEmployee>(e: EntreesPhotos
   // Sortis du mois absents de la photo : repris seulement si le mois ET le
   // précédent ont chacun LEUR photo — comparer une photo reconduite à
   // elle-même n'apprend rien.
-  const sortisHorsPhotoPour = (m: number): SortiHorsPhoto[] => {
+  const sortiesHorsPhoto = (m: number) => {
     const precM: MoisAnnee = m === 1 ? { mois: 12, annee: annee - 1 } : { mois: m - 1, annee };
-    if (!photoExacte(m, annee) || !photoExacte(precM.mois, precM.annee)) return [];
+    if (!photoExacte(m, annee) || !photoExacte(precM.mois, precM.annee)) return { precedente: [] as T[], sorties: [] };
     const codesPhotoM = new Set(photoDuMois(m).map((x) => x.code_salarie));
-    return computeRosterMovements(
-      photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, annee,
-      sortiesConstateesSur(m, annee, precM)
-    ).sortiesDefinitives
-      .filter((i) => i.date && !codesPhotoM.has(i.code_salarie))
-      .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
+    const precedente = photoDuMoisDe(precM.mois, precM.annee);
+    const sorties = computeRosterMovements(precedente, photoDuMois(m), m, annee, sortiesConstateesSur(m, annee, precM))
+      .sortiesDefinitives.filter((i) => i.date && !codesPhotoM.has(i.code_salarie));
+    return { precedente, sorties };
+  };
+  const sortisHorsPhotoPour = (m: number): SortiHorsPhoto[] =>
+    sortiesHorsPhoto(m).sorties.map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
+  /**
+   * Les mêmes sortis, en lignes de la photo PRÉCÉDENTE (salaire, cost center,
+   * taux) datées de leur sortie : pour les valoriser salarié par salarié sur
+   * leurs jours du mois. Des copies : la photo précédente reste intacte.
+   */
+  const salariesSortisHorsPhotoPour = (m: number): T[] => {
+    const { precedente, sorties } = sortiesHorsPhoto(m);
+    const parCode = new Map(precedente.map((x) => [x.code_salarie, x]));
+    return sorties.flatMap((i) => {
+      const ligne = parCode.get(i.code_salarie);
+      return ligne ? [{ ...ligne, date_sortie: i.date!, est_sortie_temporaire: false }] : [];
+    });
   };
 
-  return { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour };
+  return { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour, salariesSortisHorsPhotoPour };
 }

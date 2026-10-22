@@ -212,7 +212,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     ...codesMaladieAnneePrec,
   ]);
   // Photo filtrée et reclassifiée de chaque mois (partagé avec le tableau de bord et l'analyste IA)
-  const { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour } = preparerPhotosAnnee({
+  const { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour, salariesSortisHorsPhotoPour } = preparerPhotosAnnee({
     annee: selectedYear,
     photosParRang,
     photoAffichee: allEmployees,
@@ -253,6 +253,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     selectedYear,
     filtresActifs: filtres.actifs,
     photoDuMois,
+    salariesSortisHorsPhotoPour: salariesSortisHorsPhotoPour as (mois: number) => SalarieCout[],
     photoReference: photoReference as SalarieCout[] | null,
     coef: coefficient.coef,
     coefParCc,
@@ -407,7 +408,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
   const lignesPaie = salaryLines as unknown as LignePaieDecomposable[];
   const codesPerimetre = filtres.actifs ? employeeCodes : undefined;
   const paieParMois = decomposerParMois(lignesPaie, selectedYear, codesPerimetre);
-  const lignesPaieDuMois = lignesPaie.filter((l) => Number(l.mois) === selectedMonth && (!codesPerimetre || codesPerimetre.has(l.code_salarie)));
+  // Les sortis du mois absents de la photo sont dans le périmètre de la paie du mois (comme dans la moyenne du mois)
+  const codesPaieDuMois = codesPerimetre && new Set([...codesPerimetre, ...salariesSortisHorsPhotoPour(selectedMonth).map((s) => String(s.code_salarie))]);
+  const lignesPaieDuMois = lignesPaie.filter((l) => Number(l.mois) === selectedMonth && (!codesPaieDuMois || codesPaieDuMois.has(l.code_salarie)));
   const paieDuMois = lignesPaieDuMois.length > 0
     ? {
       familles: decomposerParFamille(lignesPaieDuMois),
@@ -580,14 +583,15 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     let ecart: DetailCase | null = null;
     const payeReference = stats.paye_moyen ?? stats.paye;
     if (payeReference != null && stats.realise != null && brut > 0) {
-      const photoMois = photoDuMois(selectedMonth) as SalarieCout[];
+      // Sortis du mois absents de la photo compris, comme la moyenne du mois
+      const photoMois = [...photoDuMois(selectedMonth), ...salariesSortisHorsPhotoPour(selectedMonth)] as SalarieCout[];
       const codesPhoto = new Set(photoMois.map((s) => s.code_salarie));
       const reconciliation = reconcilierPaie({
         mois: selectedMonth,
         annee: selectedYear,
         lignesPaie: lignesPaieDuMois as unknown as LignePaieDetaillee[],
         photo: photoMois,
-        source: sourceDuMois,
+        source: construireSourceSalaires(photoMois, photoReference as SalarieCout[] | null),
         cns: absences.filter((a) => Number(a.mois) === selectedMonth && codesPhoto.has(String(a.code_salarie))) as unknown as Parameters<typeof reconcilierPaie>[0]["cns"],
         injustifiees: injustifieesDuPerimetre(absencesInjustifiees, filtres.actifs, codesPhoto).filter((a) => Number(a.mois) === selectedMonth) as unknown as Parameters<typeof reconcilierPaie>[0]["injustifiees"],
         heuresTravaillables: getWorkableHoursInMonth(selectedYear, selectedMonth),

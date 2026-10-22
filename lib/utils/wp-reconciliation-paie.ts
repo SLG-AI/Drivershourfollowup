@@ -125,6 +125,66 @@ export function fractionsDuMois(e: SalarieCout, mois: number, annee: number): { 
   return { active: actifs / jours, suspendue: suspendus / jours };
 }
 
+export type EntreesContractuel = Pick<EntreesReconciliation, "mois" | "annee" | "photo" | "source" | "cns" | "injustifiees" | "heuresTravaillables" | "coef" | "coefParCc" | "complements">;
+
+export interface ContractuelSalarie {
+  /** Coût employeur sous contrat, au prorata des jours sous contrat du mois. */
+  sousContrat: number;
+  /** Idem, moins la part suspendue. */
+  apresSuspension: number;
+  /** Brut de base attendu (avant charges) : brut indice × ETP × (jours sous contrat − suspendus) × (1 − % CNS). */
+  baseBrute: number;
+  complementsBruts: number;
+  /** Les mêmes, chargés au coefficient du salarié. */
+  base: number;
+  complements: number;
+  injustifiees: number;
+  /** Payé contractuel : base + compléments − injustifiées. */
+  paye: number;
+  coef: number;
+}
+
+/**
+ * Payé contractuel du mois SALARIÉ PAR SALARIÉ, jour par jour : chacun à son
+ * brut indice, son ETP, ses jours sous contrat, sa suspension, son % CNS et
+ * ses heures injustifiées. C'est la moyenne du mois de la page Coûts
+ * (construireCourbeCouts) et la base de la réconciliation avec la paie.
+ * `photo` doit comprendre les sortis du mois absents de la photo de fin de
+ * mois (wp-photos-annee : salariesSortisHorsPhotoPour), avec leur brut.
+ */
+export function contractuelParSalarie(e: EntreesContractuel): Map<string, ContractuelSalarie> {
+  const duMois = (a: { mois?: number | string | null }) => a.mois == null || Number(a.mois) === e.mois;
+  const coefDe = (s: SalarieCout) => (s.centre_cout && e.coefParCc?.get(s.centre_cout)?.coef) || e.coef;
+  const tauxDe = (s: SalarieCout) => tauxComplementsDe(e.complements, s.centre_cout);
+  const pctCns = new Map<string, number>();
+  e.cns.filter(duMois).forEach((a) => pctCns.set(a.code_salarie, Math.min(100, nombre(a.pct_absenteisme))));
+  const heuresInj = new Map<string, number>();
+  e.injustifiees.filter(duMois).forEach((a) => heuresInj.set(a.code_salarie, (heuresInj.get(a.code_salarie) ?? 0) + nombre(a.duree_hrs)));
+
+  const resultat = new Map<string, ContractuelSalarie>();
+  for (const s of e.photo) {
+    const brut = e.source.brutDe(s.code_salarie);
+    if (brut === null || resultat.has(s.code_salarie)) continue;
+    const { active, suspendue } = fractionsDuMois(s, e.mois, e.annee);
+    if (active <= 0 && !heuresInj.has(s.code_salarie)) continue;
+    const net = Math.max(0, active - suspendue);
+    const coef = coefDe(s);
+    const taux = tauxDe(s);
+    const presence = 1 - (pctCns.get(s.code_salarie) ?? 0) / 100;
+    const plein = brut * etpDe(s) * coef * (1 + taux);
+    const baseBrute = brut * etpDe(s) * net * presence;
+    const base = baseBrute * coef;
+    const complements = base * taux;
+    const injustifiees = e.heuresTravaillables > 0 ? ((heuresInj.get(s.code_salarie) ?? 0) / e.heuresTravaillables) * brut * (1 + taux) * coef : 0;
+    resultat.set(s.code_salarie, {
+      sousContrat: plein * active, apresSuspension: plein * net,
+      baseBrute, complementsBruts: baseBrute * taux, base, complements, injustifiees,
+      paye: base + complements - injustifiees, coef,
+    });
+  }
+  return resultat;
+}
+
 export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
   const ecart = e.realise - e.payeReference;
   // Coefficient de charges réel des lignes de salaire : (brut + charges) / brut,
@@ -134,32 +194,10 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
   const brutCharge = salaire.reduce((s, l) => s + nombre(l.cout_employeur) + nombre(l.avantages_nature), 0);
   const coefReel = brutTotal > 0 ? brutCharge / brutTotal : e.coef;
 
-  const photoParCode = new Map(e.photo.map((s) => [s.code_salarie, s]));
-  const coefDe = (s: SalarieCout) => (s.centre_cout && e.coefParCc?.get(s.centre_cout)?.coef) || e.coef;
-  const tauxDe = (s: SalarieCout) => tauxComplementsDe(e.complements, s.centre_cout);
-  const pctCns = new Map<string, number>();
-  e.cns.forEach((a) => pctCns.set(a.code_salarie, Math.min(100, nombre(a.pct_absenteisme))));
-  const heuresInj = new Map<string, number>();
-  e.injustifiees.forEach((a) => heuresInj.set(a.code_salarie, (heuresInj.get(a.code_salarie) ?? 0) + nombre(a.duree_hrs)));
-
-  // ---- Payé contractuel par salarié, ventilé (base, compléments, injustifiées)
-  // `baseBrute` et `complementsBruts` : les mêmes, avant charges, pour isoler l'effet du coefficient
-  const contractuel = new Map<string, { base: number; complements: number; injustifiees: number; paye: number; coef: number; baseBrute: number; complementsBruts: number }>();
-  for (const s of e.photo) {
-    const brut = e.source.brutDe(s.code_salarie);
-    if (brut === null) continue;
-    const { active, suspendue } = fractionsDuMois(s, e.mois, e.annee);
-    const net = Math.max(0, active - suspendue);
-    if (net <= 0 && !heuresInj.has(s.code_salarie)) continue;
-    const coef = coefDe(s);
-    const taux = tauxDe(s);
-    const presence = 1 - (pctCns.get(s.code_salarie) ?? 0) / 100;
-    const baseBrute = brut * etpDe(s) * net * presence;
-    const base = baseBrute * coef;
-    const complements = base * taux;
-    const injustifiees = e.heuresTravaillables > 0 ? ((heuresInj.get(s.code_salarie) ?? 0) / e.heuresTravaillables) * brut * (1 + taux) * coef : 0;
-    contractuel.set(s.code_salarie, { base, complements, injustifiees, paye: base + complements - injustifiees, coef, baseBrute, complementsBruts: baseBrute * taux });
-  }
+  // ---- Payé contractuel par salarié (le même que la moyenne du mois de la page)
+  // Seuls ceux qui ont un payé ou des injustifiées : un salarié suspendu tout
+  // le mois, payé quand même, reste un écart de périmètre.
+  const contractuel = new Map([...contractuelParSalarie(e)].filter(([, c]) => c.apresSuspension > 0 || c.injustifiees > 0));
   const payeParSalarie = [...contractuel.values()].reduce((s, c) => s + c.paye, 0);
 
   // ---- Paie, ligne à ligne
@@ -212,8 +250,9 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
   });
   // Méthode : par identité, Σ des lignes ci-dessus = réalisé − payé par
   // salarié ; ce qui reste jusqu'à l'écart affiché est ce que la moyenne du
-  // mois (payé de fin de mois mis à l'échelle de l'effectif moyen) fait
-  // autrement que le salarié par salarié.
+  // mois fait autrement que le salarié par salarié. Nul quand la CNS et les
+  // injustifiées du mois sont mesurées (construireCourbeCouts fait alors le
+  // même calcul) ; sinon, l'écart du payé de fin de mois mis à l'échelle.
   acc.methode.montant = ecart - Object.entries(acc).filter(([k]) => k !== "methode").reduce((s, [, a]) => s + a.montant, 0);
 
   const ligne = (cle: CleReconciliation, libelle: string): LigneReconciliation => ({ cle, libelle, montant: acc[cle].montant, n: acc[cle].codes.size });
@@ -240,7 +279,7 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
         ligne("coefficient", "Coefficient de charges du contractuel (mois courants) vs coefficient réel du mois (heures sup soldées, plafonds)"),
         ligne("hors_photo", "Payés en paie mais absents de la photo roster (sortis avant l'export)"),
         ligne("sans_paie", "Sous contrat dans le modèle sans ligne de paie"),
-        ligne("methode", "Moyenne du mois à l'échelle vs calcul salarié par salarié"),
+        ligne("methode", "Moyenne du mois à l'échelle (taux d'absence repris d'un autre mois) vs calcul salarié par salarié"),
       ]),
     ],
   };

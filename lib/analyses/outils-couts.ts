@@ -111,6 +111,7 @@ export function contexteCouts(d: DonneesAnalyse, eff: Parameters<typeof contexte
     selectedYear: annee,
     filtresActifs: c.filtresActifs,
     photoDuMois: c.photos.photoDuMois,
+    salariesSortisHorsPhotoPour: c.photos.salariesSortisHorsPhotoPour,
     photoReference,
     coef: coefficient.coef,
     coefParCc,
