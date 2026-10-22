@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
-import { rangPeriode, resolveRosterPeriod } from "@/lib/utils/roster-period";
-import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
+import { resolveRosterPeriod } from "@/lib/utils/roster-period";
+import { ajouterPhotoSiAbsente, indexerPhotos } from "@/lib/utils/roster-photos";
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
-import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
+import { reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
 import { COLONNES_CONGES, congesHorsWeekEnd, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
@@ -22,6 +22,7 @@ import { amplitudesParMois, estChauffeur, tranchesParJournees, ventilerAmplitude
 import { injustifieesDuPerimetre } from "@/lib/utils/wp-paliers";
 import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
+import { preparerPhotosAnnee } from "@/lib/utils/wp-photos-annee";
 import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
 import { valoriserProjection } from "@/lib/utils/wp-couts-scenario";
 import { LIBELLES_LEVIER, unite, type LevierCout } from "@/lib/utils/wp-leviers-cout";
@@ -208,21 +209,15 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     ...absences.filter((a) => Number(a.hrs_maladie || 0) > 0).map((a) => String(a.code_salarie)),
     ...codesMaladieAnneePrec,
   ]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const photosPreparees = new Map<number, any[]>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const photoDuMoisDe = (m: number, annee: number): any[] => {
-    const { lignes, periode } = photoPourLeMois(photosParRang, m, annee);
-    if (!periode) return allEmployees;
-    const r = rangPeriode(periode);
-    let prete = photosPreparees.get(r);
-    if (!prete) {
-      prete = reclassifierSortiesTemporaires(lignes.filter(passeLesFiltres), codesAvecMaladieCnsAnnee);
-      photosPreparees.set(r, prete);
-    }
-    return prete;
-  };
-  const photoDuMois = (m: number) => photoDuMoisDe(m, selectedYear);
+  // Photo filtrée et reclassifiée de chaque mois (partagé avec le tableau de bord et l'analyste IA)
+  const { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour } = preparerPhotosAnnee({
+    annee: selectedYear,
+    photosParRang,
+    photoAffichee: allEmployees,
+    passe: passeLesFiltres,
+    codesMaladie: codesAvecMaladieCnsAnnee,
+    sortiesConstateesSur: (mois, annee, prec) => sortiesConstateesSur(mouvementsSirh, salaryStats, mois, annee, prec),
+  });
 
   // ---- Les douze points en ETP (calcul partagé avec le tableau de bord)
   const courbe = construireCourbeEffectifs({
@@ -233,18 +228,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     filtresActifs: filtres.actifs,
     targetTotal: 0,
     photoDuMoisDe,
-    photoExacte: (m, annee) => photoPourLeMois(photosParRang, m, annee).exacte,
-    sortisHorsPhotoPour: (m) => {
-      const precM: MoisAnnee = m === 1 ? { mois: 12, annee: selectedYear - 1 } : { mois: m - 1, annee: selectedYear };
-      if (!photoPourLeMois(photosParRang, m, selectedYear).exacte || !photoPourLeMois(photosParRang, precM.mois, precM.annee).exacte) return [];
-      const codesPhotoM = new Set(photoDuMois(m).map((e) => e.code_salarie));
-      return computeRosterMovements(
-        photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, selectedYear,
-        sortiesConstateesSur(mouvementsSirh, salaryStats, m, selectedYear, precM)
-      ).sortiesDefinitives
-        .filter((i) => i.date && !codesPhotoM.has(i.code_salarie))
-        .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
-    },
+    photoExacte,
+    sortisHorsPhotoPour,
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,
