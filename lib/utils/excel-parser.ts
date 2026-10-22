@@ -224,8 +224,8 @@ function detectPeriodFromMonths(
 /** Try to detect period number from sheet name (e.g. "P1 24", "P2 2025", "Période 3") */
 function detectPeriodFromSheetName(name: string): { periodNumber: number; year: number | null } | null {
   const normalized = normalizeText(name);
-  // Match "p1", "p2", "p3" or "periode 1", etc.
-  const match = normalized.match(/p(?:eriode)?\s*([123])/);
+  // Match "p1", "p2", "p3", "periode 1", "periode n3", "periode n°3", etc.
+  const match = normalized.match(/p(?:eriode)?\s*(?:n\s*[°o]?\s*)?([123])/);
   if (match) {
     const periodNumber = parseInt(match[1]);
     // Try to detect 4-digit year (e.g. "2024")
@@ -306,8 +306,10 @@ function parseSheet(
   }
 
   const detectedMonths = Array.from(mapping.monthColumns.keys()).sort((a, b) => a - b);
+  // Sans colonne mensuelle, la feuille n'est pas un tableau d'heures (ex. « Centre de coûts ») :
+  // l'importer viderait la période qui lui serait attribuée par défaut.
   if (detectedMonths.length === 0) {
-    warnings.push("Aucune colonne mensuelle détectée.");
+    errors.push("Aucune colonne mensuelle détectée.");
   }
 
   // Detect period: prefer month-based detection (more reliable than sheet name)
