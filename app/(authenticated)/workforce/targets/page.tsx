@@ -22,6 +22,7 @@ export default async function TargetsPage() {
           id: s.id,
           name: s.name,
           description: s.description || null,
+          annee: Number(s.annee),
           created_at: s.created_at,
         }))}
       />

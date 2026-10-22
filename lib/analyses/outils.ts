@@ -81,6 +81,7 @@ export function couvertureDonnees(d: DonneesAnalyse, maintenant = new Date()) {
       "Depot is read from the HR roster snapshot of the month; drivers missing from the snapshot are grouped as 'not in roster'.",
       "Part-time drivers count as one driver in per-driver ratios.",
       "Any group of fewer than 3 people is merged into 'Others'; quantiles and top shares are withheld for small groups to protect individuals.",
+      "Workforce Planning tools (workforce_*, interim_costs, scenario_projection, gap_to_target) use the HR roster snapshots, absence files, payroll and planning data of the Workforce module; they list their own available years, scenarios and targets when asked for missing data.",
     ],
   };
 }

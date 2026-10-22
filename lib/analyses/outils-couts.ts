@@ -118,7 +118,7 @@ export function contexteCouts(d: DonneesAnalyse, eff: Parameters<typeof contexte
     congesHorsWeekEnd: c.conges,
     stats: paie,
   });
-  return { c, codesPerimetre, lignesAnnee: lignesAnnee as unknown as LignePaieDecomposable[], coefficient, complements, courbeCouts, aucunSalaire: photoReference == null };
+  return { c, codesPerimetre, lignesAnnee: lignesAnnee as unknown as LignePaieDecomposable[], coefficient, complements, courbeCouts, photoReference, aucunSalaire: photoReference == null };
 }
 
 function anneesPaie(co: DonneesCouts) {

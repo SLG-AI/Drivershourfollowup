@@ -122,3 +122,43 @@ export async function chargerDonneesCouts(supabase: SupabaseClient): Promise<Don
     interimRoster: (interimRoster as Record<string, unknown>[]).map((r) => ({ ...r, mois: Number(r.mois), annee: Number(r.annee) })) as RattachementInterim[],
   };
 }
+
+// ---------------------------------------------------------------- scénarios et cibles (chargés au premier outil Scénarios)
+
+type Ligne = Record<string, unknown>;
+
+export interface DonneesScenarios {
+  scenarios: { id: string; name: string; is_default: boolean; updated_at: string | null }[];
+  /** Lignes brutes des tables wp_scenario_*, comme les pages les passent au moteur de projection. */
+  rows: { params: Ligne[]; turnoverParams: Ligne[]; leaveParams: Ligne[]; departures: Ligne[]; arrivals: Ligne[]; tempExits: Ligne[]; details: Ligne[] };
+  leviers: Ligne[];
+  cibles: { id: string; name: string; annee: number; updated_at: string | null }[];
+  valeursCibles: { scenario_id: string; mois: number; depot: string; target_etp: number }[];
+  /** Ancien système : un total sans mois ni année. */
+  ciblesHistoriques: { depot: string | null; vehicle_type: string | null; target_headcount: number; target_etp: number | null }[];
+}
+
+export async function chargerDonneesScenarios(supabase: SupabaseClient): Promise<DonneesScenarios> {
+  const [scenarios, params, turnoverParams, leaveParams, departures, arrivals, tempExits, leviers, cibles, valeurs, historiques] = await Promise.all([
+    fetchAll(supabase.from("wp_scenarios").select("id, name, is_default, projected_turnover_rate, updated_at").order("id")),
+    fetchAll(supabase.from("wp_scenario_monthly_params").select("id, scenario_id, mois, projected_absenteeism_rate, centre_cout").order("id")),
+    fetchAll(supabase.from("wp_scenario_monthly_turnover_params").select("id, scenario_id, mois, projected_turnover_rate, centre_cout").order("id")),
+    fetchAll(supabase.from("wp_scenario_monthly_leave_params").select("id, scenario_id, mois, projected_leave_rate, centre_cout").order("id")),
+    // Sans code salarié : le moteur ne lit que dates, type, volume et affectation
+    fetchAll(supabase.from("wp_scenario_departures").select("id, scenario_id, departure_type, departure_day, departure_month, departure_year, return_month, return_year, vehicle_type, depot, is_from_data, nb_personnes, taux_occupation, fonction, centre_cout").order("id")),
+    fetchAll(supabase.from("wp_scenario_arrival_hypotheses").select("*").order("id")),
+    fetchAll(supabase.from("wp_scenario_temp_exit_hypotheses").select("*").order("id")),
+    fetchAll(supabase.from("wp_scenario_cost_params").select("*").order("id")),
+    fetchAll(supabase.from("wp_target_scenarios").select("id, name, annee, updated_at").order("id")),
+    fetchAll(supabase.from("wp_target_scenario_values").select("scenario_id, mois, depot, target_etp").order("id")),
+    fetchAll(supabase.from("wp_target_needs").select("depot, vehicle_type, target_headcount, target_etp").order("id")),
+  ]);
+  return {
+    scenarios: (scenarios as Ligne[]).map((s) => ({ id: String(s.id), name: String(s.name), is_default: s.is_default === true, updated_at: (s.updated_at as string) ?? null })),
+    rows: { params, turnoverParams, leaveParams, departures, arrivals, tempExits, details: scenarios.map((s) => ({ id: s.id, projected_turnover_rate: s.projected_turnover_rate })) },
+    leviers,
+    cibles: (cibles as Ligne[]).map((c) => ({ id: String(c.id), name: String(c.name), annee: Number(c.annee), updated_at: (c.updated_at as string) ?? null })),
+    valeursCibles: (valeurs as Ligne[]).map((v) => ({ scenario_id: String(v.scenario_id), mois: Number(v.mois), depot: String(v.depot), target_etp: Number(v.target_etp) })),
+    ciblesHistoriques: (historiques as Ligne[]).map((t) => ({ depot: (t.depot as string) || null, vehicle_type: (t.vehicle_type as string) || null, target_headcount: Number(t.target_headcount), target_etp: t.target_etp == null ? null : Number(t.target_etp) })),
+  };
+}

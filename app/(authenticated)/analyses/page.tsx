@@ -29,7 +29,7 @@ export default async function AnalysesPage() {
       <div>
         <h1 className="text-2xl font-bold">Analyses IA</h1>
         <p className="text-muted-foreground">
-          Posez une question sur la charge des chauffeurs ; l&apos;analyse est livrée en PowerPoint, en anglais, à la charte SLG.
+          Posez une question sur la charge des chauffeurs ou le Workforce Planning (effectifs, coûts, scénarios, cibles) ; l&apos;analyse est livrée en PowerPoint, en anglais, à la charte SLG.
         </p>
       </div>
       <ChatAnalyses initiales={analyses} />

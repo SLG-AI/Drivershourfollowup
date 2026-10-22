@@ -32,7 +32,7 @@ interface ProjectionScenario {
 }
 
 interface Props {
-  scenario: { id: string; name: string; description: string };
+  scenario: { id: string; name: string; description: string; annee: number };
   values: TargetValue[];
   costCenters: CostCenter[];
   projectionScenarios: ProjectionScenario[];
@@ -41,6 +41,7 @@ interface Props {
 export function TargetScenarioEditorClient({ scenario, values: initialValues, costCenters, projectionScenarios }: Props) {
   const [name, setName] = useState(scenario.name);
   const [description, setDescription] = useState(scenario.description);
+  const [annee, setAnnee] = useState(scenario.annee);
   const [saving, setSaving] = useState(false);
   const [prefilling, setPrefilling] = useState(false);
   const [prefillOpen, setPrefillOpen] = useState(false);
@@ -121,7 +122,7 @@ export function TargetScenarioEditorClient({ scenario, values: initialValues, co
         turnoverSrcId: prefillTurnoverSrc,
         absSrcId: prefillAbsSrc,
         leaveSrcId: prefillLeaveSrc,
-        year: new Date().getFullYear(),
+        year: annee,
       });
       // Replace entire map with new values
       const next = new Map<string, number>();
@@ -152,6 +153,7 @@ export function TargetScenarioEditorClient({ scenario, values: initialValues, co
       await updateTargetScenario(scenario.id, {
         name,
         description,
+        annee,
         values: allValues,
       });
       toast.success("Scénario de besoins sauvegardé");
@@ -185,7 +187,18 @@ export function TargetScenarioEditorClient({ scenario, values: initialValues, co
               />
               <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
-            <p className="text-muted-foreground text-sm">{description || "Scénario de besoins cibles"}</p>
+            <p className="text-muted-foreground text-sm">
+              {description || "Scénario de besoins cibles"} · année{" "}
+              <input
+                type="number"
+                min={2020}
+                max={2100}
+                value={annee}
+                onChange={(e) => setAnnee(Number(e.target.value))}
+                aria-label="Année du scénario"
+                className="w-16 bg-transparent border-b border-dashed border-muted-foreground/50 outline-none focus:border-primary"
+              />
+            </p>
           </div>
         </div>
         <div className="flex gap-2">
