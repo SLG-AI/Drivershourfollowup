@@ -16,6 +16,10 @@ const ETAPES: Record<string, string> = {
   workload_concentration: "Concentration de la charge",
   absenteeism_by_depot: "Absentéisme par dépôt",
   turnover_by_depot: "Départs par dépôt",
+  absence_turnover_monthly_trend: "Absentéisme et turnover mois par mois",
+  workforce_headcount_trend: "Évolution des effectifs (ETP)",
+  workforce_headcount_by_depot: "Effectifs par dépôt",
+  workforce_movements: "Entrées, sorties et suspensions",
   submit_deck: "Rédaction et vérification du deck",
 };
 

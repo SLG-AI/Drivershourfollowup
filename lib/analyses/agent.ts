@@ -14,6 +14,7 @@ import { z } from "zod/v4";
 import { DeckSpec, DeckSpecBase } from "./deck-spec";
 import type { DonneesAnalyse } from "./donnees";
 import * as o from "./outils";
+import * as w from "./outils-workforce";
 import { verifierNombres } from "./verification";
 
 export const MODELE = "claude-opus-5-5";
@@ -97,7 +98,7 @@ export async function analyser(params: {
   let deckAccepte: DeckSpec | null = null;
 
   /** Chaque outil : exécuter, garder la sortie pour la vérification, la rendre en JSON. */
-  const outil = <S extends z.ZodType>(name: string, description: string, inputSchema: S, f: (p: z.infer<S>) => unknown) =>
+  const outil = <S extends z.ZodType>(name: string, description: string, inputSchema: S, f: (p: z.infer<S>) => unknown | Promise<unknown>) =>
     betaZodTool({
       name,
       description,
@@ -105,13 +106,15 @@ export async function analyser(params: {
       run: async (p) => {
         outilsAppeles.push(name);
         await surProgression?.(name);
-        const sortie = f(p);
+        const sortie = await f(p);
         sorties.push({ outil: name, entree: p, sortie });
         return JSON.stringify(sortie);
       },
     });
 
   const annee = z.number().int().min(2020).max(2100);
+  const mois = z.number().int().min(1).max(12);
+  const perimetre = z.enum(["all", "drivers"]).optional().describe("all (default) = every employee, as on the Workforce screens; drivers = drivers only");
   const outils = [
     outil("data_coverage", "Which months, reference periods and years are available, plus the known limits of the data. Call first.", z.object({}), () => o.couvertureDonnees(d, maintenant)),
     outil("long_days_by_depot", "Long working days (11 to 12 h and over 12 h, from payroll premiums) for one ACTIVITY month: overall and per depot, per driver, with deviation from the average.", z.object({ activity_year: annee, activity_month: z.number().int().min(1).max(12) }), (p) => o.journeesLonguesParDepot(d, p)),
@@ -123,6 +126,9 @@ export async function analyser(params: {
     outil("absenteeism_by_depot", "Absence rates for a year (CNS sick leave, short sick leave MCT, unjustified, total) overall and per depot (depots of 10+ FTE only).", z.object({ year: annee }), (p) => o.absenteismeParDepot(d, p, maintenant)),
     outil("turnover_by_depot", "Exit rates for a year (excluding end of temporary assignments; voluntary / involuntary) overall and per depot (10+ FTE only).", z.object({ year: annee }), (p) => o.departsParDepot(d, p, maintenant)),
     outil("absence_turnover_monthly_trend", "Month-by-month absence rates (CNS, MCT, unjustified, total) and turnover (rate, voluntary / involuntary exits in FTE) for several years, company-wide. Use it for seasonality and multi-year trends; omit years to get every available year.", z.object({ years: z.array(annee).optional() }), (p) => o.tendanceAbsenteismeDeparts(d, p, maintenant)),
+    outil("workforce_headcount_trend", "Workforce Planning: month-end FTE chain for the 12 months of a year (under contract, after suspensions, after CNS sick leave, paid, available after short sick leave, after holidays), actual vs projected months, and the absence rates applied. Same figures as the Workforce dashboard curve.", z.object({ year: annee, scope: perimetre }), (p) => w.courbeEffectifs(d, p, maintenant)),
+    outil("workforce_headcount_by_depot", "Workforce Planning: FTE per depot for one month (headcount, under contract, suspended, paid, available, after holidays, BUS/van FTE) and absence rates per depot (10+ FTE only), with the company total of the dashboard.", z.object({ year: annee, month: mois, scope: perimetre }), (p) => w.effectifsParDepot(d, p, maintenant)),
+    outil("workforce_movements", "Workforce Planning: month-by-month entries, exits, ends of temporary assignments, new contract suspensions and returns (people and FTE) for a year; suspensions in progress by category; exits, returns and hires already known for the next 12 months.", z.object({ year: annee, scope: perimetre }), (p) => w.mouvementsEffectifs(d, p, maintenant)),
     betaZodTool({
       name: "submit_deck",
       description: "Submit the finished deck. It is checked: every number must come from a tool output, and a 'limits' slide is required. If rejected, fix the listed issues and submit again.",
