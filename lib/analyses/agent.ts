@@ -15,6 +15,7 @@ import { DeckSpec, DeckSpecBase } from "./deck-spec";
 import type { DonneesAnalyse } from "./donnees";
 import * as o from "./outils";
 import * as w from "./outils-workforce";
+import * as k from "./outils-couts";
 import { verifierNombres } from "./verification";
 
 export const MODELE = "claude-opus-5-5";
@@ -129,6 +130,9 @@ export async function analyser(params: {
     outil("workforce_headcount_trend", "Workforce Planning: month-end FTE chain for the 12 months of a year (under contract, after suspensions, after CNS sick leave, paid, available after short sick leave, after holidays), actual vs projected months, and the absence rates applied. Same figures as the Workforce dashboard curve.", z.object({ year: annee, scope: perimetre }), (p) => w.courbeEffectifs(d, p, maintenant)),
     outil("workforce_headcount_by_depot", "Workforce Planning: FTE per depot for one month (headcount, under contract, suspended, paid, available, after holidays, BUS/van FTE) and absence rates per depot (10+ FTE only), with the company total of the dashboard.", z.object({ year: annee, month: mois, scope: perimetre }), (p) => w.effectifsParDepot(d, p, maintenant)),
     outil("workforce_movements", "Workforce Planning: month-by-month entries, exits, ends of temporary assignments, new contract suspensions and returns (people and FTE) for a year; suspensions in progress by category; exits, returns and hires already known for the next 12 months.", z.object({ year: annee, scope: perimetre }), (p) => w.mouvementsEffectifs(d, p, maintenant)),
+    outil("workforce_costs_trend", "Workforce costs for a year, month by month: contractual employer cost along the FTE chain (under contract, after suspensions, after sick leave, paid, available), average cost per FTE, actual payroll employer cost, annual contractual payroll, pay families per month and year-to-date pay items (overtime, long-day premiums, 6th days...). Same figures as the Costs screen.", z.object({ year: annee, scope: perimetre }), (p) => k.coutsTendance(d, p, maintenant)),
+    outil("workforce_costs_by_depot", "Payroll of one month by depot and by driver function: gross paid, planning-related pay and its share, per-employee averages (groups of 10+ employees; smaller groups merged).", z.object({ year: annee, month: mois, scope: perimetre }), (p) => k.coutsParDepot(d, p, maintenant)),
+    outil("interim_costs", "Interim workers (SLG Intérim): billed cost, hours, FTE and number of workers per month for a year (or one month), by depot and by cost component.", z.object({ year: annee, month: mois.optional() }), (p) => k.coutsInterim(d, p)),
     betaZodTool({
       name: "submit_deck",
       description: "Submit the finished deck. It is checked: every number must come from a tool output, and a 'limits' slide is required. If rejected, fix the listed issues and submit again.",

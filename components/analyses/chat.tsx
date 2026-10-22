@@ -20,6 +20,9 @@ const ETAPES: Record<string, string> = {
   workforce_headcount_trend: "Évolution des effectifs (ETP)",
   workforce_headcount_by_depot: "Effectifs par dépôt",
   workforce_movements: "Entrées, sorties et suspensions",
+  workforce_costs_trend: "Coûts mois par mois",
+  workforce_costs_by_depot: "Paie par dépôt",
+  interim_costs: "Coûts intérim",
   submit_deck: "Rédaction et vérification du deck",
 };
 

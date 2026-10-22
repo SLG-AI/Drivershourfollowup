@@ -13,6 +13,10 @@ import { fetchAll } from "@/lib/supabase/fetch-all";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 import type { LigneConge } from "@/lib/utils/wp-conges";
 import type { LigneCns, LigneHeures } from "@/lib/utils/wp-paliers";
+import { rangPeriode } from "@/lib/utils/roster-period";
+import type { LignePaieDetaillee, LigneStatSalariale } from "@/lib/utils/wp-couts";
+import type { CoutInterim, RattachementInterim } from "@/lib/utils/wp-interim";
+import { NATURES } from "@/lib/utils/wp-natures-paie";
 
 /** Ligne CNS complète : les paliers comptent toutes les natures d'heures (maladie, accident, maternité…). */
 export type LigneCnsComplete = LigneCns & { code_salarie: string; mois: number; annee: number };
@@ -70,4 +74,51 @@ export async function chargerDonneesEffectifs(supabase: SupabaseClient): Promise
 export function paresseux<T>(charger: () => Promise<T>): () => Promise<T> {
   let promesse: Promise<T> | null = null;
   return () => (promesse ??= charger().catch((e) => { promesse = null; throw e; }));
+}
+
+// ---------------------------------------------------------------- coûts (chargés au premier outil Coûts)
+
+export interface DonneesCouts {
+  /** Statistiques salariales (montants), toutes années. */
+  stats: LigneStatSalariale[];
+  /** Liste des salaires détaillée (natures de paie), toutes années. */
+  lignes: LignePaieDetaillee[];
+  /** Brut indice par photo : rang de période → code salarié → brut. Salaires individuels : jamais rendus tels quels. */
+  bruts: Map<number, Map<string, number | null>>;
+  interimCouts: CoutInterim[];
+  interimRoster: RattachementInterim[];
+}
+
+const COLONNES_STATS = "code_salarie, mois, annee, date_sortie, centre_cout, hrs_supp, total_brut, brut_base, supplements, cout_total_secu, charges_patronales, cm_patronale, cp_patronale, assurance_accident, allocation_familiale, sante_travail, mutualite, cot_pat_autres";
+const COLONNES_LIGNES = [
+  "code_salarie, mois, annee, type_remuneration, centre_cout, fonction, brut_base, total_brut",
+  "cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, charges_patronales, avantages_nature, cout_employeur",
+  ...NATURES.map((n) => n.cle),
+].join(", ");
+
+export async function chargerDonneesCouts(supabase: SupabaseClient): Promise<DonneesCouts> {
+  const [stats, lignes, bruts, interimCouts, interimRoster] = await Promise.all([
+    fetchAll(supabase.from("wp_salary_stats").select(COLONNES_STATS).order("id")),
+    fetchAll(supabase.from("wp_salary_lines").select(COLONNES_LIGNES).order("id")),
+    fetchAll(supabase.from("wp_employees").select("code_salarie, mois, annee, brut_indice").order("id")),
+    fetchAll(supabase.from("wp_interim_costs").select("code_salarie, mois, annee, composante, quantite, montant_facturable").order("id")),
+    fetchAll(supabase.from("wp_interim_roster").select("code_salarie, mois, annee, type_contrat, code_employeur, centre_cout, description_service, description_fonction, description_equipe").order("id")),
+  ]);
+  const parRang = new Map<number, Map<string, number | null>>();
+  (bruts as Record<string, unknown>[]).forEach((b) => {
+    const r = rangPeriode({ mois: Number(b.mois), annee: Number(b.annee) });
+    const m = parRang.get(r) ?? new Map<string, number | null>();
+    m.set(String(b.code_salarie), b.brut_indice == null ? null : Number(b.brut_indice));
+    parRang.set(r, m);
+  });
+  return {
+    stats: stats as LigneStatSalariale[],
+    lignes: lignes as unknown as LignePaieDetaillee[],
+    bruts: parRang,
+    interimCouts: (interimCouts as Record<string, unknown>[]).map((c) => ({
+      code_salarie: String(c.code_salarie), mois: Number(c.mois), annee: Number(c.annee), composante: String(c.composante),
+      quantite: Number(c.quantite) || 0, montant_facturable: Number(c.montant_facturable) || 0,
+    })),
+    interimRoster: (interimRoster as Record<string, unknown>[]).map((r) => ({ ...r, mois: Number(r.mois), annee: Number(r.annee) })) as RattachementInterim[],
+  };
 }

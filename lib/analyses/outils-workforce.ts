@@ -46,9 +46,11 @@ export interface PhotoWf {
   description_fonction: string | null;
   centre_cout: string | null;
   vehicle_type: string | null;
+  /** Brut indice (salaire individuel) : seulement pour les outils Coûts, jamais rendu tel quel. */
+  brut_indice?: number | null;
 }
 
-function normaliser(x: LignePhotoAnalyse): PhotoWf {
+function normaliser(x: LignePhotoAnalyse, brut?: number | null): PhotoWf {
   return {
     code_salarie: x.code_salarie,
     mois: Number(x.mois),
@@ -65,7 +67,17 @@ function normaliser(x: LignePhotoAnalyse): PhotoWf {
     description_fonction: x.description_fonction ?? null,
     centre_cout: x.centre_cout ?? null,
     vehicle_type: x.vehicle_type ?? null,
+    ...(brut !== undefined ? { brut_indice: brut } : {}),
   };
+}
+
+/** Bruts indices par rang de photo puis code salarié (voir DonneesCouts.bruts). */
+export type BrutsParPhoto = Map<number, Map<string, number | null>>;
+
+/** Copie normalisée d'une photo, avec son brut indice quand les bruts sont fournis. */
+export function copierPhoto(lignes: LignePhotoAnalyse[], rang: number | null, bruts?: BrutsParPhoto): PhotoWf[] {
+  const b = bruts && rang != null ? bruts.get(rang) : undefined;
+  return lignes.map((x) => normaliser(x, bruts ? (b?.get(x.code_salarie) ?? null) : undefined));
 }
 
 const MOIS_EN = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -90,18 +102,16 @@ export function moisDeReference(annee: number, maintenant: Date) {
  * filtrées et reclassifiées, absences de l'année (et de la précédente pour
  * une année future), congés. Reproduit tableau de bord et Coûts à l'identique.
  */
-export function contexteAnnee(d: DonneesAnalyse, e: DonneesEffectifs, annee: number, perimetre: Perimetre, maintenant: Date) {
+export function contexteAnnee(d: DonneesAnalyse, e: DonneesEffectifs, annee: number, perimetre: Perimetre, maintenant: Date, bruts?: BrutsParPhoto) {
   const moisAffiche = moisDeReference(annee, maintenant);
   const anneeFuture = annee > maintenant.getFullYear();
   const passe = perimetre === "drivers" ? (x: PhotoWf) => estChauffeur(x.description_fonction) : () => true;
   const filtresActifs = perimetre === "drivers";
-  const copie = (l: LignePhotoAnalyse[]) => l.map(normaliser);
-
   // Photos de l'année seulement, plus la photo du mois affiché si elle vient d'une autre année (repli)
-  const lignesAnnee = [...d.photos].filter(([r]) => Math.floor((r - 1) / 12) === annee).flatMap(([, l]) => l);
-  const photosParRang = indexerPhotos(copie(lignesAnnee));
+  const lignesAnnee = [...d.photos].filter(([r]) => Math.floor((r - 1) / 12) === annee).flatMap(([r, l]) => copierPhoto(l, r, bruts));
+  const photosParRang = indexerPhotos(lignesAnnee);
   const affichee = photoPourLeMois(d.photos, moisAffiche, annee);
-  const employes = copie(affichee.lignes);
+  const employes = copierPhoto(affichee.lignes, affichee.periode ? rangPeriode(affichee.periode) : null, bruts);
   ajouterPhotoSiAbsente(photosParRang, affichee.periode, employes);
 
   const deLAnnee = <T extends { annee: number }>(l: T[], a = annee) => l.filter((x) => x.annee === a);
@@ -160,7 +170,7 @@ export function contexteAnnee(d: DonneesAnalyse, e: DonneesEffectifs, annee: num
     );
   };
 
-  return { annee, moisAffiche, anneeFuture, perimetre, photos, courbe, paliersDe, mouvementsSirh, sortiesStats };
+  return { annee, moisAffiche, anneeFuture, perimetre, filtresActifs, photoAffichee, photos, courbe, paliersDe, mouvementsSirh, sortiesStats, cns, mctHorsWeekEnd, injustifiees, conges };
 }
 
 // ---------------------------------------------------------------- outils

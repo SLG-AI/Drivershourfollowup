@@ -11,7 +11,7 @@ import { indexerPhotos, photoPourLeMois, type PhotosParRang } from "@/lib/utils/
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
 import type { AbsenceCns, AbsenceInjustifiee, AbsenceMct, LignePhotoAbsence } from "@/lib/utils/wp-absenteisme";
 import type { LignePhotoTurnover, MouvementSortie } from "@/lib/utils/wp-turnover";
-import { chargerDonneesEffectifs, paresseux, type DonneesEffectifs } from "./donnees-workforce";
+import { chargerDonneesCouts, chargerDonneesEffectifs, paresseux, type DonneesCouts, type DonneesEffectifs } from "./donnees-workforce";
 
 export interface LignePaie {
   code_salarie: string;
@@ -51,6 +51,8 @@ export interface DonneesAnalyse {
   depotDe: (code: string, mois: number, annee: number) => string | null;
   /** Absences complètes, congés, imports MCT : chargés au premier outil Workforce (voir donnees-workforce.ts). */
   effectifs: () => Promise<DonneesEffectifs>;
+  /** Paie détaillée, bruts indices des photos, intérim : chargés au premier outil Coûts. */
+  couts: () => Promise<DonneesCouts>;
 }
 
 const COLONNES_PHOTO = "code_salarie, mois, annee, date_entree, date_sortie, est_sortie_temporaire, date_debut_sortie_temporaire, date_fin_sortie_temporaire, description_motif_sortie, type_contrat, taux_occupation, description_service, description_fonction, centre_cout, vehicle_type";
@@ -108,5 +110,6 @@ export async function chargerDonnees(supabase: SupabaseClient): Promise<DonneesA
     mouvements: mouvements as MouvementSortie[],
     depotDe,
     effectifs: paresseux(() => chargerDonneesEffectifs(supabase)),
+    couts: paresseux(() => chargerDonneesCouts(supabase)),
   };
 }
