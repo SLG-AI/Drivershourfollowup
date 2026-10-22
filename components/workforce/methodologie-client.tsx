@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Printer, AlertTriangle, Info } from "lucide-react";
 import type { PaliersMois } from "@/lib/utils/wp-paliers";
-import type { CoutsMois } from "@/lib/utils/wp-couts";
+import { libelleMoisCoefficient, type CoutsMois } from "@/lib/utils/wp-couts";
 import { FAMILLES, NATURES } from "@/lib/utils/wp-natures-paie";
 
 const MOIS_LABELS: Record<number, string> = {
@@ -47,7 +47,7 @@ export interface DonneesMethodologie {
   couts?: {
     paliers: CoutsMois;
     coefficient: number;
-    coefficientSource: { mois: number; annee: number; n: number; brut: number; employeur: number; perimetre: "filtre" | "entreprise" } | null;
+    coefficientSource: { mois: number; annee: number; n: number; brut: number; employeur: number; perimetre: "filtre" | "entreprise"; moisRetenus: { mois: number; annee: number }[]; moisExclus: { mois: number; annee: number; partHeuresSup: number }[] } | null;
     salairesReportes: boolean;
     periodeReference: { mois: number; annee: number } | null;
     aucunSalaire: boolean;
@@ -1289,7 +1289,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
   const p = c?.paliers;
   const coefTexte = c
     ? c.coefficientSource
-      ? `${nf(c.coefficient, 3)}, calculé sur ${MOIS_LONG[c.coefficientSource.mois]} ${c.coefficientSource.annee} (${nf(c.coefficientSource.n, 0)} lignes, ${c.coefficientSource.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
+      ? `${nf(c.coefficient, 3)}, calculé sur ${libelleMoisCoefficient(c.coefficientSource, (m) => MOIS_LONG[m])} (${nf(c.coefficientSource.n, 0)} lignes, ${c.coefficientSource.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
       : `${nf(c.coefficient, 2)}, valeur par défaut faute de paie avec charges patronales`
     : undefined;
   const reference = c?.periodeReference ? `${MOIS_LONG[c.periodeReference.mois]} ${c.periodeReference.annee}` : null;
@@ -1305,7 +1305,7 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
         titre: "Coefficient de charges patronales",
         definition: "Le rapport entre le coût employeur (brut + charges patronales) et le salaire brut, lu sur la paie réelle.",
         valeur: coefTexte,
-        formule: "coefficient = Σ coût employeur / Σ brut versé, sur le dernier mois de paie qui porte les charges patronales (Liste des salaires : coût de la paie, brut versé = total brut − avantages en nature non versés ; Statistiques rapides : total brut + charges patronales, sur le total brut)",
+        formule: "coefficient = Σ coût employeur / Σ brut versé, sur les 3 derniers mois courants de paie qui portent les charges patronales, hors mois qui soldent les heures sup (Liste des salaires : coût de la paie, brut versé = total brut − avantages en nature non versés ; Statistiques rapides : total brut + charges patronales, sur le total brut)",
         operandes: c?.coefficientSource
           ? [
               { label: "Total brut", valeur: euros(c.coefficientSource.brut) },
@@ -1314,6 +1314,15 @@ function sectionCouts(d: DonneesMethodologie | null, libelleMois: string): Secti
             ]
           : undefined,
         details: [
+          {
+            titre: "Mois courants, hors solde des heures sup",
+            points: [
+              "Les heures sup majorées ne portent presque pas de charges patronales (ni pension ni mutualité : environ 2 % contre 15 % sur le reste du brut). Les mois qui soldent une période de référence (janvier, mai, septembre) en paient 4 à 7 % du brut et leur coefficient tombe d'environ 0,01 (1,141 contre 1,149 en 2026).",
+              "Le coefficient s'applique au brut indice, qui ne porte aucune heure sup : un mois de solde pris comme référence sous-valoriserait tout le contractuel et toute la projection d'environ 0,8 %. Un mois dont les heures sup majorées dépassent 2 % du brut versé est donc écarté, et le ratio est la moyenne pondérée des 3 derniers mois courants (le taux de charges y est stable, 0,149 à 0,150).",
+              "Les mois connus seulement par les Statistiques rapides ne détaillent pas les natures de paie : faute de mois courant identifiable, le dernier mois est pris tel quel.",
+              "Le coefficient par cost center est lu sur les mêmes mois.",
+            ],
+          },
           {
             titre: "Périmètre puis entreprise, puis défaut",
             points: [

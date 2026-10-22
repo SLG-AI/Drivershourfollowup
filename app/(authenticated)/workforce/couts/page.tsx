@@ -7,7 +7,7 @@ import { reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/util
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
 import { COLONNES_CONGES, congesHorsWeekEnd, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, filtreMoisPostgrest, fusionnerSourcesPaie, libelleMoisCoefficient, moisFenetreCoefficientHorsAnnee, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 import { NATURES, anonymiserVentilation, brutVerse, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
@@ -167,6 +167,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     : [[], [], [], [], [], [], [], []];
 
   const periodeRef: MoisAnnee | null = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
+  const fenetreCoefficient = moisFenetreCoefficientHorsAnnee(dernierMoisPaie.data ? { mois: Number(dernierMoisPaie.data.mois), annee: Number(dernierMoisPaie.data.annee) } : null, selectedYear);
   const [photoReference, statsCoefficient, lignesCoefficient] = await Promise.all([
     periodeRef
       ? fetchAll(supabase.from("wp_employees").select(colonnesPhoto).eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
@@ -174,8 +175,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
-    dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cout_employeur, avantages_nature").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+    // Mois courants du coefficient de charges hors de l'année affichée (voir moisFenetreCoefficientHorsAnnee)
+    fenetreCoefficient.length > 0
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, nat_hsm, charges_patronales, cout_employeur, avantages_nature").or(filtreMoisPostgrest(fenetreCoefficient)).order("id"))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
   // Une seule liste de paie : la Liste des salaires remplace les Statistiques
@@ -337,7 +339,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     realise_lignes: duMois.realise.n,
     coefficient: coefficient.coef,
     coefficient_source: coefficient.source
-      ? `Calculé sur ${MONTH_LABELS[coefficient.source.mois]} ${coefficient.source.annee} (${coefficient.source.n.toLocaleString("fr-FR")} lignes, ${coefficient.source.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
+      ? `Calculé sur ${libelleMoisCoefficient(coefficient.source, (m) => MONTH_LABELS[m].toLowerCase())} (${coefficient.source.n.toLocaleString("fr-FR")} lignes, ${coefficient.source.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
       : null,
     cout_moyen_etp: duMois.couts.coutMoyenEtp,
     brut_plein_temps_moyen: coefficient.coef > 0 ? duMois.couts.coutMoyenEtp / coefficient.coef / (1 + (complements?.global.taux ?? 0)) : 0,

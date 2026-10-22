@@ -23,6 +23,11 @@
  * Toutes les natures de paie sont ramenées en coût employeur au coefficient
  * RÉEL du mois ; l'écart entre ce coefficient moyen et les charges réelles
  * de chaque ligne (plafonds) est isolé dans « charges non proportionnelles ».
+ * Le contractuel, lui, est chargé au coefficient des mois COURANTS (voir
+ * calculerCoefficientCharges) : la différence de coefficient sur le brut
+ * attendu est isolée dans « coefficient », pour que les lignes de salaire ne
+ * comparent que des bruts (un mois qui solde les heures sup a un coefficient
+ * réel plus bas, sans que personne ne soit payé autrement).
  */
 
 import { estActifLe, joursDuMois } from "./wp-effectif-moyen";
@@ -56,7 +61,7 @@ export interface EntreesReconciliation {
 export type CleReconciliation =
   | "variables" | "regularisations" | "injustifiees_contractuel" | "soldes"
   | "compléments" | "brut_base" | "avantages" | "charges"
-  | "hors_photo" | "sans_paie" | "methode";
+  | "coefficient" | "hors_photo" | "sans_paie" | "methode";
 
 export interface LigneReconciliation {
   cle: CleReconciliation;
@@ -138,7 +143,8 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
   e.injustifiees.forEach((a) => heuresInj.set(a.code_salarie, (heuresInj.get(a.code_salarie) ?? 0) + nombre(a.duree_hrs)));
 
   // ---- Payé contractuel par salarié, ventilé (base, compléments, injustifiées)
-  const contractuel = new Map<string, { base: number; complements: number; injustifiees: number; paye: number }>();
+  // `baseBrute` et `complementsBruts` : les mêmes, avant charges, pour isoler l'effet du coefficient
+  const contractuel = new Map<string, { base: number; complements: number; injustifiees: number; paye: number; coef: number; baseBrute: number; complementsBruts: number }>();
   for (const s of e.photo) {
     const brut = e.source.brutDe(s.code_salarie);
     if (brut === null) continue;
@@ -148,10 +154,11 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
     const coef = coefDe(s);
     const taux = tauxDe(s);
     const presence = 1 - (pctCns.get(s.code_salarie) ?? 0) / 100;
-    const base = brut * etpDe(s) * coef * net * presence;
+    const baseBrute = brut * etpDe(s) * net * presence;
+    const base = baseBrute * coef;
     const complements = base * taux;
     const injustifiees = e.heuresTravaillables > 0 ? ((heuresInj.get(s.code_salarie) ?? 0) / e.heuresTravaillables) * brut * (1 + taux) * coef : 0;
-    contractuel.set(s.code_salarie, { base, complements, injustifiees, paye: base + complements - injustifiees });
+    contractuel.set(s.code_salarie, { base, complements, injustifiees, paye: base + complements - injustifiees, coef, baseBrute, complementsBruts: baseBrute * taux });
   }
   const payeParSalarie = [...contractuel.values()].reduce((s, c) => s + c.paye, 0);
 
@@ -160,7 +167,7 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
     variables: { montant: 0, codes: new Set() }, regularisations: { montant: 0, codes: new Set() },
     injustifiees_contractuel: { montant: 0, codes: new Set() }, soldes: { montant: 0, codes: new Set() },
     "compléments": { montant: 0, codes: new Set() }, brut_base: { montant: 0, codes: new Set() },
-    avantages: { montant: 0, codes: new Set() }, charges: { montant: 0, codes: new Set() },
+    avantages: { montant: 0, codes: new Set() }, charges: { montant: 0, codes: new Set() }, coefficient: { montant: 0, codes: new Set() },
     hors_photo: { montant: 0, codes: new Set() }, sans_paie: { montant: 0, codes: new Set() }, methode: { montant: 0, codes: new Set() },
   };
   const ajouter = (cle: CleReconciliation, montant: number, code: string) => {
@@ -192,8 +199,11 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
       ajouter("hors_photo", (brutBase + nat.recurrents) * coefReel, code);
       continue;
     }
-    ajouter("brut_base", brutBase * coefReel - c.base, code);
-    ajouter("compléments", nat.recurrents * coefReel - c.complements, code);
+    // brut payé × coef réel − brut attendu × coef du contractuel
+    //   = (brut payé − brut attendu) × coef réel + brut attendu × (coef réel − coef du contractuel)
+    ajouter("brut_base", (brutBase - c.baseBrute) * coefReel, code);
+    ajouter("compléments", (nat.recurrents - c.complementsBruts) * coefReel, code);
+    ajouter("coefficient", (c.baseBrute + c.complementsBruts) * (coefReel - c.coef), code);
     ajouter("injustifiees_contractuel", c.injustifiees, code);
   }
   // Sous contrat (payé > 0 dans le modèle) sans ligne de paie : le modèle les compte, la paie non
@@ -221,12 +231,13 @@ export function reconcilierPaie(e: EntreesReconciliation): Reconciliation {
         ligne("soldes", "Soldes de sortie (lignes non périodiques, coût employeur)"),
       ]),
       groupe("Écarts de structure des salaires", [
-        ligne("brut_base", "Brut de base payé vs brut indice × ETP × présence (prorata, CNS, suspension), chargé"),
+        ligne("brut_base", "Brut de base payé vs brut indice × ETP × présence (prorata, CNS, suspension), chargé au coefficient réel"),
         ligne("compléments", "13e mois et prime de fonction réels vs taux du contractuel"),
         ligne("avantages", "Avantages en nature déduits du coût par la paie"),
         ligne("charges", "Charges réelles vs coefficient réel moyen (plafonds, régimes)"),
       ]),
       groupe("Périmètre et méthode", [
+        ligne("coefficient", "Coefficient de charges du contractuel (mois courants) vs coefficient réel du mois (heures sup soldées, plafonds)"),
         ligne("hors_photo", "Payés en paie mais absents de la photo roster (sortis avant l'export)"),
         ligne("sans_paie", "Sous contrat dans le modèle sans ligne de paie"),
         ligne("methode", "Moyenne du mois à l'échelle vs calcul salarié par salarié"),

@@ -99,10 +99,10 @@ describe("calculerCoefficientCharges", () => {
     ligne({ code_salarie: "B", mois: 7, annee: 2026, total_brut: 0, charges_patronales: 0 }),
   ];
 
-  it("prend le DERNIER mois qui a des montants, pas le dernier fichier", () => {
+  it("Statistiques rapides seules : prend le DERNIER mois qui a des montants, pas le dernier fichier", () => {
     const r = calculerCoefficientCharges(stats);
     expect(r.coef).toBeCloseTo(1.3, 10);
-    expect(r.source).toEqual({ mois: 6, annee: 2026, n: 1, brut: 1000, employeur: 1300, perimetre: "entreprise" });
+    expect(r.source).toEqual({ mois: 6, annee: 2026, n: 1, brut: 1000, employeur: 1300, perimetre: "entreprise", moisRetenus: [{ mois: 6, annee: 2026 }], moisExclus: [] });
   });
 
   it("préfère le périmètre demandé quand il y a des lignes avec montants", () => {
@@ -495,7 +495,7 @@ describe("appliquerTauxReporte", () => {
 // ============================================================
 // Liste des salaires : fusion des deux sources de paie
 // ============================================================
-import { fusionnerSourcesPaie, ligneStatDepuisPaie, coutEmployeurDeLaLigne, calculerCoefficientsParCostCenter, type LignePaieDetaillee } from "../wp-couts";
+import { fusionnerSourcesPaie, ligneStatDepuisPaie, coutEmployeurDeLaLigne, calculerCoefficientsParCostCenter, filtreMoisPostgrest, libelleMoisCoefficient, moisFenetreCoefficientHorsAnnee, type LignePaieDetaillee } from "../wp-couts";
 
 describe("fusionnerSourcesPaie — la Liste des salaires remplace les Statistiques rapides sur ses mois", () => {
   const stats: LigneStatSalariale[] = [
@@ -552,6 +552,56 @@ describe("fusionnerSourcesPaie — la Liste des salaires remplace les Statistiqu
     const parCc = calculerCoefficientsParCostCenter(paie);
     expect(parCc.get("CC1")?.coef).toBeCloseTo(4830 / 4200, 9);
     expect(parCc.get("CC2")?.coef).toBeCloseTo(6900 / 6250, 9);
+  });
+});
+
+describe("calculerCoefficientCharges — mois courants, hors solde des heures sup", () => {
+  // Une ligne de la Liste des salaires par mois : brut 1 000 dont `hsm` d'heures sup, coût `cout`
+  const paie = (mois: number, annee: number, cout: number, hsm = 0, cc = "CC1"): LignePaieDetaillee => ({
+    code_salarie: "A", mois, annee, type_remuneration: "salaire", centre_cout: cc, brut_base: 1000 - hsm, total_brut: 1000,
+    charges_patronales: cout - 1000, cout_employeur: cout, avantages_nature: 0, nat_hsm: hsm,
+  });
+
+  it("moyenne les 3 derniers mois courants et écarte le mois qui solde les heures sup", () => {
+    const lignes = [paie(5, 2026, 1140, 50), paie(6, 2026, 1150), paie(7, 2026, 1149), paie(8, 2026, 1148), paie(9, 2026, 1141, 60)];
+    const { coef, source } = calculerCoefficientCharges(fusionnerSourcesPaie([], lignes));
+    expect(coef).toBeCloseTo((1150 + 1149 + 1148) / 3000, 9);
+    expect(source?.moisRetenus).toEqual([{ mois: 8, annee: 2026 }, { mois: 7, annee: 2026 }, { mois: 6, annee: 2026 }]);
+    expect(source?.moisExclus).toEqual([{ mois: 9, annee: 2026, partHeuresSup: 0.06 }]);
+    expect(source?.mois).toBe(8);
+    expect(source?.n).toBe(3);
+    // Mêmes mois pour le coefficient par cost center
+    expect(calculerCoefficientsParCostCenter(fusionnerSourcesPaie([], lignes)).get("CC1")?.coef).toBeCloseTo(coef, 9);
+  });
+
+  it("traverse l'année et ne signale que les mois de solde plus récents que les mois retenus", () => {
+    const lignes = [paie(9, 2025, 1141, 60), paie(10, 2025, 1150), paie(11, 2025, 1150), paie(12, 2025, 1150), paie(1, 2026, 1141, 70)];
+    const { source } = calculerCoefficientCharges(fusionnerSourcesPaie([], lignes));
+    expect(source?.moisRetenus.map((m) => `${m.mois}/${m.annee}`)).toEqual(["12/2025", "11/2025", "10/2025"]);
+    expect(source?.moisExclus.map((m) => m.mois)).toEqual([1]);
+  });
+
+  it("sans mois courant identifiable (Statistiques rapides seules, ou que des soldes), garde le dernier mois", () => {
+    expect(calculerCoefficientCharges([paie(9, 2026, 1141, 60)].map(ligneStatDepuisPaie)).source?.moisRetenus).toEqual([{ mois: 9, annee: 2026 }]);
+    const stats = [ligne({ code_salarie: "A", mois: 5, annee: 2026, total_brut: 1000, charges_patronales: 100 }), ligne({ code_salarie: "A", mois: 6, annee: 2026, total_brut: 1000, charges_patronales: 300 })];
+    expect(calculerCoefficientCharges(stats).coef).toBeCloseTo(1.3, 9);
+  });
+
+  it("libelleMoisCoefficient et la fenêtre de chargement", () => {
+    const nom = (m: number) => ["", "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."][m];
+    expect(libelleMoisCoefficient({ moisRetenus: [{ mois: 8, annee: 2026 }, { mois: 7, annee: 2026 }, { mois: 6, annee: 2026 }], moisExclus: [{ mois: 9, annee: 2026, partHeuresSup: 0.06 }] }, nom))
+      .toBe("juin, juil. et août 2026, hors sept. 2026 (solde des heures sup)");
+    expect(libelleMoisCoefficient({ moisRetenus: [{ mois: 1, annee: 2026 }, { mois: 12, annee: 2025 }], moisExclus: [] }, nom)).toBe("déc. 2025 et janv. 2026");
+    // Année affichée = celle de la dernière paie : rien à charger en plus
+    expect(moisFenetreCoefficientHorsAnnee({ mois: 9, annee: 2026 }, 2026)).toEqual([]);
+    // Début d'année : la fin de l'année précédente
+    expect(moisFenetreCoefficientHorsAnnee({ mois: 2, annee: 2027 }, 2027)).toEqual([9, 10, 11, 12].map((mois) => ({ mois, annee: 2026 })));
+    // Année future : les 6 derniers mois payés
+    expect(moisFenetreCoefficientHorsAnnee({ mois: 9, annee: 2026 }, 2027).map((m) => m.mois)).toEqual([4, 5, 6, 7, 8, 9]);
+    // Année passée : sa propre fin d'année, déjà chargée
+    expect(moisFenetreCoefficientHorsAnnee({ mois: 9, annee: 2026 }, 2025)).toEqual([]);
+    expect(moisFenetreCoefficientHorsAnnee(null, 2026)).toEqual([]);
+    expect(filtreMoisPostgrest([{ mois: 11, annee: 2025 }, { mois: 12, annee: 2025 }, { mois: 1, annee: 2026 }])).toBe("and(annee.eq.2025,mois.in.(11,12)),and(annee.eq.2026,mois.in.(1))");
   });
 });
 

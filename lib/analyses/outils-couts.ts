@@ -17,6 +17,7 @@ import {
   calculerCoefficientsParCostCenter,
   calculerComplementsRecurrents,
   fusionnerSourcesPaie,
+  moisFenetreCoefficientHorsAnnee,
   type LignePaieDetaillee,
   type LigneStatSalariale,
 } from "@/lib/utils/wp-couts";
@@ -90,7 +91,9 @@ export function contexteCouts(d: DonneesAnalyse, eff: Parameters<typeof contexte
   const duMois = <T extends { annee: unknown; mois: unknown }>(l: T[], m: { mois: number; annee: number } | null) =>
     m && m.annee !== annee ? l.filter((x) => Number(x.annee) === m.annee && Number(x.mois) === m.mois) : [];
   const lignesAnnee = deLAnnee(co.lignes);
-  const lignesCoefficient = duMois(co.lignes, dernierMoisAvecCharges(co.lignes));
+  // Même fenêtre que les pages : mois courants du coefficient hors de l'année
+  const fenetre = new Set(moisFenetreCoefficientHorsAnnee(dernierMoisAvecCharges(co.lignes), annee).map((m) => `${m.annee}-${m.mois}`));
+  const lignesCoefficient = co.lignes.filter((l) => fenetre.has(`${Number(l.annee)}-${Number(l.mois)}`));
   const paie = fusionnerSourcesPaie(
     [...deLAnnee(co.stats), ...duMois(co.stats, dernierMoisAvecCharges(co.stats))] as LigneStatSalariale[],
     [...lignesAnnee, ...lignesCoefficient] as LignePaieDetaillee[]
@@ -139,6 +142,9 @@ export async function coutsTendance(d: DonneesAnalyse, p: { year: number; scope?
     definition:
       "Contractual employer cost = each person's full-time gross salary index × FTE × (1 + recurring complements rate) × employer charges coefficient, chained like the FTE curve: under contract → after suspensions → after CNS sick leave → paid → available (after MCT) → after holidays; the gaps are the cost of absences. 'Actual' = payroll employer cost of the month (gross + employer charges). Projected months reuse the latest salaries and rates.",
     employer_charges_coefficient: Math.round(k.coefficient.coef * 1000) / 1000,
+    employer_charges_coefficient_basis: k.coefficient.source
+      ? `weighted average of ${k.coefficient.source.moisRetenus.map((m) => libelleMois(m.mois, m.annee)).reverse().join(", ")}${k.coefficient.source.moisExclus.length ? `; excludes ${k.coefficient.source.moisExclus.map((m) => libelleMois(m.mois, m.annee)).join(", ")}, which settle reference-period overtime (overtime carries almost no employer charges)` : ""}`
+      : "default value (no payroll with employer charges)",
     salaries_available: !k.aucunSalaire,
     by_month: k.courbeCouts.map((pc, i) => ({
       month: libelleMois(i + 1, p.year),
