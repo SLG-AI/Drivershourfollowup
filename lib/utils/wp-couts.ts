@@ -82,6 +82,8 @@ export interface LigneStatSalariale {
   non_periodique?: boolean;
   /** D'où vient la ligne : « lignes » (Liste des salaires) ou « stats » (Statistiques rapides). */
   source?: "stats" | "lignes";
+  /** Heures sup majorées payées (nature HSM, en euros), Liste des salaires seulement. */
+  heures_sup_majorees?: unknown;
 }
 
 /** Une ligne dont les charges patronales sont connues : le coût employeur peut en être lu. */
@@ -143,6 +145,7 @@ export function ligneStatDepuisPaie(l: LignePaieDetaillee): LigneStatSalariale {
     avantages_nature: nombre(l.avantages_nature),
     non_periodique: l.type_remuneration === "non_periodique",
     source: "lignes",
+    heures_sup_majorees: nombre(l.nat_hsm),
   };
 }
 
@@ -259,26 +262,115 @@ export interface SourceCoefficient {
   employeur: number;
   /** « filtre » quand le ratio a pu être calculé sur le périmètre demandé, « entreprise » sinon. */
   perimetre: "filtre" | "entreprise";
-}
-
-/** Dernier (annee, mois) parmi des lignes, et les lignes de ce mois. */
-function dernierMois(lignes: LigneStatSalariale[]): { mois: number; annee: number; lignes: LigneStatSalariale[] } | null {
-  let meilleur: { mois: number; annee: number } | null = null;
-  for (const l of lignes) {
-    const annee = Number(l.annee);
-    const mois = Number(l.mois);
-    if (!meilleur || annee > meilleur.annee || (annee === meilleur.annee && mois > meilleur.mois)) {
-      meilleur = { mois, annee };
-    }
-  }
-  if (!meilleur) return null;
-  const { mois, annee } = meilleur;
-  return { mois, annee, lignes: lignes.filter((l) => Number(l.annee) === annee && Number(l.mois) === mois) };
+  /** Mois moyennés, du plus récent au plus ancien (`mois`/`annee` = le premier). */
+  moisRetenus: { mois: number; annee: number }[];
+  /** Mois plus récents écartés parce qu'ils soldent les heures sup d'une période de référence. */
+  moisExclus: { mois: number; annee: number; partHeuresSup: number }[];
 }
 
 /**
- * Coefficient de charges patronales = Σ coût employeur / Σ brut VERSÉ du
- * DERNIER mois qui porte des charges patronales. Le brut versé exclut les
+ * Part du brut versé en heures sup majorées au-delà de laquelle un mois
+ * solde les heures sup d'une période de référence (janvier, mai, septembre :
+ * 4 à 7 % du brut, contre moins de 0,5 % les autres mois en 2026).
+ */
+export const SEUIL_MOIS_SOLDE_HEURES_SUP = 0.02;
+/** Nombre de mois courants moyennés pour le coefficient. */
+export const NB_MOIS_COEFFICIENT = 3;
+
+/**
+ * Mois sur lesquels lire le coefficient de charges : les NB_MOIS_COEFFICIENT
+ * derniers mois COURANTS de la Liste des salaires.
+ *
+ * POURQUOI. Les heures sup majorées ne portent presque pas de charges (pas de
+ * pension ni de mutualité : ~2 % contre ~15 % sur le reste du brut). Les mois
+ * qui soldent une période de référence en paient 4 à 7 % du brut, et leur
+ * coefficient tombe de 1,149 à 1,141 (2026). Pris seul comme « dernier
+ * mois », un tel mois sous-valorisait TOUT le contractuel et toute la
+ * projection d'environ 0,8 %, alors que le brut indice auquel le coefficient
+ * s'applique ne porte aucune heure sup. Hors de ces mois, le taux de charges
+ * est stable (0,149–0,150) : la moyenne de 3 mois lisse le reste.
+ *
+ * Les mois des seules Statistiques rapides ne portent pas les natures : on ne
+ * sait pas s'ils soldent des heures sup. Faute de mois courant connu, on
+ * garde l'ancienne règle, le dernier mois, quel qu'il soit.
+ */
+function moisDuCoefficient(lignes: LigneStatSalariale[]): Pick<SourceCoefficient, "moisRetenus" | "moisExclus"> & { lignes: LigneStatSalariale[] } | null {
+  const parMois = new Map<string, { mois: number; annee: number; lignes: LigneStatSalariale[] }>();
+  for (const l of lignes) {
+    const cle = `${Number(l.annee)}-${Number(l.mois)}`;
+    const m = parMois.get(cle) ?? { mois: Number(l.mois), annee: Number(l.annee), lignes: [] };
+    m.lignes.push(l);
+    parMois.set(cle, m);
+  }
+  const tries = [...parMois.values()].sort((a, b) => b.annee - a.annee || b.mois - a.mois);
+  if (tries.length === 0) return null;
+  const retenus: typeof tries = [];
+  const exclus: SourceCoefficient["moisExclus"] = [];
+  for (const m of tries) {
+    if (retenus.length === NB_MOIS_COEFFICIENT) break;
+    if (!m.lignes.some((l) => l.source === "lignes")) continue;
+    const brut = m.lignes.reduce((s, l) => s + brutVerseDeLaLigne(l), 0);
+    const partHeuresSup = brut > 0 ? m.lignes.reduce((s, l) => s + nombre(l.heures_sup_majorees), 0) / brut : 0;
+    if (partHeuresSup > SEUIL_MOIS_SOLDE_HEURES_SUP) {
+      if (retenus.length === 0) exclus.push({ mois: m.mois, annee: m.annee, partHeuresSup });
+      continue;
+    }
+    retenus.push(m);
+  }
+  if (retenus.length === 0) {
+    const dernier = tries[0];
+    return { moisRetenus: [{ mois: dernier.mois, annee: dernier.annee }], moisExclus: [], lignes: dernier.lignes };
+  }
+  return {
+    moisRetenus: retenus.map(({ mois, annee }) => ({ mois, annee })),
+    moisExclus: exclus,
+    lignes: retenus.flatMap((m) => m.lignes),
+  };
+}
+
+/**
+ * Mois de paie à charger EN PLUS de l'année affichée pour que le coefficient
+ * trouve ses mois courants : la fenêtre de 6 mois (assez pour 3 mois courants,
+ * un mois sur quatre soldant les heures sup) qui finit au dernier mois de paie
+ * avec charges, ou à décembre de l'année affichée quand elle est passée.
+ * Seuls les mois hors de l'année affichée sont rendus, ceux de l'année étant
+ * déjà chargés.
+ */
+export function moisFenetreCoefficientHorsAnnee(dernier: { mois: number; annee: number } | null, annee: number): { mois: number; annee: number }[] {
+  if (!dernier) return [];
+  const fin = dernier.annee > annee ? annee * 12 + 11 : dernier.annee * 12 + dernier.mois - 1;
+  const mois: { mois: number; annee: number }[] = [];
+  for (let r = fin - 5; r <= fin; r++) {
+    const m = { mois: (r % 12) + 1, annee: Math.floor(r / 12) };
+    if (m.annee !== annee) mois.push(m);
+  }
+  return mois;
+}
+
+/**
+ * Mois d'un coefficient, en clair : « juin, juillet et août 2026, hors
+ * septembre 2026 (solde des heures sup) ». `noms` donne le nom de chaque mois (1–12).
+ */
+export function libelleMoisCoefficient(source: Pick<SourceCoefficient, "moisRetenus" | "moisExclus">, noms: (mois: number) => string): string {
+  const liste = (ms: { mois: number; annee: number }[]) => {
+    const parts = [...ms].reverse().map((m, i, t) => (i < t.length - 1 && t[i + 1].annee === m.annee ? noms(m.mois) : `${noms(m.mois)} ${m.annee}`));
+    return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} et ${parts[parts.length - 1]}` : parts[0] ?? "";
+  };
+  const retenus = liste(source.moisRetenus);
+  return source.moisExclus.length > 0 ? `${retenus}, hors ${liste(source.moisExclus)} (solde des heures sup)` : retenus;
+}
+
+/** Filtre PostgREST `or` sur une liste de (mois, année), à passer à `.or()`. */
+export function filtreMoisPostgrest(mois: { mois: number; annee: number }[]): string {
+  const parAnnee = new Map<number, number[]>();
+  mois.forEach((m) => parAnnee.set(m.annee, [...(parAnnee.get(m.annee) ?? []), m.mois]));
+  return [...parAnnee].map(([a, ms]) => `and(annee.eq.${a},mois.in.(${ms.join(",")}))`).join(",");
+}
+
+/**
+ * Coefficient de charges patronales = Σ coût employeur / Σ brut VERSÉ des 3
+ * derniers mois COURANTS qui portent des charges patronales (hors mois qui
+ * soldent les heures sup, voir moisDuCoefficient). Le brut versé exclut les
  * avantages en nature (voiture) : la paie les retire du coût, et le brut
  * indice auquel le coefficient s'applique ne les porte pas non plus.
  *
@@ -305,23 +397,24 @@ export function calculerCoefficientCharges(
   candidats.push({ lignes: avecMontants, perimetre: "entreprise" });
 
   for (const { lignes, perimetre } of candidats) {
-    const dernier = dernierMois(lignes);
-    if (!dernier) continue;
-    const brut = dernier.lignes.reduce((s, l) => s + brutVerseDeLaLigne(l), 0);
-    const employeur = dernier.lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
+    const fenetre = moisDuCoefficient(lignes);
+    if (!fenetre) continue;
+    const brut = fenetre.lignes.reduce((s, l) => s + brutVerseDeLaLigne(l), 0);
+    const employeur = fenetre.lignes.reduce((s, l) => s + coutEmployeurDeLaLigne(l), 0);
     // Garde : un coût employeur ne peut pas être inférieur au brut
     if (brut <= 0 || employeur < brut) continue;
+    const [{ mois, annee }] = fenetre.moisRetenus;
     return {
       coef: employeur / brut,
-      source: { mois: dernier.mois, annee: dernier.annee, n: dernier.lignes.length, brut, employeur, perimetre },
+      source: { mois, annee, n: fenetre.lignes.length, brut, employeur, perimetre, moisRetenus: fenetre.moisRetenus, moisExclus: fenetre.moisExclus },
     };
   }
   return { coef: defaut, source: null };
 }
 
 /**
- * Coefficient de charges par cost center, sur le dernier mois de statistiques
- * salariales qui porte des charges patronales : les charges varient avec la
+ * Coefficient de charges par cost center, sur les mêmes mois courants que le
+ * coefficient global (moisDuCoefficient) : les charges varient avec la
  * structure des salaires (plafonds, régimes), un centre de chauffeurs ne pèse
  * pas comme l'administration. Un cost center sans ligne ce mois-là garde le
  * coefficient global.
@@ -330,7 +423,7 @@ export function calculerCoefficientsParCostCenter(
   stats: LigneStatSalariale[]
 ): Map<string, { coef: number; n: number; brut: number; employeur: number }> {
   const resultat = new Map<string, { coef: number; n: number; brut: number; employeur: number }>();
-  const dernier = dernierMois(stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l) && !l.non_periodique && !!l.centre_cout));
+  const dernier = moisDuCoefficient(stats.filter((l) => ligneAvecMontants(l) && ligneAvecCharges(l) && !l.non_periodique && !!l.centre_cout));
   if (!dernier) return resultat;
   const parCc = new Map<string, LigneStatSalariale[]>();
   dernier.lignes.forEach((l) => {

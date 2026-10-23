@@ -81,6 +81,7 @@ export function couvertureDonnees(d: DonneesAnalyse, maintenant = new Date()) {
       "Depot is read from the HR roster snapshot of the month; drivers missing from the snapshot are grouped as 'not in roster'.",
       "Part-time drivers count as one driver in per-driver ratios.",
       "Any group of fewer than 3 people is merged into 'Others'; quantiles and top shares are withheld for small groups to protect individuals.",
+      "Workforce Planning tools (workforce_*, interim_costs, scenario_projection, gap_to_target) use the HR roster snapshots, absence files, payroll and planning data of the Workforce module; they list their own available years, scenarios and targets when asked for missing data.",
     ],
   };
 }
@@ -368,3 +369,45 @@ export function departsParDepot(d: DonneesAnalyse, p: { year: number }, maintena
   };
 }
 
+
+// ---------------------------------------------------------------- tendances mensuelles absentéisme & départs
+
+/** Années qui ont une photo d'effectif ou des absences, jusqu'à l'année en cours. */
+function anneesWorkforce(d: DonneesAnalyse, maintenant: Date) {
+  const annees = new Set<number>();
+  periodesDesPhotos(d.photos).forEach((p) => annees.add(p.annee));
+  d.absencesCns.forEach((a) => annees.add(Number(a.annee)));
+  return [...annees].filter((a) => a <= maintenant.getFullYear()).sort((a, b) => a - b);
+}
+
+export function tendanceAbsenteismeDeparts(d: DonneesAnalyse, p: { years?: number[] }, maintenant = new Date()) {
+  const disponibles = anneesWorkforce(d, maintenant);
+  const annees = (p.years?.length ? p.years.filter((a) => disponibles.includes(a)) : disponibles).sort((a, b) => a - b);
+  if (annees.length === 0) return { error: `No workforce data for ${p.years?.join(", ") || "any year"}. Available years: ${disponibles.join(", ") || "none"}.` };
+  return {
+    definition: "Monthly absence rates in % of available FTE time (CNS sick leave, short sick leave MCT, unjustified, total). Monthly turnover = exits excluding end of temporary assignments, in % of month-end FTE headcount; voluntary / involuntary exits in FTE. Company-wide, all functions.",
+    by_year: annees.map((annee) => {
+      const mois = moisCouverts(annee, maintenant);
+      const a = analyserAbsenteisme(annee, mois, d.photos, d.absencesCns, d.absencesMct, d.absencesInjustifiees);
+      const t = analyserTurnover(annee, mois, d.photos, d.mouvements);
+      return {
+        year: annee,
+        absence_total_pct: a.moisAvecDonnees.length ? a.taux.global : null,
+        turnover_pct: t.moisCouverts.length ? t.tauxTotal : null,
+        average_fte: r1(t.effectifMoyenEtp),
+        by_month: mois.map((m) => {
+          const am = a.moisAvecDonnees.includes(m) ? a.parMois.find((x) => x.mois === m) : undefined;
+          const tm = t.parMois.find((x) => x.mois === m);
+          return {
+            month: libelleMois(m, annee),
+            absence: am ? { sick_cns_pct: am.cns, short_sick_mct_pct: am.mct, unjustified_pct: am.injustifiees, total_pct: am.global } : null,
+            turnover: tm
+              ? { month_end_fte: r1(tm.effectifEtp), turnover_pct: r2(tm.taux), voluntary_exits_fte: r1(tm.volontaire), involuntary_exits_fte: r1(tm.involontaire), other_exits_fte: r1(tm.autre), own_roster_snapshot: tm.couvert }
+              : null,
+          };
+        }),
+      };
+    }),
+    note: "Months without their own roster snapshot reuse the latest earlier headcount (own_roster_snapshot: false).",
+  };
+}

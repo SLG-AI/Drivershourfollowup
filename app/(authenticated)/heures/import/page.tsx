@@ -95,6 +95,7 @@ export default function ImportPage() {
           // Disable the one with fewer rows
           if (currCount > prevCount) {
             configs[prevIndex].enabled = false;
+            seen.set(key, i);
           } else {
             configs[i].enabled = false;
           }

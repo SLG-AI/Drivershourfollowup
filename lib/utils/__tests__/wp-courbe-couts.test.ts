@@ -61,6 +61,35 @@ describe("construireCourbeCouts", () => {
     expect(couts[6].realise.n).toBe(1);
   });
 
+  it("vue Moyenne : salarié par salarié, sortis du mois compris, à leur propre salaire", () => {
+    // C, à 2 000 €, est sorti le 16 août et n'est plus dans la photo de fin d'août
+    const C: SalarieCout = { code_salarie: "C", taux_occupation: 100, date_entree: "2020-01-01", date_sortie: "2026-08-16", est_sortie_temporaire: false, brut_indice: 2000, centre_cout: "SLA202" };
+    const etpC = construireCourbeEffectifs({
+      selectedYear: 2026, selectedMonth: 8, now: new Date(2026, 8, 22), anneeFuture: false, filtresActifs: true, targetTotal: 0,
+      photoDuMoisDe: () => [A, B], photoExacte: (m) => m === 8, sortisHorsPhotoPour: (m) => (m === 8 ? [{ date_sortie: "2026-08-16", taux_occupation: 100 }] : []),
+      absences, mctHorsWeekEnd: mct, absencesInjustifiees: inj, absencesAnneePrec: [], mctAnneePrec: [], injAnneePrec: [],
+    });
+    const c = construireCourbeCouts({
+      headcountData: etpC.headcountData, selectedYear: 2026, filtresActifs: true,
+      photoDuMois: () => [A, B], salariesSortisHorsPhotoPour: (m) => (m === 8 ? [C] : []), photoReference: [A, B], coef: COEF,
+      absences, mctHorsWeekEnd: mct, absencesInjustifiees: inj,
+      stats: [{ code_salarie: "C", mois: 8, annee: 2026, total_brut: 1000, charges_patronales: 150 }],
+    });
+    const m = c[7].point.moyenne!;
+    const fractionC = 16 / 31;
+    // Sous contrat : A + B (50 %) + C au prorata, chacun à SON brut (pas au coût moyen d'un ETP)
+    expect(m.effectif_brut).toBeCloseTo((1.5 * BRUT + 2000 * fractionC) * COEF, 0);
+    expect(m.effectif_net).toBeCloseTo((BRUT + 2000 * fractionC) * COEF, 0);
+    // A à 50 % CNS, moins 1/8 d'injustifiées ; C payé plein sur ses jours
+    const paye = (0.5 * BRUT - BRUT / 8 + 2000 * fractionC) * COEF;
+    expect(m.effectif_apres_injustifiees).toBeCloseTo(paye, 0);
+    // MCT : l'écart de fin de mois (1/4 d'ETP de A), mis à l'échelle du net moyen
+    const k = (BRUT + 2000 * fractionC) / BRUT;
+    expect(m.effectif_apres_mct).toBeCloseTo(paye - 0.25 * BRUT * COEF * k, 0);
+    // Le réalisé du périmètre comprend la paie de C
+    expect(c[7].point.realise).toBe(1150);
+  });
+
   it("signale un salaire lu hors de la photo du mois (photo « sans salaire »)", () => {
     const sansSalaire = [{ ...A, brut_indice: null }, { ...B, brut_indice: 0 }];
     const c = construireCourbeCouts({

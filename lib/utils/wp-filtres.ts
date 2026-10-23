@@ -52,6 +52,19 @@ export function familleContrat(typeContrat: string | null | undefined): "CDI" | 
   return prefixe === "CDI" || prefixe === "CDD" ? prefixe : "";
 }
 
+/**
+ * Préfixes du type de contrat qui désignent un intérimaire dans le roster HRIS.
+ * Les intérimaires y figurent pour leur dépôt et leur cost center seulement :
+ * ils sont rangés dans wp_interim_roster, jamais dans wp_employees.
+ * À AJUSTER dès que le libellé exact du HRIS est connu.
+ */
+export const PREFIXES_CONTRAT_INTERIM = ["INT"];
+
+export function estInterim(typeContrat: string | null | undefined): boolean {
+  const t = (typeContrat || "").trim().toUpperCase();
+  return t !== "" && PREFIXES_CONTRAT_INTERIM.some((p) => t.startsWith(p));
+}
+
 function lireListe(valeur: string | undefined): string[] {
   if (valeur === AUCUNE_VALEUR) return [AUCUNE_VALEUR];
   return valeur ? valeur.split(SEP_FILTRE) : [];

@@ -55,7 +55,7 @@ export async function upsertTargets(targets: TargetInput[]) {
 // Target scenarios CRUD
 // ============================================================
 
-export async function createTargetScenario(input: { name: string; description: string }) {
+export async function createTargetScenario(input: { name: string; description: string; annee: number }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Non authentifié");
@@ -65,6 +65,7 @@ export async function createTargetScenario(input: { name: string; description: s
     .insert({
       name: input.name,
       description: input.description,
+      annee: input.annee,
       created_by: user.id,
     })
     .select("id")
@@ -107,6 +108,7 @@ export async function duplicateTargetScenario(sourceId: string) {
     .insert({
       name: `${source.name} (copie)`,
       description: source.description,
+      annee: source.annee,
       created_by: user.id,
     })
     .select("id")
@@ -131,6 +133,7 @@ export async function updateTargetScenario(
   input: {
     name: string;
     description: string;
+    annee: number;
     values: { mois: number; depot: string; target_etp: number }[];
   }
 ) {
@@ -140,7 +143,7 @@ export async function updateTargetScenario(
 
   const { error } = await supabase
     .from("wp_target_scenarios")
-    .update({ name: input.name, description: input.description, updated_at: new Date().toISOString() })
+    .update({ name: input.name, description: input.description, annee: input.annee, updated_at: new Date().toISOString() })
     .eq("id", id);
 
   if (error) throw new Error("Erreur mise à jour: " + error.message);

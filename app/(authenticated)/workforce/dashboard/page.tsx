@@ -1,11 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
-import { listRosterPeriods, rangPeriode, resolveRosterPeriod } from "@/lib/utils/roster-period";
+import { listRosterPeriods, resolveRosterPeriod } from "@/lib/utils/roster-period";
 import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
 import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur as sortiesConstateesSurListes, type MovementItem } from "@/lib/utils/wp-movements";
 import { MovementsPanel } from "@/components/workforce/movements-panel";
 import { computeEffectifMoyen } from "@/lib/utils/wp-effectif-moyen";
+import { preparerPhotosAnnee } from "@/lib/utils/wp-photos-annee";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { COLONNES_CONGES, congesHorsWeekEnd, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
 import { etpDe, etpDisponibleDe, etpSuspenduDe, injustifieesDuPerimetre, type SalariePaliers } from "@/lib/utils/wp-paliers";
@@ -273,22 +274,6 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     ...absences.filter((a) => Number(a.hrs_maladie || 0) > 0).map((a) => a.code_salarie),
     ...codesMaladieAnneePrec,
   ]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const photosPreparees = new Map<number, any[]>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const photoDuMoisDe = (m: number, annee: number): any[] => {
-    const { lignes, periode } = photoPourLeMois(photosParRang, m, annee);
-    if (!periode) return allEmployees;
-    const r = rangPeriode(periode);
-    let prete = photosPreparees.get(r);
-    if (!prete) {
-      prete = reclassifierSortiesTemporaires(lignes.filter(passeLesFiltres), codesAvecMaladieCnsAnnee);
-      photosPreparees.set(r, prete);
-    }
-    return prete;
-  };
-  const photoDuMois = (m: number) => photoDuMoisDe(m, selectedYear);
-
   // Mouvements entre le mois précédent et le mois affiché. Les statistiques
   // salariales datent les sorties réelles (un CDD arrêté avant terme disparaît
   // du roster alors que la photo précédente ne connaît que la date prévue).
@@ -297,6 +282,15 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
   // Sorties constatées (IN/OUT, puis statistiques salariales) : voir wp-movements.ts
   const sortiesConstateesSur = (mois: number, annee: number, prec: MoisAnnee) =>
     sortiesConstateesSurListes(mouvementsSirh, salaryStats, mois, annee, prec);
+  // Photo filtrée et reclassifiée de chaque mois (partagé avec Coûts et l'analyste IA)
+  const { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour } = preparerPhotosAnnee({
+    annee: selectedYear,
+    photosParRang,
+    photoAffichee: allEmployees,
+    passe: passeLesFiltres,
+    codesMaladie: codesAvecMaladieCnsAnnee,
+    sortiesConstateesSur,
+  });
   const sortiesConstatees = sortiesConstateesSur(selectedMonth, selectedYear, moisPrecedent);
   const mouvements = moisPrecedentDisponible
     ? computeRosterMovements(employeesPrecedents, allEmployees, selectedMonth, selectedYear, sortiesConstatees, {
@@ -622,21 +616,8 @@ export default async function WorkforceDashboardPage({ searchParams }: Props) {
     filtresActifs: filtres.actifs,
     targetTotal,
     photoDuMoisDe,
-    photoExacte: (m, annee) => photoPourLeMois(photosParRang, m, annee).exacte,
-    // Sortis du mois absents de la photo : repris seulement si le mois ET le
-    // précédent ont chacun LEUR photo — comparer une photo reconduite à
-    // elle-même n'apprend rien.
-    sortisHorsPhotoPour: (m) => {
-      const precM: MoisAnnee = m === 1 ? { mois: 12, annee: selectedYear - 1 } : { mois: m - 1, annee: selectedYear };
-      if (!photoPourLeMois(photosParRang, m, selectedYear).exacte || !photoPourLeMois(photosParRang, precM.mois, precM.annee).exacte) return [];
-      const codesPhotoM = new Set(photoDuMois(m).map((e) => e.code_salarie));
-      return computeRosterMovements(
-        photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, selectedYear,
-        sortiesConstateesSur(m, selectedYear, precM)
-      ).sortiesDefinitives
-        .filter((i) => i.date && !codesPhotoM.has(i.code_salarie))
-        .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
-    },
+    photoExacte,
+    sortisHorsPhotoPour,
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,

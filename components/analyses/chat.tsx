@@ -16,6 +16,15 @@ const ETAPES: Record<string, string> = {
   workload_concentration: "Concentration de la charge",
   absenteeism_by_depot: "Absentéisme par dépôt",
   turnover_by_depot: "Départs par dépôt",
+  absence_turnover_monthly_trend: "Absentéisme et turnover mois par mois",
+  workforce_headcount_trend: "Évolution des effectifs (ETP)",
+  workforce_headcount_by_depot: "Effectifs par dépôt",
+  workforce_movements: "Entrées, sorties et suspensions",
+  workforce_costs_trend: "Coûts mois par mois",
+  workforce_costs_by_depot: "Paie par dépôt",
+  interim_costs: "Coûts intérim",
+  scenario_projection: "Projection d'un scénario",
+  gap_to_target: "Écart aux besoins cibles",
   submit_deck: "Rédaction et vérification du deck",
 };
 
@@ -150,7 +159,7 @@ export function ChatAnalyses({ initiales }: { initiales: AnalyseJob[] }) {
             <CardContent className="space-y-3 pt-6 text-sm">
               <p className="font-medium">Que voulez-vous analyser ?</p>
               <p className="text-muted-foreground">
-                L&apos;IA choisit parmi des indicateurs calculés par l&apos;application (journées longues, jours supplémentaires, heures, concentration de la charge, absentéisme, départs, par dépôt), puis rédige un deck. Chaque chiffre du deck est vérifié contre ces calculs.
+                L&apos;IA choisit parmi des indicateurs calculés par l&apos;application (journées longues, jours supplémentaires, heures, concentration de la charge, absentéisme, départs, par dépôt ; et côté Workforce Planning : effectifs, mouvements, coûts, intérim, scénarios et besoins cibles), puis rédige un deck. Chaque chiffre du deck est vérifié contre ces calculs.
               </p>
               <p className="flex items-start gap-2 text-xs text-muted-foreground">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />

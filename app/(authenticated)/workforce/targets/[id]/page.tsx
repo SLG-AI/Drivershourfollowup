@@ -50,7 +50,7 @@ export default async function TargetScenarioEditorPage({ params }: Props) {
   return (
     <div className="space-y-6">
       <TargetScenarioEditorClient
-        scenario={{ id: scenario.id, name: scenario.name, description: scenario.description || "" }}
+        scenario={{ id: scenario.id, name: scenario.name, description: scenario.description || "", annee: Number(scenario.annee) }}
         values={(values || []).map((v) => ({
           mois: Number(v.mois),
           depot: v.depot as string,

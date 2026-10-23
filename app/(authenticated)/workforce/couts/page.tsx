@@ -1,13 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchAll } from "@/lib/supabase/fetch-all";
-import { rangPeriode, resolveRosterPeriod } from "@/lib/utils/roster-period";
-import { ajouterPhotoSiAbsente, indexerPhotos, photoPourLeMois } from "@/lib/utils/roster-photos";
+import { resolveRosterPeriod } from "@/lib/utils/roster-period";
+import { ajouterPhotoSiAbsente, indexerPhotos } from "@/lib/utils/roster-photos";
 import { AUCUNE_VALEUR, lireFiltresWorkforce } from "@/lib/utils/wp-filtres";
-import { computeRosterMovements, reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
+import { reclassifierSortiesTemporaires, sortiesConstateesSur } from "@/lib/utils/wp-movements";
 import { construireCourbeEffectifs, type MoisAnnee } from "@/lib/utils/wp-courbe-effectifs";
 import { construireCourbeCouts } from "@/lib/utils/wp-courbe-couts";
 import { COLONNES_CONGES, congesHorsWeekEnd, moisCongesComplets, type LigneConge } from "@/lib/utils/wp-conges";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, fusionnerSourcesPaie, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, construireSourceSalaires, filtreMoisPostgrest, fusionnerSourcesPaie, libelleMoisCoefficient, moisFenetreCoefficientHorsAnnee, tauxComplementsDe, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 import { NATURES, anonymiserVentilation, brutVerse, decomposerParFamille, decomposerParMois, decomposerParNature, ventilerPar, type LignePaieDecomposable } from "@/lib/utils/wp-natures-paie";
 import { PaieDecomposition, type NatureMontant } from "@/components/workforce/paie-decomposition";
 import { PaieCase, type DetailCase, type DetailSection } from "@/components/workforce/paie-case";
@@ -22,6 +22,7 @@ import { amplitudesParMois, estChauffeur, tranchesParJournees, ventilerAmplitude
 import { injustifieesDuPerimetre } from "@/lib/utils/wp-paliers";
 import { FAMILLES } from "@/lib/utils/wp-natures-paie";
 import { estActifLe } from "@/lib/utils/wp-effectif-moyen";
+import { preparerPhotosAnnee } from "@/lib/utils/wp-photos-annee";
 import { projeterScenarios } from "@/lib/utils/wp-projection-scenarios";
 import { valoriserProjection } from "@/lib/utils/wp-couts-scenario";
 import { LIBELLES_LEVIER, unite, type LevierCout } from "@/lib/utils/wp-leviers-cout";
@@ -39,6 +40,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Upload } from "lucide-react";
+import { agregerInterimParCostCenter, type CoutInterim, type RattachementInterim } from "@/lib/utils/wp-interim";
+
+/** Composantes de l'export SLG Intérim, dans l'ordre de sa page Coûts. */
+const COMPOSANTES_INTERIM: { key: string; label: string }[] = [
+  { key: "base", label: "Base" },
+  { key: "overtime", label: "Heures sup." },
+  { key: "night", label: "Nuit" },
+  { key: "sunday", label: "Dimanche" },
+  { key: "holiday", label: "Férié" },
+  { key: "amplitude_11", label: "Amplitude 11" },
+  { key: "amplitude_12", label: "Amplitude 12" },
+  { key: "meal_voucher", label: "Chèques repas" },
+];
 
 const MONTH_LABELS: Record<number, string> = {
   1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril",
@@ -153,6 +167,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     : [[], [], [], [], [], [], [], []];
 
   const periodeRef: MoisAnnee | null = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
+  const fenetreCoefficient = moisFenetreCoefficientHorsAnnee(dernierMoisPaie.data ? { mois: Number(dernierMoisPaie.data.mois), annee: Number(dernierMoisPaie.data.annee) } : null, selectedYear);
   const [photoReference, statsCoefficient, lignesCoefficient] = await Promise.all([
     periodeRef
       ? fetchAll(supabase.from("wp_employees").select(colonnesPhoto).eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
@@ -160,8 +175,9 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
-    dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, charges_patronales, cout_employeur, avantages_nature").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+    // Mois courants du coefficient de charges hors de l'année affichée (voir moisFenetreCoefficientHorsAnnee)
+    fenetreCoefficient.length > 0
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, nat_hsm, charges_patronales, cout_employeur, avantages_nature").or(filtreMoisPostgrest(fenetreCoefficient)).order("id"))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
   // Une seule liste de paie : la Liste des salaires remplace les Statistiques
@@ -195,21 +211,15 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     ...absences.filter((a) => Number(a.hrs_maladie || 0) > 0).map((a) => String(a.code_salarie)),
     ...codesMaladieAnneePrec,
   ]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const photosPreparees = new Map<number, any[]>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const photoDuMoisDe = (m: number, annee: number): any[] => {
-    const { lignes, periode } = photoPourLeMois(photosParRang, m, annee);
-    if (!periode) return allEmployees;
-    const r = rangPeriode(periode);
-    let prete = photosPreparees.get(r);
-    if (!prete) {
-      prete = reclassifierSortiesTemporaires(lignes.filter(passeLesFiltres), codesAvecMaladieCnsAnnee);
-      photosPreparees.set(r, prete);
-    }
-    return prete;
-  };
-  const photoDuMois = (m: number) => photoDuMoisDe(m, selectedYear);
+  // Photo filtrée et reclassifiée de chaque mois (partagé avec le tableau de bord et l'analyste IA)
+  const { photoDuMoisDe, photoDuMois, photoExacte, sortisHorsPhotoPour, salariesSortisHorsPhotoPour } = preparerPhotosAnnee({
+    annee: selectedYear,
+    photosParRang,
+    photoAffichee: allEmployees,
+    passe: passeLesFiltres,
+    codesMaladie: codesAvecMaladieCnsAnnee,
+    sortiesConstateesSur: (mois, annee, prec) => sortiesConstateesSur(mouvementsSirh, salaryStats, mois, annee, prec),
+  });
 
   // ---- Les douze points en ETP (calcul partagé avec le tableau de bord)
   const courbe = construireCourbeEffectifs({
@@ -220,18 +230,8 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     filtresActifs: filtres.actifs,
     targetTotal: 0,
     photoDuMoisDe,
-    photoExacte: (m, annee) => photoPourLeMois(photosParRang, m, annee).exacte,
-    sortisHorsPhotoPour: (m) => {
-      const precM: MoisAnnee = m === 1 ? { mois: 12, annee: selectedYear - 1 } : { mois: m - 1, annee: selectedYear };
-      if (!photoPourLeMois(photosParRang, m, selectedYear).exacte || !photoPourLeMois(photosParRang, precM.mois, precM.annee).exacte) return [];
-      const codesPhotoM = new Set(photoDuMois(m).map((e) => e.code_salarie));
-      return computeRosterMovements(
-        photoDuMoisDe(precM.mois, precM.annee), photoDuMois(m), m, selectedYear,
-        sortiesConstateesSur(mouvementsSirh, salaryStats, m, selectedYear, precM)
-      ).sortiesDefinitives
-        .filter((i) => i.date && !codesPhotoM.has(i.code_salarie))
-        .map((i) => ({ date_sortie: i.date!, taux_occupation: i.etp * 100 }));
-    },
+    photoExacte,
+    sortisHorsPhotoPour,
     absences,
     mctHorsWeekEnd,
     absencesInjustifiees,
@@ -253,6 +253,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     selectedYear,
     filtresActifs: filtres.actifs,
     photoDuMois,
+    salariesSortisHorsPhotoPour: salariesSortisHorsPhotoPour as (mois: number) => SalarieCout[],
     photoReference: photoReference as SalarieCout[] | null,
     coef: coefficient.coef,
     coefParCc,
@@ -339,7 +340,7 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     realise_lignes: duMois.realise.n,
     coefficient: coefficient.coef,
     coefficient_source: coefficient.source
-      ? `Calculé sur ${MONTH_LABELS[coefficient.source.mois]} ${coefficient.source.annee} (${coefficient.source.n.toLocaleString("fr-FR")} lignes, ${coefficient.source.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
+      ? `Calculé sur ${libelleMoisCoefficient(coefficient.source, (m) => MONTH_LABELS[m].toLowerCase())} (${coefficient.source.n.toLocaleString("fr-FR")} lignes, ${coefficient.source.perimetre === "filtre" ? "périmètre filtré" : "toute l'entreprise"})`
       : null,
     cout_moyen_etp: duMois.couts.coutMoyenEtp,
     brut_plein_temps_moyen: coefficient.coef > 0 ? duMois.couts.coutMoyenEtp / coefficient.coef / (1 + (complements?.global.taux ?? 0)) : 0,
@@ -377,11 +378,39 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     .map(([cc, l]) => ({ cc, ...l, brutMoyen: l.avecBrut > 0 ? l.brutPleinTemps / l.avecBrut : null, coutEtp: l.etp > 0 ? l.cout / l.etp : null }))
     .sort((a, b) => b.cout - a.cout);
 
+  // ---- Intérim du mois : coût attendu (SLG Intérim) rattaché par le roster intérim
+  const [coutsInterim, rosterInterim] = await Promise.all([
+    fetchAll<CoutInterim>(supabase.from("wp_interim_costs").select("code_salarie, mois, annee, composante, quantite, montant_facturable").eq("annee", selectedYear).eq("mois", selectedMonth)),
+    fetchAll<RattachementInterim>(supabase.from("wp_interim_roster").select("code_salarie, mois, annee, type_contrat, code_employeur, centre_cout, description_service, description_fonction, description_equipe").eq("annee", selectedYear).eq("mois", selectedMonth)),
+  ]);
+  const interimParCc = agregerInterimParCostCenter(
+    coutsInterim.map((c) => ({ ...c, quantite: Number(c.quantite) || 0, montant_facturable: Number(c.montant_facturable) || 0 })),
+    rosterInterim,
+    selectedYear,
+    selectedMonth,
+    filtres
+  );
+  const interimDe = new Map(interimParCc.map((l) => [l.centre_cout, l]));
+  const afficherSalaries = !aucunSalaire && lignesCostCenter.length > 0;
+  // Une ligne par cost center présent d'un côté OU de l'autre
+  const lignesCcAvecInterim = [
+    ...(afficherSalaries ? lignesCostCenter : []).map((l) => ({ cc: l.cc, salaries: l as (typeof lignesCostCenter)[number] | null, interim: interimDe.get(l.cc) ?? null })),
+    ...interimParCc
+      .filter((l) => !afficherSalaries || !parCostCenter.has(l.centre_cout))
+      .map((l) => ({ cc: l.centre_cout, salaries: null, interim: l })),
+  ].sort((a, b) => ((b.salaries?.cout ?? 0) + (b.interim?.montant ?? 0)) - ((a.salaries?.cout ?? 0) + (a.interim?.montant ?? 0)));
+  const totalInterim = interimParCc.reduce(
+    (t, l) => ({ montant: t.montant + l.montant, heures: t.heures + l.heures, etp: t.etp + l.etp }),
+    { montant: 0, heures: 0, etp: 0 }
+  );
+
   // ---- Décomposition de la paie par famille de natures (Liste des salaires)
   const lignesPaie = salaryLines as unknown as LignePaieDecomposable[];
   const codesPerimetre = filtres.actifs ? employeeCodes : undefined;
   const paieParMois = decomposerParMois(lignesPaie, selectedYear, codesPerimetre);
-  const lignesPaieDuMois = lignesPaie.filter((l) => Number(l.mois) === selectedMonth && (!codesPerimetre || codesPerimetre.has(l.code_salarie)));
+  // Les sortis du mois absents de la photo sont dans le périmètre de la paie du mois (comme dans la moyenne du mois)
+  const codesPaieDuMois = codesPerimetre && new Set([...codesPerimetre, ...salariesSortisHorsPhotoPour(selectedMonth).map((s) => String(s.code_salarie))]);
+  const lignesPaieDuMois = lignesPaie.filter((l) => Number(l.mois) === selectedMonth && (!codesPaieDuMois || codesPaieDuMois.has(l.code_salarie)));
   const paieDuMois = lignesPaieDuMois.length > 0
     ? {
       familles: decomposerParFamille(lignesPaieDuMois),
@@ -554,14 +583,15 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
     let ecart: DetailCase | null = null;
     const payeReference = stats.paye_moyen ?? stats.paye;
     if (payeReference != null && stats.realise != null && brut > 0) {
-      const photoMois = photoDuMois(selectedMonth) as SalarieCout[];
+      // Sortis du mois absents de la photo compris, comme la moyenne du mois
+      const photoMois = [...photoDuMois(selectedMonth), ...salariesSortisHorsPhotoPour(selectedMonth)] as SalarieCout[];
       const codesPhoto = new Set(photoMois.map((s) => s.code_salarie));
       const reconciliation = reconcilierPaie({
         mois: selectedMonth,
         annee: selectedYear,
         lignesPaie: lignesPaieDuMois as unknown as LignePaieDetaillee[],
         photo: photoMois,
-        source: sourceDuMois,
+        source: construireSourceSalaires(photoMois, photoReference as SalarieCout[] | null),
         cns: absences.filter((a) => Number(a.mois) === selectedMonth && codesPhoto.has(String(a.code_salarie))) as unknown as Parameters<typeof reconcilierPaie>[0]["cns"],
         injustifiees: injustifieesDuPerimetre(absencesInjustifiees, filtres.actifs, codesPhoto).filter((a) => Number(a.mois) === selectedMonth) as unknown as Parameters<typeof reconcilierPaie>[0]["injustifiees"],
         heuresTravaillables: getWorkableHoursInMonth(selectedYear, selectedMonth),
@@ -827,12 +857,15 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
         <VariableAttendu projection={projectionVariable} coef={coefficient.coef} perimetreFiltre={filtres.actifs} />
       )}
 
-      {!aucunSalaire && lignesCostCenter.length > 0 && (
+      {lignesCcAvecInterim.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Coût employeur par cost center — {moisLabel}</CardTitle>
             <CardDescription>
               Salariés sous contrat en fin de mois. Coût = brut plein temps × (1 + compléments récurrents{complements ? `, ${(complements.global.taux * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} % ou le taux du cost center` : ""}) × taux d&apos;occupation × coefficient de charges ({coefficient.coef.toLocaleString("fr-FR", { maximumFractionDigits: 3 })} par défaut, ou celui du cost center lu dans la paie) ; un salarié sans brut est compté au coût moyen par ETP du périmètre.
+              {interimParCc.length > 0 && (
+                <> Intérim : coût attendu calculé par SLG Intérim (montant facturable, coefficient d&apos;agence compris), rattaché par le roster intérim du mois ; ETP = heures prestées ÷ (jours ouvrés du mois × 8 h).</>
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -845,17 +878,71 @@ export default async function WorkforceCoutsPage({ searchParams }: Props) {
                   <TableHead className="text-xs text-right">Brut plein temps moyen</TableHead>
                   <TableHead className="text-xs text-right">Coût par ETP</TableHead>
                   <TableHead className="text-xs text-right">Coût sous contrat</TableHead>
+                  {interimParCc.length > 0 && (
+                    <>
+                      <TableHead className="text-xs text-right">Heures intérim</TableHead>
+                      <TableHead className="text-xs text-right">ETP intérim</TableHead>
+                      <TableHead className="text-xs text-right">Coût intérim</TableHead>
+                      <TableHead className="text-xs text-right">Total</TableHead>
+                    </>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {lignesCostCenter.map((l) => (
-                  <TableRow key={l.cc}>
-                    <TableCell className="text-sm font-medium">{l.cc}</TableCell>
-                    <TableCell className="text-sm text-right">{l.n.toLocaleString("fr-FR")}{l.avecBrut < l.n ? <span className="ml-1 text-xs text-amber-600">({l.n - l.avecBrut} sans brut)</span> : null}</TableCell>
-                    <TableCell className="text-sm text-right">{l.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}</TableCell>
-                    <TableCell className="text-sm text-right">{l.brutMoyen != null ? formatEuros(l.brutMoyen) : "—"}</TableCell>
-                    <TableCell className="text-sm text-right">{l.coutEtp != null ? formatEuros(l.coutEtp) : "—"}</TableCell>
-                    <TableCell className="text-sm text-right font-medium">{formatEuros(l.cout)}</TableCell>
+                {lignesCcAvecInterim.map(({ cc, salaries: l, interim: it }) => (
+                  <TableRow key={cc}>
+                    <TableCell className="text-sm font-medium">{cc}</TableCell>
+                    <TableCell className="text-sm text-right">{l ? <>{l.n.toLocaleString("fr-FR")}{l.avecBrut < l.n ? <span className="ml-1 text-xs text-amber-600">({l.n - l.avecBrut} sans brut)</span> : null}</> : "—"}</TableCell>
+                    <TableCell className="text-sm text-right">{l ? l.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}</TableCell>
+                    <TableCell className="text-sm text-right">{l?.brutMoyen != null ? formatEuros(l.brutMoyen) : "—"}</TableCell>
+                    <TableCell className="text-sm text-right">{l?.coutEtp != null ? formatEuros(l.coutEtp) : "—"}</TableCell>
+                    <TableCell className="text-sm text-right font-medium">{l ? formatEuros(l.cout) : "—"}</TableCell>
+                    {interimParCc.length > 0 && (
+                      <>
+                        <TableCell className="text-sm text-right">{it ? it.heures.toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}</TableCell>
+                        <TableCell className="text-sm text-right">{it ? it.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}</TableCell>
+                        <TableCell className="text-sm text-right">{it ? formatEuros(it.montant) : "—"}</TableCell>
+                        <TableCell className="text-sm text-right font-medium">{formatEuros((l?.cout ?? 0) + (it?.montant ?? 0))}</TableCell>
+                      </>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {interimParCc.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Intérim par composante — {moisLabel}</CardTitle>
+            <CardDescription>
+              Montant facturable par composante du coût attendu (SLG Intérim). Total : {formatEuros(totalInterim.montant)},{" "}
+              {totalInterim.heures.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} h, {totalInterim.etp.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ETP.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Cost center</TableHead>
+                  <TableHead className="text-xs text-right">Intérimaires</TableHead>
+                  {COMPOSANTES_INTERIM.map((c) => (
+                    <TableHead key={c.key} className="text-xs text-right">{c.label}</TableHead>
+                  ))}
+                  <TableHead className="text-xs text-right">Total</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {interimParCc.map((l) => (
+                  <TableRow key={l.centre_cout}>
+                    <TableCell className="text-sm font-medium">{l.centre_cout}</TableCell>
+                    <TableCell className="text-sm text-right">{l.intervenants.toLocaleString("fr-FR")}</TableCell>
+                    {COMPOSANTES_INTERIM.map((c) => (
+                      <TableCell key={c.key} className="text-sm text-right">{l.composantes[c.key] ? formatEuros(l.composantes[c.key].montant) : "—"}</TableCell>
+                    ))}
+                    <TableCell className="text-sm text-right font-medium">{formatEuros(l.montant)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

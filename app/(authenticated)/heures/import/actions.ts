@@ -29,6 +29,19 @@ export async function importData(input: ImportInput) {
   } = await supabase.auth.getUser();
   if (!user) throw new Error("Non authentifié");
 
+  // Chaque feuille remplace TOUTES les données de sa période : deux feuilles sur la même
+  // période, ou une feuille sans mois, effaceraient des heures déjà importées.
+  const periodKeys = new Set<string>();
+  for (const sheetInput of input.sheets) {
+    const label = getPeriodLabel(sheetInput.periodNumber, sheetInput.year);
+    const key = `${sheetInput.periodNumber}-${sheetInput.year}`;
+    if (periodKeys.has(key)) throw new Error(`Plusieurs feuilles ciblent la période ${label}.`);
+    periodKeys.add(key);
+    if (!sheetInput.data.some((d) => d.months.length > 0)) {
+      throw new Error(`La feuille ciblant ${label} ne contient aucune donnée mensuelle.`);
+    }
+  }
+
   const results: SheetImportResult[] = [];
 
   for (const sheetInput of input.sheets) {

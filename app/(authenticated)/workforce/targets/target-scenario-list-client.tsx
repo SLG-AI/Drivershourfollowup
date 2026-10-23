@@ -17,6 +17,7 @@ interface Scenario {
   id: string;
   name: string;
   description: string | null;
+  annee: number;
   created_at: string;
 }
 
@@ -25,6 +26,7 @@ export function TargetScenarioListClient({ scenarios }: { scenarios: Scenario[] 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [annee, setAnnee] = useState(new Date().getFullYear());
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [duplicating, setDuplicating] = useState<string | null>(null);
@@ -39,6 +41,7 @@ export function TargetScenarioListClient({ scenarios }: { scenarios: Scenario[] 
       const result = await createTargetScenario({
         name: name.trim(),
         description: description.trim(),
+        annee,
       });
       toast.success("Scénario de besoins créé");
       setOpen(false);
@@ -102,6 +105,16 @@ export function TargetScenarioListClient({ scenarios }: { scenarios: Scenario[] 
                 />
               </div>
               <div className="space-y-2">
+                <Label>Année</Label>
+                <Input
+                  type="number"
+                  min={2020}
+                  max={2100}
+                  value={annee}
+                  onChange={(e) => setAnnee(Number(e.target.value))}
+                />
+              </div>
+              <div className="space-y-2">
                 <Label>Description (optionnelle)</Label>
                 <Input
                   value={description}
@@ -134,7 +147,7 @@ export function TargetScenarioListClient({ scenarios }: { scenarios: Scenario[] 
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div>
-                    <CardTitle className="text-base">{s.name}</CardTitle>
+                    <CardTitle className="text-base">{s.name} <Badge variant="secondary" className="ml-1 align-middle">{s.annee}</Badge></CardTitle>
                     {s.description && (
                       <CardDescription className="mt-1">{s.description}</CardDescription>
                     )}

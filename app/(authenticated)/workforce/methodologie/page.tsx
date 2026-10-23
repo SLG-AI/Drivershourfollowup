@@ -23,7 +23,7 @@ import { calculerPaliers, etpDe, injustifieesDuPerimetre, type SalariePaliers } 
 import { horsWeekEnd, lastDayOfMonth, moisEffetSortie } from "@/lib/utils/wp-calculations";
 import { MethodologieClient, type DonneesMethodologie } from "@/components/workforce/methodologie-client";
 import { plafonnerTauxCns } from "@/lib/utils/wp-taux-cns";
-import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, calculerCoutsPaliers, construireSourceSalaires, fusionnerSourcesPaie, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
+import { calculerCoefficientCharges, calculerCoefficientsParCostCenter, calculerComplementsRecurrents, calculerCoutsPaliers, construireSourceSalaires, filtreMoisPostgrest, fusionnerSourcesPaie, moisFenetreCoefficientHorsAnnee, realiseDuMois, type LignePaieDetaillee, type SalarieCout } from "@/lib/utils/wp-couts";
 
 interface Props {
   searchParams: Promise<{
@@ -114,10 +114,11 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
   const [periodeReference, dernierMoisStats, salaryLines, dernierMoisPaie] = await Promise.all([
     supabase.from("wp_employees").select("mois, annee").gt("brut_indice", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("wp_salary_stats").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
-    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur, avantages_nature").eq("annee", selectedYear)),
+    fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cm_patronale, cp_patronale, assurance_accident, sante_travail, mutualite, cot_pat_autres, cout_employeur, avantages_nature, nat_hsm").eq("annee", selectedYear)),
     supabase.from("wp_salary_lines").select("mois, annee").gt("charges_patronales", 0).order("annee", { ascending: false }).order("mois", { ascending: false }).limit(1).maybeSingle(),
   ]);
   const periodeRef = periodeReference.data ? { mois: Number(periodeReference.data.mois), annee: Number(periodeReference.data.annee) } : null;
+  const fenetreCoefficient = moisFenetreCoefficientHorsAnnee(dernierMoisPaie.data ? { mois: Number(dernierMoisPaie.data.mois), annee: Number(dernierMoisPaie.data.annee) } : null, selectedYear);
   const [photoReference, statsCoefficient, lignesCoefficient] = await Promise.all([
     periodeRef
       ? fetchAll(supabase.from("wp_employees").select("code_salarie, brut_indice, taux_occupation").eq("mois", periodeRef.mois).eq("annee", periodeRef.annee))
@@ -125,8 +126,9 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
     dernierMoisStats.data && Number(dernierMoisStats.data.annee) !== selectedYear
       ? fetchAll(supabase.from("wp_salary_stats").select("code_salarie, mois, annee, centre_cout, total_brut, charges_patronales").eq("mois", dernierMoisStats.data.mois).eq("annee", dernierMoisStats.data.annee))
       : Promise.resolve([] as Record<string, unknown>[]),
-    dernierMoisPaie.data && Number(dernierMoisPaie.data.annee) !== selectedYear
-      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, charges_patronales, cout_employeur, avantages_nature").eq("mois", dernierMoisPaie.data.mois).eq("annee", dernierMoisPaie.data.annee))
+    // Mois courants du coefficient de charges hors de l'année affichée (voir moisFenetreCoefficientHorsAnnee)
+    fenetreCoefficient.length > 0
+      ? fetchAll(supabase.from("wp_salary_lines").select("code_salarie, mois, annee, type_remuneration, centre_cout, total_brut, brut_base, nat_cct, nat_pr_f, nat_hsm, charges_patronales, cout_employeur, avantages_nature").or(filtreMoisPostgrest(fenetreCoefficient)).order("id"))
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
   // Même fusion des deux exports de paie que la page Coûts
@@ -276,7 +278,7 @@ export default async function WorkforceMethodologiePage({ searchParams }: Props)
       paliers: coutsPaliers,
       coefficient: coefficient.coef,
       coefficientSource: coefficient.source
-        ? { mois: coefficient.source.mois, annee: coefficient.source.annee, n: coefficient.source.n, brut: coefficient.source.brut, employeur: coefficient.source.employeur, perimetre: coefficient.source.perimetre }
+        ? { mois: coefficient.source.mois, annee: coefficient.source.annee, n: coefficient.source.n, brut: coefficient.source.brut, employeur: coefficient.source.employeur, perimetre: coefficient.source.perimetre, moisRetenus: coefficient.source.moisRetenus, moisExclus: coefficient.source.moisExclus }
         : null,
       salairesReportes: sourceSalaires.reporte,
       periodeReference: periodeRef,

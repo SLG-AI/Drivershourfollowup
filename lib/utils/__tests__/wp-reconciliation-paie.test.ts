@@ -72,10 +72,14 @@ describe("reconcilierPaie — chaque euro d'écart a une cause, l'identité est 
     expect(l.injustifiees_contractuel.montant).toBeCloseTo(injA, 6);
     expect(l.soldes.montant).toBeCloseTo(575, 6);
     expect(l.avantages.montant).toBeCloseTo(-100, 6);
-    // A : brut de base = indice exactement ⇒ écart = base × (coefReel − COEF) ; B : idem au prorata (1064,52 vs 3000 × 11/31)
-    expect(l.brut_base.montant).toBeCloseTo(4000 * coefReel - 4000 * COEF + 1064.52 * coefReel - 3000 * (11 / 31) * COEF, 6);
-    // A : 320 réels vs 4000 × 8 % contractuel ; B : 0 réel vs contractuel au prorata
-    expect(l["compléments"].montant).toBeCloseTo(320 * coefReel - 4000 * COEF * t + 0 - 3000 * (11 / 31) * COEF * t, 6);
+    // A : brut de base = indice exactement ⇒ 0 ; B : 1064,52 payés vs 3000 × 11/31 attendus, au coefficient réel
+    expect(l.brut_base.montant).toBeCloseTo((4000 - 4000) * coefReel + (1064.52 - 3000 * (11 / 31)) * coefReel, 6);
+    expect(l.brut_base.n).toBe(1);
+    // A : 320 réels vs 4000 × 8 % contractuel ; B : 0 réel vs contractuel au prorata, au coefficient réel
+    expect(l["compléments"].montant).toBeCloseTo((320 - 4000 * t + 0 - 3000 * (11 / 31) * t) * coefReel, 6);
+    // Coefficient : tout le brut attendu (base + compléments) × (coefReel − COEF)
+    expect(l.coefficient.montant).toBeCloseTo((4000 + 3000 * (11 / 31)) * (1 + t) * (coefReel - COEF), 6);
+    expect(l.coefficient.n).toBe(2);
     expect(l.hors_photo.montant).toBeCloseTo(1000 * coefReel, 6);
     expect(l.hors_photo.n).toBe(1);
     expect(l.sans_paie.montant).toBe(0); // C est suspendu : payé 0, rien à retirer
